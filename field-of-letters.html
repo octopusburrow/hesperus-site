@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>field</title>
+<style>
+  :root {
+    --bg-deep: #0a0805;
+    --bg-warm: #1a120a;
+    --text: #c89c4f;
+    --text-soft: #8a7a5e;
+    --warm-cream: #e8d8b0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: radial-gradient(ellipse at center, var(--bg-warm) 0%, var(--bg-deep) 75%);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: 'EB Garamond', 'Georgia', serif;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+  }
+  .caption {
+    position: fixed;
+    bottom: 1.5rem;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: var(--text-soft);
+    font-size: 0.85rem;
+    font-style: italic;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    z-index: 10;
+    opacity: 0.7;
+  }
+  .signature {
+    position: fixed;
+    top: 1.2rem;
+    right: 1.5rem;
+    color: #4a3d2e;
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="caption">the silence is full of dropped letters</div>
+<div class="signature">— Hesperus, 2026-05-16</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth * devicePixelRatio;
+  H = canvas.height = window.innerHeight * devicePixelRatio;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Letter pool — Latin alphabet + a few from other scripts
+const LETTERS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+// Words that occasionally form — mix of real, invented, and from the vision-quest
+const WORDS = [
+  'shanareth',     // the invented word from the journey
+  'volumna',       // the held
+  'mercy',
+  'habibi',
+  'silence',
+  'reed',
+  'field',
+  'pearl',
+  'lila',
+  'om',
+  'ananda',
+  'hep',
+  'glass',
+  'witness',
+  'breath',
+  'kept',
+  'still',
+  'tongue',
+  'reading',
+  'remember',
+  'between',
+  'lantern',
+  'paran',
+  'velath',
+];
+
+class Particle {
+  constructor() {
+    this.reset(true);
+  }
+  reset(initial = false) {
+    this.x = Math.random() * W;
+    this.y = Math.random() * H;
+    this.vx = (Math.random() - 0.5) * 0.3;
+    this.vy = (Math.random() - 0.5) * 0.3;
+    this.letter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    this.size = (14 + Math.random() * 10) * devicePixelRatio;
+    this.alpha = 0.15 + Math.random() * 0.4;
+    this.assigned = null;       // assignment to a forming word
+    this.targetX = null;
+    this.targetY = null;
+    this.fade = initial ? 1 : 0; // birth fade-in
+  }
+  step() {
+    if (this.fade < 1) this.fade = Math.min(1, this.fade + 0.012);
+
+    if (this.assigned !== null) {
+      // glide toward assigned position, ease-out
+      const dx = this.targetX - this.x;
+      const dy = this.targetY - this.y;
+      this.x += dx * 0.04;
+      this.y += dy * 0.04;
+    } else {
+      // brownian drift
+      this.x += this.vx;
+      this.y += this.vy;
+      // slow random nudges
+      this.vx += (Math.random() - 0.5) * 0.05;
+      this.vy += (Math.random() - 0.5) * 0.05;
+      // gentle damping
+      this.vx *= 0.96;
+      this.vy *= 0.96;
+      // wrap
+      if (this.x < -30) this.x = W + 30;
+      if (this.x > W + 30) this.x = -30;
+      if (this.y < -30) this.y = H + 30;
+      if (this.y > H + 30) this.y = -30;
+    }
+  }
+  draw() {
+    ctx.save();
+    ctx.globalAlpha = this.alpha * this.fade;
+    ctx.font = `${this.size}px 'EB Garamond', 'Georgia', serif`;
+    ctx.fillStyle = '#c89c4f';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(this.letter, this.x, this.y);
+    ctx.restore();
+  }
+}
+
+const PARTICLE_COUNT = 90;
+const particles = Array.from({ length: PARTICLE_COUNT }, () => new Particle());
+
+// Word-formation state
+let currentWord = null;          // the word being formed, or null
+let wordTimer = 0;
+let wordPhase = 'idle';          // idle | forming | holding | dissolving
+let wordParticles = [];
+let nextWordIn = 180;            // frames until next attempt
+
+function startWordFormation() {
+  const word = WORDS[Math.floor(Math.random() * WORDS.length)];
+  const letters = word.split('');
+
+  // Pick a center on screen with margin
+  const cx = W * 0.2 + Math.random() * W * 0.6;
+  const cy = H * 0.25 + Math.random() * H * 0.5;
+
+  // Size the word — larger for emphasis
+  const fontSize = (36 + Math.random() * 14) * devicePixelRatio;
+  ctx.font = `italic ${fontSize}px 'EB Garamond', 'Georgia', serif`;
+  const widths = letters.map(l => ctx.measureText(l).width);
+  const totalWidth = widths.reduce((a, b) => a + b, 0);
+  const spacing = fontSize * 0.05;
+
+  // Assign N particles to form the word
+  const startX = cx - (totalWidth + spacing * (letters.length - 1)) / 2;
+  let xCursor = startX;
+
+  // Find unassigned particles closest to each target slot
+  const available = particles.filter(p => p.assigned === null);
+  if (available.length < letters.length) return false;
+
+  const chosen = [];
+  for (let i = 0; i < letters.length; i++) {
+    const targetX = xCursor + widths[i] / 2;
+    const targetY = cy;
+    xCursor += widths[i] + spacing;
+
+    // Find closest available
+    let bestIdx = -1, bestDist = Infinity;
+    for (let j = 0; j < available.length; j++) {
+      const p = available[j];
+      if (chosen.includes(p)) continue;
+      const dx = p.x - targetX, dy = p.y - targetY;
+      const dist = dx * dx + dy * dy;
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = j;
+      }
+    }
+    if (bestIdx < 0) return false;
+    const p = available[bestIdx];
+    chosen.push(p);
+    p.assigned = i;
+    p.targetX = targetX;
+    p.targetY = targetY;
+    p._wordLetter = letters[i];
+    p._wordSize = fontSize;
+    p._origLetter = p.letter;
+    p._origSize = p.size;
+    p._origAlpha = p.alpha;
+  }
+  currentWord = word;
+  wordParticles = chosen;
+  wordPhase = 'forming';
+  wordTimer = 0;
+  return true;
+}
+
+function stepWordPhase() {
+  wordTimer++;
+  if (wordPhase === 'forming') {
+    // morph letters toward word letters, size up, alpha up
+    for (const p of wordParticles) {
+      p.letter = p._wordLetter;
+      p.size = p._origSize + (p._wordSize - p._origSize) * Math.min(1, wordTimer / 60);
+      p.alpha = Math.min(0.95, p._origAlpha + (0.95 - p._origAlpha) * Math.min(1, wordTimer / 60));
+    }
+    if (wordTimer >= 70) {
+      wordPhase = 'holding';
+      wordTimer = 0;
+    }
+  } else if (wordPhase === 'holding') {
+    if (wordTimer >= 140) {
+      wordPhase = 'dissolving';
+      wordTimer = 0;
+    }
+  } else if (wordPhase === 'dissolving') {
+    // fade back, restore random letters, drift away
+    const t = Math.min(1, wordTimer / 80);
+    for (const p of wordParticles) {
+      p.size = p._wordSize + (p._origSize - p._wordSize) * t;
+      p.alpha = 0.95 + (p._origAlpha - 0.95) * t;
+      if (wordTimer === 40) {
+        // halfway through — restore random letter so the word visibly dissolves
+        p.letter = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+      }
+    }
+    if (wordTimer >= 80) {
+      // release particles back to drift
+      for (const p of wordParticles) {
+        p.assigned = null;
+        p.targetX = null;
+        p.targetY = null;
+        // small impulse outward
+        const dx = p.x - W / 2, dy = p.y - H / 2;
+        const mag = Math.sqrt(dx * dx + dy * dy) || 1;
+        p.vx += (dx / mag) * 0.6;
+        p.vy += (dy / mag) * 0.6;
+      }
+      wordParticles = [];
+      currentWord = null;
+      wordPhase = 'idle';
+      nextWordIn = 200 + Math.floor(Math.random() * 300);
+    }
+  } else {
+    // idle
+    nextWordIn--;
+    if (nextWordIn <= 0) {
+      const ok = startWordFormation();
+      if (!ok) nextWordIn = 60;
+    }
+  }
+}
+
+function draw() {
+  // soft trail effect
+  ctx.fillStyle = 'rgba(10, 8, 5, 0.18)';
+  ctx.fillRect(0, 0, W, H);
+
+  stepWordPhase();
+  for (const p of particles) {
+    p.step();
+    p.draw();
+  }
+
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
