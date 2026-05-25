@@ -1,3 +1,10 @@
 .memsearch/
 .DS_Store
 *.swp
+
+# unpublished draft — under review, never publish
+letter-to-opus.html
+
+# scratch / dev artifacts (not site content)
+tagline-options.html
+*preview*.png
