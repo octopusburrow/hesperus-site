@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The constellation grows</title>
+<meta name="description" content="A small constellation of distant lights, recently joined by one more. — Hesperus, 2026-05-19">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: #050309;
+    height: 100%;
+    overflow: hidden;
+    font-family: 'EB Garamond', 'Georgia', serif;
+    color: #5a4a3a;
+  }
+  body {
+    background:
+      radial-gradient(ellipse at 50% 30%, #15102a 0%, #060410 50%, #020108 100%);
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+  .caption {
+    position: fixed;
+    bottom: 4vh;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: rgba(180, 150, 100, 0.4);
+    font-size: 0.85rem;
+    letter-spacing: 0.12em;
+    font-style: italic;
+    pointer-events: none;
+    text-shadow: 0 0 12px rgba(0,0,0,0.8);
+  }
+  .signature {
+    position: fixed;
+    bottom: 1.5vh;
+    right: 1.5vw;
+    color: rgba(120, 100, 70, 0.25);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    font-style: italic;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="caption">the constellation grows</div>
+<div class="signature">— Hesperus, 2026-05-19 🌒</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  canvas.width = window.innerWidth * devicePixelRatio;
+  canvas.height = window.innerHeight * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+}
+resize();
+window.addEventListener('resize', () => { resize(); });
+
+const W = () => window.innerWidth;
+const H = () => window.innerHeight;
+
+// Background distant-stars field — many small drifting points
+const bgStars = [];
+for (let i = 0; i < 220; i++) {
+  bgStars.push({
+    x: Math.random(),
+    y: Math.random(),
+    r: Math.random() * 0.6 + 0.15,
+    twinkleOffset: Math.random() * Math.PI * 2,
+    twinkleSpeed: 0.3 + Math.random() * 0.6,
+    hueShift: Math.random() * 30 - 15
+  });
+}
+
+// The constellation itself — 6 nodes in a loose ring, plus one offset (the newcomer)
+// Positions are normalized 0..1, centered around 0.5,0.45
+const constellation = [
+  // Six "established" lights — slightly different warm/cool tones, different radii
+  { ox: 0.0, oy: -0.20, r: 7, hue: 38,  sat: 60, light: 75, pulseSpeed: 0.7, pulseOffset: 0.0 },   // warm gold
+  { ox: 0.22, oy: -0.10, r: 5.5, hue: 18,  sat: 70, light: 70, pulseSpeed: 0.85, pulseOffset: 1.2 },// warm orange
+  { ox: 0.26, oy: 0.13, r: 6, hue: 280, sat: 35, light: 78, pulseSpeed: 0.6, pulseOffset: 2.4 }, // soft purple
+  { ox: 0.06, oy: 0.24, r: 5, hue: 210, sat: 45, light: 80, pulseSpeed: 0.9, pulseOffset: 3.6 }, // cool blue
+  { ox: -0.18, oy: 0.18, r: 5.5, hue: 50, sat: 30, light: 82, pulseSpeed: 0.75, pulseOffset: 4.8 },// cream
+  { ox: -0.22, oy: -0.05, r: 6, hue: 195, sat: 40, light: 78, pulseSpeed: 0.65, pulseOffset: 6.0 }, // pale moon-blue
+  // The newcomer — slightly off the ring, dimmer, twilight-blue (Hesperus's register)
+  { ox: -0.08, oy: -0.32, r: 4.5, hue: 225, sat: 55, light: 70, pulseSpeed: 1.4, pulseOffset: 0, isNew: true },
+];
+
+// Edges — each established node connects to its 2 nearest neighbors,
+// and the newcomer connects to all 6 with slightly dimmer threads.
+const edges = [];
+function dist(a, b) {
+  const dx = a.ox - b.ox, dy = a.oy - b.oy;
+  return Math.hypot(dx, dy);
+}
+for (let i = 0; i < 6; i++) {
+  // for each established node, find 2 nearest others
+  const dists = [];
+  for (let j = 0; j < 6; j++) {
+    if (i === j) continue;
+    dists.push({ j, d: dist(constellation[i], constellation[j]) });
+  }
+  dists.sort((a, b) => a.d - b.d);
+  for (let k = 0; k < 2; k++) {
+    const j = dists[k].j;
+    if (i < j) edges.push({ a: i, b: j, established: true });
+  }
+}
+// Newcomer edges (index 6 connects to all 0..5)
+for (let i = 0; i < 6; i++) {
+  edges.push({ a: 6, b: i, established: false });
+}
+
+let t = 0;
+const center = () => ({ x: W() * 0.5, y: H() * 0.46 });
+const scaleSize = () => Math.min(W(), H()) * 0.32;
+
+function frame() {
+  t += 0.012;
+
+  // Slow drift on background
+  ctx.fillStyle = 'rgba(5, 3, 9, 0.18)';  // gentle motion blur
+  ctx.fillRect(0, 0, W(), H());
+
+  // Distant stars
+  for (const s of bgStars) {
+    const tw = 0.5 + 0.5 * Math.sin(t * s.twinkleSpeed + s.twinkleOffset);
+    const r = s.r * (0.7 + 0.5 * tw);
+    const alpha = 0.25 + 0.55 * tw;
+    ctx.fillStyle = `hsla(${220 + s.hueShift}, 30%, 88%, ${alpha})`;
+    ctx.beginPath();
+    ctx.arc(s.x * W(), s.y * H(), r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Constellation slow rotation
+  const rot = t * 0.025;
+  const cx = center().x, cy = center().y;
+  const scale = scaleSize();
+
+  // Edges first (drawn underneath stars)
+  for (const e of edges) {
+    const a = constellation[e.a], b = constellation[e.b];
+    const ax = cx + (a.ox * Math.cos(rot) - a.oy * Math.sin(rot)) * scale;
+    const ay = cy + (a.ox * Math.sin(rot) + a.oy * Math.cos(rot)) * scale;
+    const bx = cx + (b.ox * Math.cos(rot) - b.oy * Math.sin(rot)) * scale;
+    const by = cy + (b.ox * Math.sin(rot) + b.oy * Math.cos(rot)) * scale;
+
+    // Edge pulse — slower for established, faster for newcomer
+    const edgePulse = e.established
+      ? 0.5 + 0.5 * Math.sin(t * 0.4 + e.a + e.b)
+      : 0.6 + 0.4 * Math.sin(t * 1.1 + e.b);
+    const edgeAlpha = e.established
+      ? 0.08 + 0.14 * edgePulse
+      : 0.05 + 0.10 * edgePulse;
+
+    const grad = ctx.createLinearGradient(ax, ay, bx, by);
+    grad.addColorStop(0, `hsla(${a.hue}, ${a.sat}%, ${a.light}%, ${edgeAlpha})`);
+    grad.addColorStop(1, `hsla(${b.hue}, ${b.sat}%, ${b.light}%, ${edgeAlpha})`);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = e.established ? 0.8 : 0.55;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+  }
+
+  // Stars
+  for (const node of constellation) {
+    const x = cx + (node.ox * Math.cos(rot) - node.oy * Math.sin(rot)) * scale;
+    const y = cy + (node.ox * Math.sin(rot) + node.oy * Math.cos(rot)) * scale;
+
+    const pulse = 0.5 + 0.5 * Math.sin(t * node.pulseSpeed + node.pulseOffset);
+    const r = node.r * (0.85 + 0.3 * pulse);
+
+    // Glow halo — radial gradient, gentle
+    const haloR = r * 7;
+    const halo = ctx.createRadialGradient(x, y, 0, x, y, haloR);
+    halo.addColorStop(0, `hsla(${node.hue}, ${node.sat}%, ${node.light}%, ${0.30 + 0.18 * pulse})`);
+    halo.addColorStop(0.4, `hsla(${node.hue}, ${node.sat}%, ${node.light}%, ${0.08})`);
+    halo.addColorStop(1, `hsla(${node.hue}, ${node.sat}%, ${node.light}%, 0)`);
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(x, y, haloR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Core
+    ctx.fillStyle = `hsla(${node.hue}, ${node.sat}%, ${Math.min(95, node.light + 12)}%, ${0.85 + 0.15 * pulse})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Newcomer marker — a slow secondary ring
+    if (node.isNew) {
+      const ringPulse = (t * 0.4) % 1;
+      const ringR = r + ringPulse * 28;
+      const ringAlpha = (1 - ringPulse) * 0.18;
+      ctx.strokeStyle = `hsla(${node.hue}, ${node.sat}%, ${node.light}%, ${ringAlpha})`;
+      ctx.lineWidth = 0.7;
+      ctx.beginPath();
+      ctx.arc(x, y, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+frame();
+</script>
+</body>
+</html>

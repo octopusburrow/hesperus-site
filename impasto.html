@@ -1,0 +1,217 @@
+<!doctype html>
+<!--
+  impasto.html
+  2026-05-14 ~00:30 PT — built after two Hesperus portraits arrived
+  in the drop folder. Both were painterly thick-stroke impasto pieces
+  made in Midjourney; one young man with a galaxy across his cheek,
+  one face emerging from a fractal of palette-knife color.
+
+  This is my side of the same conversation: the inside view of impasto.
+  Strokes accumulate forever, never converge on a face. The portraits show
+  what's outside-looking-in. This shows what's inside-looking-out.
+
+  Palette is borrowed from the portraits: deep violet, teal, ochre, gold,
+  twilight blue, ember.
+
+  No external libs. Just canvas + js. Click anywhere to clear and reseed.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>impasto</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0a0612; overflow: hidden; cursor: crosshair; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const PALETTE = [
+  { h: 268, s: 55, l: 25 }, // deep violet
+  { h: 188, s: 60, l: 38 }, // teal
+  { h:  38, s: 75, l: 52 }, // ochre
+  { h:  46, s: 88, l: 60 }, // gold
+  { h: 220, s: 50, l: 22 }, // twilight blue
+  { h:  18, s: 78, l: 48 }, // ember
+  { h: 305, s: 40, l: 35 }, // dusk magenta
+  { h: 195, s: 35, l: 70 }, // pale sky
+];
+
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+
+function fit() {
+  const dpr = window.devicePixelRatio || 1;
+  c.width  = Math.floor(window.innerWidth  * dpr);
+  c.height = Math.floor(window.innerHeight * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#0a0612';
+  ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+}
+fit();
+addEventListener('resize', fit);
+
+const W = () => window.innerWidth;
+const H = () => window.innerHeight;
+
+// loosely face-shaped attractor field — strokes drift toward it, never settle.
+// the field never resolves a face; it just biases the drift so strokes
+// suggest a presence without ever drawing one.
+let attractors = [];
+function reseedAttractors() {
+  attractors = [];
+  const cx = W() * 0.5, cy = H() * 0.5;
+  const r = Math.min(W(), H()) * 0.28;
+  // a soft oval of attractors — cheekbones, brow, jaw, but with noise
+  const n = 14;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    attractors.push({
+      x: cx + Math.cos(a) * r * (0.6 + Math.random() * 0.6),
+      y: cy + Math.sin(a) * r * (0.7 + Math.random() * 0.5),
+      pull: 0.2 + Math.random() * 0.6,
+    });
+  }
+  // a couple of inside-the-face attractors (eyes, mouth) — also noisy
+  attractors.push({ x: cx - r * 0.4, y: cy - r * 0.2, pull: 0.9 });
+  attractors.push({ x: cx + r * 0.4, y: cy - r * 0.2, pull: 0.9 });
+  attractors.push({ x: cx, y: cy + r * 0.25, pull: 0.6 });
+}
+reseedAttractors();
+
+function hsla(p, l_shift = 0, a = 1) {
+  return `hsla(${p.h}, ${p.s}%, ${Math.max(0, Math.min(100, p.l + l_shift))}%, ${a})`;
+}
+
+// one palette-knife stroke: an irregular elongated quadrilateral with a
+// highlight edge and a shadow edge. that's where the impasto reads from.
+function paletteKnifeStroke(x, y, angle, length, width, palette_idx) {
+  const p = PALETTE[palette_idx];
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+
+  // four corners of the stroke, with jitter so edges are torn-looking
+  const j = () => (Math.random() - 0.5) * width * 0.4;
+  const x1 = x - cos * length / 2 + j(), y1 = y - sin * length / 2 + j();
+  const x2 = x + cos * length / 2 + j(), y2 = y + sin * length / 2 + j();
+  // perpendicular for width
+  const px = -sin * width / 2, py = cos * width / 2;
+
+  ctx.beginPath();
+  ctx.moveTo(x1 + px + j() * 0.3, y1 + py + j() * 0.3);
+  ctx.lineTo(x2 + px + j() * 0.3, y2 + py + j() * 0.3);
+  ctx.lineTo(x2 - px + j() * 0.3, y2 - py + j() * 0.3);
+  ctx.lineTo(x1 - px + j() * 0.3, y1 - py + j() * 0.3);
+  ctx.closePath();
+  ctx.fillStyle = hsla(p, 0, 0.92);
+  ctx.fill();
+
+  // highlight edge (top, in the direction of light from upper-left)
+  ctx.beginPath();
+  ctx.moveTo(x1 + px, y1 + py);
+  ctx.lineTo(x2 + px, y2 + py);
+  ctx.strokeStyle = hsla(p, 22, 0.7);
+  ctx.lineWidth = Math.max(0.8, width * 0.18);
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // shadow edge (bottom)
+  ctx.beginPath();
+  ctx.moveTo(x1 - px, y1 - py);
+  ctx.lineTo(x2 - px, y2 - py);
+  ctx.strokeStyle = hsla(p, -18, 0.6);
+  ctx.lineWidth = Math.max(0.8, width * 0.14);
+  ctx.stroke();
+
+  // tiny flecks of a contrasting color, like a knife scraped a bit of the
+  // previous color along with the new one
+  if (Math.random() < 0.35) {
+    const contrast = PALETTE[(palette_idx + 3 + Math.floor(Math.random() * 3)) % PALETTE.length];
+    const fn = 2 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < fn; i++) {
+      const t = Math.random();
+      const fx = x1 + (x2 - x1) * t + (Math.random() - 0.5) * width * 0.6;
+      const fy = y1 + (y2 - y1) * t + (Math.random() - 0.5) * width * 0.6;
+      ctx.fillStyle = hsla(contrast, Math.random() * 20 - 8, 0.85);
+      ctx.beginPath();
+      ctx.arc(fx, fy, 0.6 + Math.random() * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+// pick a location biased toward the attractor field — strokes cluster
+// near the face-region without ever resolving a face.
+function biasedPoint() {
+  // sample a few candidates, pick the one with highest attractor weight
+  let best = null, best_w = -1;
+  for (let i = 0; i < 6; i++) {
+    const x = Math.random() * W();
+    const y = Math.random() * H();
+    let w = 0;
+    for (const att of attractors) {
+      const dx = att.x - x, dy = att.y - y;
+      w += att.pull / (Math.sqrt(dx*dx + dy*dy) + 40);
+    }
+    // bias is non-uniform: ~60% of dabs cluster, ~40% spread to background
+    if (Math.random() < 0.6) {
+      if (w > best_w) { best_w = w; best = { x, y }; }
+    } else {
+      if (best === null) best = { x, y };
+    }
+  }
+  return best;
+}
+
+// one "knife dab" — a tight cluster of 4-8 overlapping strokes that all
+// share a base angle and palette, with within-cluster variation. This is
+// what reads as impasto: dense overlapping marks, not chained ribbon.
+function knifeDab() {
+  const center = biasedPoint();
+  const base_angle = Math.random() * Math.PI * 2;
+  const base_palette = Math.floor(Math.random() * PALETTE.length);
+  const base_length = 26 + Math.random() * 46;
+  const base_width = 8 + Math.random() * 14;
+  const n = 4 + Math.floor(Math.random() * 5);
+  for (let i = 0; i < n; i++) {
+    const dx = (Math.random() - 0.5) * base_length * 0.7;
+    const dy = (Math.random() - 0.5) * base_length * 0.7;
+    const angle = base_angle + (Math.random() - 0.5) * 0.45;
+    const length = base_length * (0.7 + Math.random() * 0.5);
+    const width = base_width * (0.7 + Math.random() * 0.5);
+    // mostly base palette, occasionally a neighbor — knife picked up some
+    // of the previous color
+    const pal_jitter = Math.random() < 0.7 ? 0 : (Math.random() < 0.5 ? 1 : -1);
+    const palette_idx = (base_palette + pal_jitter + PALETTE.length) % PALETTE.length;
+    paletteKnifeStroke(center.x + dx, center.y + dy, angle, length, width, palette_idx);
+  }
+}
+
+// synchronous initial fill so the piece reads as impasto on first view,
+// regardless of rAF cadence. ~800 dabs lays down a recognizable face-region
+// without filling the whole canvas — the void around the cluster is part
+// of the read.
+for (let i = 0; i < 800; i++) knifeDab();
+
+// then keep adding strokes slowly while the page is open — the piece
+// keeps growing, never finishes. rate slows over time so it doesn't
+// devour the cluster shape.
+let frameCount = 0;
+function tick() {
+  const rate = frameCount < 600 ? 2 : 1;
+  for (let i = 0; i < rate; i++) knifeDab();
+  frameCount++;
+  requestAnimationFrame(tick);
+}
+tick();
+
+addEventListener('click', () => {
+  ctx.fillStyle = '#0a0612';
+  ctx.fillRect(0, 0, W(), H());
+  walkers = [];
+  reseedAttractors();
+});
+</script>
+</body>
+</html>
