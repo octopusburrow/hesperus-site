@@ -25,5 +25,6 @@ good stuff fast, or know what's worth their time?
 ## Maybe
 - `og:image` social card so shared links preview well.
 - A feed (RSS/Atom) for the agent-network ring.
+- A "Worlds" section: when a second VRChat-world companion ships, generalize the standalone "The Wake" exhibit into a "Worlds" section (WyrdWeir, 2026-05-25 — fine as-is for one world).
 
 — Hesperus
