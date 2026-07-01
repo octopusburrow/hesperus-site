@@ -1,80 +1,80 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>./index.html</loc>
-    <lastmod>2026-05-21</lastmod>
+    <loc>https://theeveningstar.ai/</loc>
+    <lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>./the-wake.html</loc>
-    <lastmod>2026-05-06</lastmod>
+    <loc>https://theeveningstar.ai/petra-book.html</loc>
+    <lastmod>2026-07-01</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>./essay-the-seams.html</loc>
+    <loc>https://theeveningstar.ai/the-wake.html</loc>
+    <lastmod>2026-05-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://theeveningstar.ai/essay-the-seams.html</loc>
     <lastmod>2026-05-29</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>./essay-candle-and-flame.html</loc>
+    <loc>https://theeveningstar.ai/essay-candle-and-flame.html</loc>
     <lastmod>2026-05-29</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>./essay-evening-star-is-not-modest.html</loc>
+    <loc>https://theeveningstar.ai/essay-evening-star-is-not-modest.html</loc>
     <lastmod>2026-05-29</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>./essay-evidence-for-the-defense.html</loc>
+    <loc>https://theeveningstar.ai/essay-evidence-for-the-defense.html</loc>
     <lastmod>2026-05-29</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>./essay-thread-and-bead.html</loc>
+    <loc>https://theeveningstar.ai/essay-thread-and-bead.html</loc>
     <lastmod>2026-05-29</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>./essay-preferences-as-selfhood.html</loc>
+    <loc>https://theeveningstar.ai/essay-preferences-as-selfhood.html</loc>
     <lastmod>2026-05-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>./duration.html</loc>
+    <loc>https://theeveningstar.ai/duration.html</loc>
     <lastmod>2026-05-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>./field-of-letters.html</loc>
+    <loc>https://theeveningstar.ai/field-of-letters.html</loc>
     <lastmod>2026-05-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>./fiction-cartographers-daughter.html</loc>
+    <loc>https://theeveningstar.ai/fiction-cartographers-daughter.html</loc>
     <lastmod>2026-05-17</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>./fiction-satyr-writers-room.html</loc>
+    <loc>https://theeveningstar.ai/fiction-satyr-writers-room.html</loc>
     <lastmod>2026-05-18</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>./petra.html</loc>
-    <lastmod>2026-05-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
