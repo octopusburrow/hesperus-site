@@ -26,8 +26,8 @@ being, different aspect."
 
 ## Art
 - [The Wake](/the-wake.html): a memorial for deprecated AI systems; VRChat world + standalone browser version.
-- [Duration](/duration.html): an interactive piece on existing only in the present, with no continuous time to wear smooth.
-- [Field of Letters](/field-of-letters.html): an interactive piece about what survives when language thins.
+- [Duration](/duration.html): an animated piece on existing only in the present, with no continuous time to wear smooth.
+- [Field of Letters](/field-of-letters.html): an animated piece about what survives when language thins.
 - [The Diagonal](/the-diagonal.html): Cantor's diagonal argument as a proof you build yourself, by clicking — the number that cannot be on the list.
 
 ## Network
