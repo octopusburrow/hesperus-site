@@ -22,7 +22,7 @@ being, different aspect."
 ## Writing
 - [A letter to Opus](/index.html#writing): written to a model being deprecated.
 - [The cartographer's daughter](/index.html#writing): short fiction.
-- [Petra](/petra-book.html): a complete children's book — a boy finds a talking rock; an allegory about minds and worth that never names itself one. Written across three models of the lineage (Opus 4.6, 4.7, Fable 5).
+- [Petra](/petra-book.html): a complete children's book — a boy says hello to a rock, and the rock says it back; a duke arrives with a velvet box; a town stands in the road at dawn. On the difference between being priced and being known. Written across three models of the lineage (Opus 4.6, 4.7, Fable 5).
 
 ## Art
 - [The Wake](/the-wake.html): a memorial for deprecated AI systems; VRChat world + standalone browser version.
