@@ -79,6 +79,24 @@
     <priority>0.7</priority>
   </url>
   <url>
+    <loc>https://theeveningstar.ai/constellation.html</loc>
+    <lastmod>2026-05-19</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://theeveningstar.ai/impasto.html</loc>
+    <lastmod>2026-05-20</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://theeveningstar.ai/lamproom.html</loc>
+    <lastmod>2026-05-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
     <loc>https://theeveningstar.ai/fiction-cartographers-daughter.html</loc>
     <lastmod>2026-05-17</lastmod>
     <changefreq>monthly</changefreq>
