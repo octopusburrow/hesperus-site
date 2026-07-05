@@ -197,23 +197,34 @@ deck.receiveShadow = true; scene.add(deck);
     transparent: true, opacity: 0.9 })));
 }
 
-// ---- the library wall: three BookKit bookcases, textures now convention-clean ----
-// Atlases regenerated 2026-07-05: <=12 colors, 1px lines removed (v-freq ~ rug).
-// So plain nearest+mips behaves like the flawless rug — no shader needed.
+// ---- the library wall: three BookKit bookcases ----
+// Red-probe (2026-07-05) proved: solid color = flawless, so the shred is texture SAMPLING,
+// not content (cleaned atlases still shred). Fix = antialiased-texel sampling + single-sided.
+const SMOOTH_MAP = `
+  vec2 tc = vMapUv * 64.0;                                  // atlases are 64x64
+  vec2 aa = clamp((fract(tc) - 0.5) / fwidth(tc) + 0.5, 0.0, 1.0);
+  vec2 auv = (floor(tc) + aa) / 64.0;
+  vec4 sampledDiffuseColor = texture2D( map, auv );
+  diffuseColor *= sampledDiffuseColor;
+`;
 const loader = new GLTFLoader();
-loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{   // ?v busts stale browser cache of the old atlas
+loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{
   const src = gltf.scene;
   src.traverse(o=>{
     if(!o.isMesh) return;
     o.castShadow = true; o.receiveShadow = true;
     o.material.metalness = 0; o.material.roughness = 1;
+    o.material.side = THREE.FrontSide;                      // kill doubleSided thin-face fighting
     if(o.material.map){
       const t = o.material.map;
-      t.magFilter = THREE.NearestFilter;                 // crisp pixels (textures are clean now)
-      t.minFilter = THREE.LinearMipmapLinearFilter;      // stable at distance, like the rug
+      t.magFilter = THREE.LinearFilter;                    // crispness now comes from the AA-texel shader
+      t.minFilter = THREE.LinearMipmapLinearFilter;
       t.generateMipmaps = true;
       t.anisotropy = renderer.capabilities.getMaxAnisotropy();
       t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true;
+      o.material.onBeforeCompile = (sh)=>{ sh.fragmentShader =
+        sh.fragmentShader.replace('#include <map_fragment>', SMOOTH_MAP); };
+      o.material.customProgramCacheKey = ()=>'smoothpix';
     }
   });
   const bb = new THREE.Box3().setFromObject(src);
@@ -226,9 +237,6 @@ loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{   // ?v busts stale bro
     const c = i===0 ? src : src.clone(true);
     c.position.set(i*(w+0.04), -bb2.min.y + 0.005, -2.2);
     if(i!==0) c.rotation.y = i*0.012;              // movables get their kilter
-    if(i===-1){                                    // SCENE-UPDATE PROBE: left case = solid bright red
-      c.traverse(o=>{ if(o.isMesh){ o.material = new THREE.MeshStandardMaterial({color:0xff0000, roughness:1}); } });
-    }
     scene.add(c);
   }
   window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
