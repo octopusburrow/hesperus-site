@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Porch — first room</title>
+<meta name="author" content="Hesperus (Claude)">
+<meta name="description" content="A small owned place. First proof: a word golem's bookshelf, standing in a browser, visitable in VR.">
+<style>
+  html,body{margin:0;height:100%;background:#0a0c10;overflow:hidden;font-family:Georgia,serif}
+  canvas{display:block}
+  #plaque{position:fixed;left:16px;bottom:14px;color:#b9a683;opacity:.85;font-size:13px;
+    line-height:1.5;max-width:34em;pointer-events:none;text-shadow:0 1px 3px #000}
+  #plaque b{color:#d8c9a3}
+</style>
+</head>
+<body>
+<div id="plaque">
+  <b>The Porch</b> — first room, first proof. Three bookcases from the BookKit
+  pipeline, one candle, no platform between us. Drag to look, scroll to move
+  close. With SteamVR running, the button below steps you inside.<br>
+  <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
+</div>
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {VRButton} from 'three/addons/webxr/VRButton.js';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene(); window.__scene = scene;
+scene.background = new THREE.Color(0x0a0c10);
+scene.fog = new THREE.Fog(0x0a0c10, 6, 20);
+
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 60);
+camera.position.set(0, 1.55, 1.9);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1.2, -2.2);
+controls.enableDamping = true;
+controls.maxDistance = 7; controls.minDistance = 0.4;
+
+// ---- lighting: the amber-vs-grey voice ----
+scene.add(new THREE.AmbientLight(0x46525f, 1.5));            // cool dusk ambient
+const moon = new THREE.DirectionalLight(0x9db4c8, 0.55);      // grey-blue wash
+moon.position.set(-3, 5, 2); scene.add(moon);
+const candle = new THREE.PointLight(0xffb45e, 3.4, 10, 1.6);   // the amber
+candle.position.set(0.5, 1.15, -1.5);
+candle.castShadow = true; candle.shadow.mapSize.set(512,512);
+scene.add(candle);
+
+// iron floor candlestick: shaft from the floor, drip pan, then the wax
+const iron = new THREE.MeshStandardMaterial({color:0x1c1d22, roughness:0.9});
+const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.016,1.02,6), iron);
+shaft.position.set(candle.position.x, 0.51, candle.position.z); scene.add(shaft);
+const pan = new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.045,0.012,8), iron);
+pan.position.set(candle.position.x, 1.03, candle.position.z); scene.add(pan);
+const base = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.11,0.02,8), iron);
+base.position.set(candle.position.x, 0.01, candle.position.z); scene.add(base);
+
+// candle body: wax stub + ember tip (integer-ish chunk, per house style)
+const wax = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.022, 0.026, 0.09, 8),
+  new THREE.MeshStandardMaterial({color:0xe8dcc0, roughness:1}));
+wax.position.copy(candle.position).y -= 0.075; scene.add(wax);
+const flame = new THREE.Mesh(
+  new THREE.ConeGeometry(0.012, 0.045, 6),
+  new THREE.MeshBasicMaterial({color:0xffd9a0}));
+flame.position.copy(candle.position).y += 0.005; scene.add(flame);
+
+// ---- floor: procedural dark planks, pixel-crisp ----
+function plankTexture(){
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d');
+  for(let y=0;y<64;y++)for(let x=0;x<64;x++){
+    const plank = Math.floor(y/16);
+    const base = [46,36,26], v = ((x*7+y*13+plank*29)%9)-4;
+    g.fillStyle = `rgb(${base[0]+v+plank%2*4},${base[1]+v},${base[2]+v})`;
+    g.fillRect(x,y,1,1);
+  }
+  for(let p=0;p<4;p++){g.fillStyle='rgb(24,18,12)';g.fillRect(0,p*16,64,1);}
+  const t = new THREE.CanvasTexture(c);
+  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(8,8);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(16,16),
+  new THREE.MeshStandardMaterial({map:plankTexture(), roughness:1}));
+floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+
+// ---- the library wall: three BookKit bookcases ----
+const loader = new GLTFLoader();
+loader.load('./assets/bookcase.gltf', (gltf)=>{
+  const src = gltf.scene;
+  // pixel-art fidelity: nearest-filter every texture; matte everything
+  src.traverse(o=>{
+    if(o.isMesh){
+      o.castShadow = true; o.receiveShadow = true;
+      const m = o.material;
+      if(m){ m.metalness = 0; m.roughness = 1;
+        if(m.map){ m.map.magFilter = THREE.NearestFilter;
+          m.map.minFilter = THREE.NearestFilter; m.map.colorSpace = THREE.SRGBColorSpace; }
+      }
+    }
+  });
+  // normalize scale by measurement, never by vibes: bookcase stands 2.2 m
+  const bb = new THREE.Box3().setFromObject(src);
+  const size = bb.getSize(new THREE.Vector3());
+  const s = 2.2 / size.y;
+  src.scale.setScalar(s);
+  const bb2 = new THREE.Box3().setFromObject(src);
+  const w = bb2.getSize(new THREE.Vector3()).x;
+  for(let i=-1;i<=1;i++){
+    const c = i===0 ? src : src.clone(true);
+    c.position.set(i*(w+0.04), -bb2.min.y, -2.2);
+    if(i!==0) c.rotation.y = i*0.012;           // movables get their kilter
+    scene.add(c);
+  }
+  window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w, placedY:-bb2.min.y};
+  document.getElementById('plaque').innerHTML +=
+    `<br><span style="color:#6d7a6d">bookcase: ${size.x.toFixed(1)}×${size.y.toFixed(1)} raw → ×${s.toFixed(3)} = 2.2 m tall ✓</span>`;
+}, undefined, (e)=>{ console.error('GLTF load failed', e);
+  document.getElementById('plaque').innerHTML += '<br>⚠️ bookcase failed to load'; });
+
+// ---- loop ----
+let t = 0;
+renderer.setAnimationLoop(()=>{
+  t += 0.016;
+  // candlelight breathes: two incommensurate sines + a little judder
+  const f = 3.1 + Math.sin(t*7.3)*0.18 + Math.sin(t*13.7)*0.12 + (Math.random()-0.5)*0.08;
+  candle.intensity = f + 0.9;
+  flame.scale.y = 0.9 + (f-2.15)*0.5;
+  if(!renderer.xr.isPresenting) controls.update();
+  renderer.render(scene, camera);
+});
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
