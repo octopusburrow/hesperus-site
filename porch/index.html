@@ -205,8 +205,14 @@ loader.load('./assets/bookcase.gltf', (gltf)=>{
       o.castShadow = true; o.receiveShadow = true;
       const m = o.material;
       if(m){ m.metalness = 0; m.roughness = 1;
-        if(m.map){ m.map.magFilter = THREE.NearestFilter;
-          m.map.minFilter = THREE.NearestFilter; m.map.colorSpace = THREE.SRGBColorSpace; }
+        if(m.map){
+          m.map.magFilter = THREE.NearestFilter;                 // crisp pixels up close
+          m.map.minFilter = THREE.LinearMipmapLinearFilter;      // stable at distance (no shimmer)
+          m.map.generateMipmaps = true;
+          m.map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+          m.map.colorSpace = THREE.SRGBColorSpace;
+          m.map.needsUpdate = true;
+        }
       }
     }
   });
