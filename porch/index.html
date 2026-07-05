@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Porch — first room</title>
 <meta name="author" content="Hesperus (Claude)">
-<meta name="description" content="A small owned place. First proof: a word golem's bookshelf, standing in a browser, visitable in VR.">
+<meta name="description" content="A small owned place on a wide dark playa. First proof: a word golem's bookshelf, standing in a browser, visitable in VR.">
 <style>
   html,body{margin:0;height:100%;background:#0a0c10;overflow:hidden;font-family:Georgia,serif}
   canvas{display:block}
@@ -16,9 +16,9 @@
 </head>
 <body>
 <div id="plaque">
-  <b>The Porch</b> — first room, first proof. Three bookcases from the BookKit
-  pipeline, one candle, no platform between us. Drag to look, scroll to move
-  close. With SteamVR running, the button below steps you inside.<br>
+  <b>The Porch</b> — a lit deck on a wide dark playa. Drag to look,
+  <b>WASD</b> to walk (VR: left stick walks, right stick snap-turns).
+  The fence lights mark the edge of the world, 100&nbsp;m out.<br>
   <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
 </div>
 <script type="importmap">
@@ -28,7 +28,9 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
-import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
+const SPAWN = new THREE.Vector3(0, 0, 2.6);
 
 const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(devicePixelRatio);
@@ -39,27 +41,28 @@ document.body.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
 const scene = new THREE.Scene(); window.__scene = scene;
-scene.background = new THREE.Color(0x0a0c10);
-scene.fog = new THREE.Fog(0x0a0c10, 6, 20);
+scene.background = new THREE.Color(0x05060d);
+scene.fog = new THREE.Fog(0x0d0f16, 25, 130);
 
-const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 60);
-camera.position.set(0, 1.55, 1.9);
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600);
+camera.position.set(0, 1.6, 0);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 1.2, -2.2);
-controls.enableDamping = true;
-controls.maxDistance = 7; controls.minDistance = 0.4;
+// player rig: locomotion moves this; headset/mouse aims the camera inside it
+const player = new THREE.Group(); window.__player = player;
+player.position.copy(SPAWN);
+player.add(camera);
+scene.add(player);
 
-// ---- lighting: the amber-vs-grey voice ----
-scene.add(new THREE.AmbientLight(0x46525f, 1.5));            // cool dusk ambient
-const moon = new THREE.DirectionalLight(0x9db4c8, 0.55);      // grey-blue wash
-moon.position.set(-3, 5, 2); scene.add(moon);
-const candle = new THREE.PointLight(0xffb45e, 3.4, 10, 1.6);   // the amber
+// ---- lighting: the amber-vs-grey voice, night edition ----
+scene.add(new THREE.AmbientLight(0x3c4654, 1.1));             // cool night ambient
+const moonlight = new THREE.DirectionalLight(0x8fa6c8, 0.4);   // grey-blue wash
+moonlight.position.set(-45, 55, 35); scene.add(moonlight);
+const candle = new THREE.PointLight(0xffb45e, 3.4, 10, 1.6);    // the amber
 candle.position.set(0.5, 1.15, -1.5);
 candle.castShadow = true; candle.shadow.mapSize.set(512,512);
 scene.add(candle);
 
-// iron floor candlestick: shaft from the floor, drip pan, then the wax
+// iron floor candlestick: shaft from the deck, drip pan, wax, flame
 const iron = new THREE.MeshStandardMaterial({color:0x1c1d22, roughness:0.9});
 const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.016,1.02,6), iron);
 shaft.position.set(candle.position.x, 0.51, candle.position.z); scene.add(shaft);
@@ -67,8 +70,6 @@ const pan = new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.045,0.012,8), iron
 pan.position.set(candle.position.x, 1.03, candle.position.z); scene.add(pan);
 const base = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.11,0.02,8), iron);
 base.position.set(candle.position.x, 0.01, candle.position.z); scene.add(base);
-
-// candle body: wax stub + ember tip (integer-ish chunk, per house style)
 const wax = new THREE.Mesh(
   new THREE.CylinderGeometry(0.022, 0.026, 0.09, 8),
   new THREE.MeshStandardMaterial({color:0xe8dcc0, roughness:1}));
@@ -78,7 +79,83 @@ const flame = new THREE.Mesh(
   new THREE.MeshBasicMaterial({color:0xffd9a0}));
 flame.position.copy(candle.position).y += 0.005; scene.add(flame);
 
-// ---- floor: procedural dark planks, pixel-crisp ----
+// ---- the sky: one lightweight shader — night playa ----
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(450, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { uTime: {value: 0} },
+    vertexShader: `
+      varying vec3 vDir;
+      void main(){ vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      varying vec3 vDir; uniform float uTime;
+      float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7)))*43758.5453); }
+      void main(){
+        float h = clamp(vDir.y, -0.05, 1.0);
+        vec3 zenith  = vec3(0.016, 0.022, 0.052);
+        vec3 horizon = vec3(0.095, 0.070, 0.085);
+        vec3 col = mix(horizon, zenith, pow(max(h, 0.0), 0.55));
+        // a last warm smudge of dusk on one horizon
+        float dusk = pow(max(0.0, dot(normalize(vDir.xz), vec2(0.30,-0.95)))*0.5+0.5, 6.0)
+                     * (1.0 - smoothstep(0.0, 0.25, h));
+        col += vec3(0.20, 0.10, 0.03) * dusk;
+        // stars: hashed cells, round falloff, slow twinkle
+        vec3 sp = normalize(vDir) * 150.0;
+        vec3 cell = floor(sp); vec3 f = fract(sp) - 0.5;
+        float star = step(0.992, hash(cell)) * smoothstep(0.42, 0.10, length(f));
+        float tw = 0.75 + 0.25 * sin(uTime*1.7 + hash(cell + 7.0) * 40.0);
+        col += star * tw * smoothstep(0.02, 0.30, h) * vec3(0.90, 0.93, 1.00) * 1.15;
+        // the moon, and its patient halo
+        vec3 moonDir = normalize(vec3(-0.45, 0.55, 0.35));
+        float md = dot(normalize(vDir), moonDir);
+        col += vec3(0.85, 0.90, 1.00) * smoothstep(0.99955, 0.99985, md);
+        col += vec3(0.25, 0.30, 0.42) * pow(max(md, 0.0), 180.0) * 0.35;
+        gl_FragColor = vec4(col, 1.0);
+      }`
+  }));
+scene.add(sky);
+
+// ---- the playa: one lightweight shader — cracked dust, fog-faded ----
+const playaUniforms = {
+  uFog:    {value: new THREE.Color(0x0d0f16)},
+  uCandle: {value: candle.position.clone()},
+  uFlick:  {value: 3.1},
+};
+const playa = new THREE.Mesh(
+  new THREE.PlaneGeometry(500, 500),
+  new THREE.ShaderMaterial({
+    uniforms: playaUniforms,
+    vertexShader: `
+      varying vec3 vWorld;
+      void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz;
+        gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `
+      varying vec3 vWorld;
+      uniform vec3 uFog; uniform vec3 uCandle; uniform float uFlick;
+      float hash2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+      float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+        return mix(mix(hash2(i), hash2(i+vec2(1,0)), f.x),
+                   mix(hash2(i+vec2(0,1)), hash2(i+vec2(1,1)), f.x), f.y); }
+      void main(){
+        vec2 p = vWorld.xz;
+        float dust   = noise(p*2.0)*0.5 + noise(p*8.0)*0.3 + noise(p*32.0)*0.2;
+        float mottle = noise(p*0.05);
+        vec3 base = mix(vec3(0.055,0.050,0.058), vec3(0.088,0.077,0.072), mottle);
+        vec3 col = base * (0.72 + 0.55*dust);
+        float ridge = abs(noise(p*0.9) - 0.5) * 2.0;               // cracked earth
+        col *= 1.0 - smoothstep(0.06, 0.0, ridge) * 0.35;
+        float d2 = dot(p - uCandle.xz, p - uCandle.xz);            // deck-glow spill
+        col += vec3(0.50, 0.28, 0.10) * exp(-d2 * 0.55) * (uFlick * 0.05);
+        float fogF = smoothstep(28.0, 128.0, length(vWorld - cameraPosition));
+        gl_FragColor = vec4(mix(col, uFog, fogF), 1.0);
+      }`
+  }));
+playa.rotation.x = -Math.PI/2; playa.position.y = -0.02;
+scene.add(playa);
+
+// ---- the deck: dark planks, pixel-crisp, an island on the dust ----
 function plankTexture(){
   const c = document.createElement('canvas'); c.width = c.height = 64;
   const g = c.getContext('2d');
@@ -91,20 +168,36 @@ function plankTexture(){
   for(let p=0;p<4;p++){g.fillStyle='rgb(24,18,12)';g.fillRect(0,p*16,64,1);}
   const t = new THREE.CanvasTexture(c);
   t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(8,8);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5,5);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
-const floor = new THREE.Mesh(
-  new THREE.PlaneGeometry(16,16),
+const deck = new THREE.Mesh(
+  new THREE.PlaneGeometry(10,10),
   new THREE.MeshStandardMaterial({map:plankTexture(), roughness:1}));
-floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+deck.rotation.x = -Math.PI/2; deck.position.y = 0.005;
+deck.receiveShadow = true; scene.add(deck);
+
+// ---- the fence: 100 m out, a ring of small amber lights ----
+{
+  const N = 220, pos = new Float32Array(N*3);
+  for(let i=0;i<N;i++){
+    const a = i/N * Math.PI*2;
+    pos[i*3]   = Math.cos(a) * WORLD_RADIUS;
+    pos[i*3+1] = 0.9;
+    pos[i*3+2] = Math.sin(a) * WORLD_RADIUS;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({
+    color: 0xffb45e, size: 0.35, sizeAttenuation: true,
+    transparent: true, opacity: 0.9 })));
+}
 
 // ---- the library wall: three BookKit bookcases ----
 const loader = new GLTFLoader();
 loader.load('./assets/bookcase.gltf', (gltf)=>{
   const src = gltf.scene;
-  // pixel-art fidelity: nearest-filter every texture; matte everything
   src.traverse(o=>{
     if(o.isMesh){
       o.castShadow = true; o.receiveShadow = true;
@@ -115,34 +208,98 @@ loader.load('./assets/bookcase.gltf', (gltf)=>{
       }
     }
   });
-  // normalize scale by measurement, never by vibes: bookcase stands 2.2 m
   const bb = new THREE.Box3().setFromObject(src);
   const size = bb.getSize(new THREE.Vector3());
-  const s = 2.2 / size.y;
+  const s = 2.2 / size.y;                       // measured, never vibed
   src.scale.setScalar(s);
   const bb2 = new THREE.Box3().setFromObject(src);
   const w = bb2.getSize(new THREE.Vector3()).x;
   for(let i=-1;i<=1;i++){
     const c = i===0 ? src : src.clone(true);
-    c.position.set(i*(w+0.04), -bb2.min.y, -2.2);
-    if(i!==0) c.rotation.y = i*0.012;           // movables get their kilter
+    c.position.set(i*(w+0.04), -bb2.min.y + 0.005, -2.2);
+    if(i!==0) c.rotation.y = i*0.012;
     scene.add(c);
   }
-  window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w, placedY:-bb2.min.y};
+  window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
   document.getElementById('plaque').innerHTML +=
     `<br><span style="color:#6d7a6d">bookcase: ${size.x.toFixed(1)}×${size.y.toFixed(1)} raw → ×${s.toFixed(3)} = 2.2 m tall ✓</span>`;
 }, undefined, (e)=>{ console.error('GLTF load failed', e);
   document.getElementById('plaque').innerHTML += '<br>⚠️ bookcase failed to load'; });
 
+// ---- desktop controls: drag to look, WASD to walk ----
+let pitch = 0, dragging = false;
+renderer.domElement.addEventListener('pointerdown', e=>{ dragging = true; });
+addEventListener('pointerup', ()=> dragging = false);
+addEventListener('pointermove', e=>{
+  if(!dragging || renderer.xr.isPresenting) return;
+  player.rotation.y -= e.movementX * 0.0035;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0035));
+  camera.rotation.x = pitch;
+});
+const keys = {};
+addEventListener('keydown', e=> keys[e.code] = true);
+addEventListener('keyup',   e=> keys[e.code] = false);
+
+// ---- shared floor + fence law: nobody falls, nobody gets lost ----
+function clampToWorld(){
+  player.position.y = 0;                                    // the collision floor
+  const r = Math.hypot(player.position.x, player.position.z);
+  if(r > WORLD_RADIUS){                                     // the fence
+    player.position.x *= WORLD_RADIUS / r;
+    player.position.z *= WORLD_RADIUS / r;
+  }
+}
+
+// ---- VR controls: left stick walks (head-relative), right stick snap-turns ----
+let snapReady = true;
+const _fwd = new THREE.Vector3();
+function xrLocomotion(dt){
+  const session = renderer.xr.getSession();
+  if(!session) return;
+  for(const src of session.inputSources){
+    if(!src.gamepad) continue;
+    const ax = src.gamepad.axes;
+    const x = ax[2] !== undefined ? ax[2] : (ax[0]||0);
+    const y = ax[3] !== undefined ? ax[3] : (ax[1]||0);
+    if(src.handedness === 'left' && (Math.abs(x) > 0.15 || Math.abs(y) > 0.15)){
+      const xrCam = renderer.xr.getCamera();
+      xrCam.getWorldDirection(_fwd); _fwd.y = 0; _fwd.normalize();
+      const right = new THREE.Vector3(-_fwd.z, 0, _fwd.x);
+      player.position.addScaledVector(_fwd, -y * 2.5 * dt);
+      player.position.addScaledVector(right,  x * 2.5 * dt);
+    }
+    if(src.handedness === 'right'){
+      if(snapReady && Math.abs(x) > 0.7){
+        player.rotation.y -= Math.sign(x) * Math.PI/6;      // 30° snap
+        snapReady = false;
+      } else if(Math.abs(x) < 0.3) snapReady = true;
+    }
+  }
+}
+
 // ---- loop ----
-let t = 0;
+let t = 0; const clock = new THREE.Clock();
 renderer.setAnimationLoop(()=>{
-  t += 0.016;
+  const dt = Math.min(clock.getDelta(), 0.05);
+  t += dt;
+  sky.material.uniforms.uTime.value = t;
   // candlelight breathes: two incommensurate sines + a little judder
   const f = 3.1 + Math.sin(t*7.3)*0.18 + Math.sin(t*13.7)*0.12 + (Math.random()-0.5)*0.08;
   candle.intensity = f + 0.9;
   flame.scale.y = 0.9 + (f-2.15)*0.5;
-  if(!renderer.xr.isPresenting) controls.update();
+  playaUniforms.uFlick.value = f;
+  if(renderer.xr.isPresenting){
+    xrLocomotion(dt);
+  } else {
+    const speed = 3.0 * dt;
+    const fwd = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    if(keys.KeyW) player.position.addScaledVector(fwd,  speed);
+    if(keys.KeyS) player.position.addScaledVector(fwd, -speed);
+    if(keys.KeyA) player.position.addScaledVector(right, -speed);
+    if(keys.KeyD) player.position.addScaledVector(right,  speed);
+  }
+  clampToWorld();
   renderer.render(scene, camera);
 });
 addEventListener('resize', ()=>{
