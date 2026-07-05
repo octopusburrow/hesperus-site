@@ -201,7 +201,7 @@ deck.receiveShadow = true; scene.add(deck);
 // Atlases regenerated 2026-07-05: <=12 colors, 1px lines removed (v-freq ~ rug).
 // So plain nearest+mips behaves like the flawless rug — no shader needed.
 const loader = new GLTFLoader();
-loader.load('./assets/bookcase.gltf', (gltf)=>{
+loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{   // ?v busts stale browser cache of the old atlas
   const src = gltf.scene;
   src.traverse(o=>{
     if(!o.isMesh) return;
