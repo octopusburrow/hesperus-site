@@ -226,6 +226,9 @@ loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{   // ?v busts stale bro
     const c = i===0 ? src : src.clone(true);
     c.position.set(i*(w+0.04), -bb2.min.y + 0.005, -2.2);
     if(i!==0) c.rotation.y = i*0.012;              // movables get their kilter
+    if(i===-1){                                    // SCENE-UPDATE PROBE: left case = solid bright red
+      c.traverse(o=>{ if(o.isMesh){ o.material = new THREE.MeshStandardMaterial({color:0xff0000, roughness:1}); } });
+    }
     scene.add(c);
   }
   window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
