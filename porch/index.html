@@ -211,26 +211,44 @@ function makeLabel(text){
   return spr;
 }
 
-// ---- the library wall: A/B/C filter diagnostic ----
-// Each case wears a DIFFERENT texture filter, so the real GPU tells us the flicker's cause.
-const FILTER_MODES = [
-  {tag:'A · smooth (linear+mips)', mag:THREE.LinearFilter,  min:THREE.LinearMipmapLinearFilter, mips:true},
-  {tag:'B · pixel + mips',         mag:THREE.NearestFilter, min:THREE.LinearMipmapLinearFilter, mips:true},
-  {tag:'C · raw pixel (no mips)',  mag:THREE.NearestFilter, min:THREE.NearestFilter,            mips:false},
+// ---- the library wall: A / B / D filter diagnostic ----
+// A = linear (blurry-but-stable), B = nearest (crisp-but-shreds),
+// D = antialiased-texel shader (crisp AND stable — the candidate fix).
+const TEX_SIZE = 32.0;   // all bookcase atlases are 32x32
+const CASES = [
+  {tag:'A · linear (blurry)',       mag:THREE.LinearFilter,  min:THREE.LinearMipmapLinearFilter, mips:true},
+  {tag:'B · nearest (shreds)',      mag:THREE.NearestFilter, min:THREE.LinearMipmapLinearFilter, mips:true},
+  {tag:'D · smooth-pixel (fix?)',   smooth:true},
 ];
-function applyFilter(root, mode){
+// antialiased pixel-art sampling: crisp texel interiors, ~1px AA only at seams
+const SMOOTH_MAP = `
+  vec2 tc = vMapUv * ${TEX_SIZE.toFixed(1)};
+  vec2 aa = clamp((fract(tc) - 0.5) / fwidth(tc) + 0.5, 0.0, 1.0);
+  vec2 auv = (floor(tc) + aa) / ${TEX_SIZE.toFixed(1)};
+  vec4 sampledDiffuseColor = texture2D( map, auv );
+  diffuseColor *= sampledDiffuseColor;
+`;
+function applyCase(root, mode){
   root.traverse(o=>{
     if(!o.isMesh) return;
     o.castShadow = true; o.receiveShadow = true;
-    o.material = o.material.clone();                 // independent material per instance
+    o.material = o.material.clone();
     o.material.metalness = 0; o.material.roughness = 1;
     if(o.material.map){
-      const t = o.material.map.clone();              // independent texture => independent filter
-      t.magFilter = mode.mag; t.minFilter = mode.min;
-      t.generateMipmaps = mode.mips;
-      t.anisotropy = mode.mips ? renderer.capabilities.getMaxAnisotropy() : 1;
+      const t = o.material.map.clone();
+      if(mode.smooth){                               // linear + mips; crispness comes from the shader
+        t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
+        t.generateMipmaps = true; t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        o.material.onBeforeCompile = (sh)=>{ sh.fragmentShader =
+          sh.fragmentShader.replace('#include <map_fragment>', SMOOTH_MAP); };
+        o.material.customProgramCacheKey = ()=>'smoothpix';
+      } else {
+        t.magFilter = mode.mag; t.minFilter = mode.min;
+        t.generateMipmaps = mode.mips;
+        t.anisotropy = mode.mips ? renderer.capabilities.getMaxAnisotropy() : 1;
+      }
       t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true;
-      o.material.map = t;
+      o.material.map = t; o.material.needsUpdate = true;
     }
   });
 }
@@ -244,9 +262,9 @@ loader.load('./assets/bookcase.gltf', (gltf)=>{
   const bb2 = new THREE.Box3().setFromObject(src);
   const w = bb2.getSize(new THREE.Vector3()).x;
   for(let i=-1;i<=1;i++){
-    const mode = FILTER_MODES[i+1];
+    const mode = CASES[i+1];
     const c = src.clone(true);
-    applyFilter(c, mode);
+    applyCase(c, mode);
     c.position.set(i*(w+0.04), -bb2.min.y + 0.005, -2.2);
     if(i!==0) c.rotation.y = i*0.012;
     scene.add(c);
@@ -256,9 +274,13 @@ loader.load('./assets/bookcase.gltf', (gltf)=>{
   }
   window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
   document.getElementById('plaque').innerHTML +=
-    `<br><span style="color:#6d7a6d">A/B/C filter test — left→right = smooth / pixel+mips / raw. Which stops flickering?</span>`;
+    `<br><span style="color:#6d7a6d">A · linear (blurry) / B · nearest (shreds) / D · smooth-pixel (fix?) — is D crisp AND stable?</span>`;
 }, undefined, (e)=>{ console.error('GLTF load failed', e);
   document.getElementById('plaque').innerHTML += '<br>⚠️ bookcase failed to load'; });
+
+// browser self-report (answers "what Chromium is the Frame running?")
+document.getElementById('plaque').innerHTML +=
+  `<br><span style="color:#4c5568;font-size:11px">UA: ${navigator.userAgent}</span>`;
 
 // ---- the rug (Fable's RD rug, 3×2 m) ----
 new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
