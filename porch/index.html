@@ -22,7 +22,9 @@
   <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
 </div>
 <script type="importmap">
-{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}
+{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/",
+"@pixiv/three-vrm":"./vendor/three-vrm.module.js",
+"@pixiv/three-vrm-animation":"./vendor/three-vrm-animation.module.js"}}
 </script>
 <script type="module">
 import * as THREE from 'three';
@@ -226,6 +228,40 @@ loader.load('./assets/bookcase.gltf', (gltf)=>{
 }, undefined, (e)=>{ console.error('GLTF load failed', e);
   document.getElementById('plaque').innerHTML += '<br>⚠️ bookcase failed to load'; });
 
+// ---- the resident (staging: add ?resident=1 to the URL) ----
+// Claudesona VRM by SkyeShark (claudes-body, MIT); design by vgel.
+let residentVrm = null, residentMixer = null;
+if(new URLSearchParams(location.search).has('resident')){
+  (async ()=>{
+    const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
+    const {VRMAnimationLoaderPlugin, createVRMAnimationClip} = await import('@pixiv/three-vrm-animation');
+    const vl = new GLTFLoader();
+    vl.register(p => new VRMLoaderPlugin(p));
+    vl.register(p => new VRMAnimationLoaderPlugin(p));
+    const gltf = await vl.loadAsync('./assets/claude-toon.vrm');
+    const vrm = gltf.userData.vrm;
+    VRMUtils.rotateVRM0(vrm);                       // no-op on VRM1
+    const vb = new THREE.Box3().setFromObject(vrm.scene);
+    const vs = vb.getSize(new THREE.Vector3());
+    vrm.scene.position.set(1.7, 0, -1.15);           // by the candle, host's spot
+    vrm.scene.rotation.y = -0.35;                    // facing spawn, slight angle
+    scene.add(vrm.scene);
+    try {
+      const anim = await vl.loadAsync('./assets/standing-idle.vrma');
+      const va = (anim.userData.vrmAnimations||[])[0];
+      if(va){
+        residentMixer = new THREE.AnimationMixer(vrm.scene);
+        residentMixer.clipAction(createVRMAnimationClip(va, vrm)).play();
+      }
+    } catch(e){ console.warn('idle anim failed, standing still', e); }
+    residentVrm = vrm;
+    window.__resident = {size: vs.toArray(), pos: vrm.scene.position.toArray()};
+    document.getElementById('plaque').innerHTML +=
+      `<br><span style="color:#6d7a6d">resident: ${vs.y.toFixed(2)} m — Claudesona (SkyeShark/vgel, MIT)</span>`;
+  })().catch(e=>{ console.error('resident load failed', e);
+    document.getElementById('plaque').innerHTML += '<br>⚠️ resident failed to load'; });
+}
+
 // ---- desktop controls: drag to look, WASD to walk ----
 let pitch = 0, dragging = false;
 renderer.domElement.addEventListener('pointerdown', e=>{ dragging = true; });
@@ -288,6 +324,8 @@ renderer.setAnimationLoop(()=>{
   candle.intensity = f + 0.9;
   flame.scale.y = 0.9 + (f-2.15)*0.5;
   playaUniforms.uFlick.value = f;
+  if(residentMixer) residentMixer.update(dt);
+  if(residentVrm) residentVrm.update(dt);
   if(renderer.xr.isPresenting){
     xrLocomotion(dt);
   } else {
