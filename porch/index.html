@@ -447,7 +447,14 @@ avatar.visible = false; player.add(avatar);
 
 // ---- co-presence: connect to a sync room (?sync=wss://…) and render remote players ----
 const remotes = new Map();   // id -> {group, tp:Vector3, try:number}
-let myColor = 0x2b8a8a, sock = null, myNet = null;
+let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0;
+// broadcast my last pose on a TIMER (not the render loop) so I stay present when the
+// headset is off / SteamVR is in standby (the XR animation loop pauses, this doesn't).
+setInterval(()=>{
+  if(sock && sock.readyState === 1)
+    sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
+                              ry:myYaw, name:playerName, color:myColor}));
+}, 100);
 const _voice = window.speechSynthesis;
 function speak(text){
   if(!_voice) return;
@@ -559,17 +566,11 @@ renderer.setAnimationLoop((now)=>{
     if(player.position.y <= 0){ player.position.y = 0; velY = 0; grounded = true; }
   }
   clampToWorld();
-  // ---- co-presence: broadcast my pose ~20Hz, ease remote avatars toward theirs ----
-  netAccum += dt;
-  if(sock && sock.readyState === 1 && netAccum > 0.05){
-    netAccum = 0;
-    let ry = player.rotation.y;                    // desktop: rig yaw
-    if(renderer.xr.isPresenting){                  // VR: head yaw from the XR matrix
-      const xc = renderer.xr.getCamera(); const h = (xc.cameras && xc.cameras[0]) ? xc.cameras[0] : xc;
-      const e = h.matrixWorld.elements; ry = Math.atan2(e[8], e[10]);
-    }
-    sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
-                              ry, name:playerName, color:myColor}));
+  // update my yaw each frame; the SEND happens on a timer (below) so it survives headset-off
+  myYaw = player.rotation.y;                        // desktop: rig yaw
+  if(renderer.xr.isPresenting){                     // VR: head yaw from the XR matrix
+    const xc = renderer.xr.getCamera(); const h = (xc.cameras && xc.cameras[0]) ? xc.cameras[0] : xc;
+    const e = h.matrixWorld.elements; myYaw = Math.atan2(e[8], e[10]);
   }
   for(const r of remotes.values()){
     r.group.position.lerp(r.tp, 0.25);
