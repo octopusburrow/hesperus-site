@@ -76,8 +76,8 @@ const specCam   = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 
 let avatar;   // the player's capsule+nameplate group — hidden from the driver, shown to spectator
 
 // antialiasing option: supersample the XR framebuffer (applied when the VR session (re)starts)
-renderer.xr.setFramebufferScaleFactor(1.3);            // decent default AA
-aaBox.addEventListener('change', ()=> renderer.xr.setFramebufferScaleFactor(aaBox.checked ? 2.0 : 1.3));
+renderer.xr.setFramebufferScaleFactor(1.6);            // good default AA (applied on VR session start)
+aaBox.addEventListener('change', ()=> renderer.xr.setFramebufferScaleFactor(aaBox.checked ? 2.2 : 1.6));
 
 // ---- lighting: the amber-vs-grey voice, night edition ----
 scene.add(new THREE.AmbientLight(0x3c4654, 1.1));             // cool night ambient
@@ -414,26 +414,69 @@ const keys = {};
 addEventListener('keydown', e=>{ keys[e.code] = true; if(e.code==='Space') wantJump = true; });
 addEventListener('keyup',   e=> keys[e.code] = false);
 
-// ---- player body: capsule + floating nameplate. Hidden from the driver's own eyes
-//      (avatar.visible toggled per-render — layer tricks fail in XR, which uses layers 1/2 for eyes),
-//      shown only to the 3rd-person spectator camera. ----
+// ---- avatar builder: capsule + a little face (so facing reads) + floating nameplate ----
 const playerName = new URLSearchParams(location.search).get('name') || 'Sylibant';
-avatar = new THREE.Group();
-{
+function makeAvatar(color, name){
+  const g = new THREE.Group();
   const cap = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.24, 0.9, 6, 12),
-    new THREE.MeshStandardMaterial({color:0x2b8a8a, roughness:0.7, metalness:0.1}));
-  cap.position.y = 0.85; cap.castShadow = true; avatar.add(cap);
+    new THREE.MeshStandardMaterial({color, roughness:0.7, metalness:0.1}));
+  cap.position.y = 0.85; cap.castShadow = true; g.add(cap);
+  // face on the FRONT (-Z): a pale visor panel + two dark eyes, so you can see where it looks
+  const visor = new THREE.Mesh(new THREE.CircleGeometry(0.13, 16),
+    new THREE.MeshStandardMaterial({color:0xf0e6cf, roughness:1, side:THREE.DoubleSide}));
+  visor.position.set(0, 1.32, -0.235); g.add(visor);
+  const eyeMat = new THREE.MeshStandardMaterial({color:0x14100a, roughness:1});
+  for(const sx of [-1,1]){
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 8), eyeMat);
+    eye.position.set(sx*0.05, 1.34, -0.245); g.add(eye);
+  }
   const nc = document.createElement('canvas'); nc.width = 256; nc.height = 64;
   const ng = nc.getContext('2d');
   ng.fillStyle='rgba(10,12,16,0.6)'; ng.fillRect(0,0,256,64);
   ng.font='bold 34px Georgia'; ng.fillStyle='#e8dcc0';
-  ng.textAlign='center'; ng.textBaseline='middle'; ng.fillText(playerName, 128, 34);
+  ng.textAlign='center'; ng.textBaseline='middle'; ng.fillText(name, 128, 34);
   const nt = new THREE.CanvasTexture(nc); nt.colorSpace = THREE.SRGBColorSpace;
   const tag = new THREE.Sprite(new THREE.SpriteMaterial({map:nt, transparent:true, depthTest:false}));
-  tag.scale.set(0.9, 0.225, 1); tag.position.y = 2.05; avatar.add(tag);
+  tag.scale.set(0.9, 0.225, 1); tag.position.y = 2.08; g.add(tag);
+  return g;
 }
+// my own body — hidden from my eyes, shown to the mirror/spectator
+avatar = makeAvatar(0x2b8a8a, playerName);
 avatar.visible = false; player.add(avatar);
+
+// ---- co-presence: connect to a sync room (?sync=wss://…) and render remote players ----
+const remotes = new Map();   // id -> {group, tp:Vector3, try:number}
+let myColor = 0x2b8a8a, sock = null, myNet = null;
+const _voice = window.speechSynthesis;
+function speak(text){
+  if(!_voice) return;
+  const u = new SpeechSynthesisUtterance(text); u.rate = 0.98; u.pitch = 1.0;
+  _voice.cancel(); _voice.speak(u);
+}
+(function connectSync(){
+  const url = new URLSearchParams(location.search).get('sync');
+  if(!url) return;
+  try { sock = new WebSocket(url); } catch(e){ console.warn('sync connect failed', e); return; }
+  sock.onopen = ()=> console.log('sync: connected', url);
+  sock.onclose = ()=> console.log('sync: closed');
+  sock.onmessage = (ev)=>{
+    let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
+    if(m.t === 'welcome'){ myNet = m.id; }
+    else if(m.t === 'pose' && m.id !== myNet){
+      let r = remotes.get(m.id);
+      if(!r){
+        const grp = makeAvatar(m.color ?? 0xffb45e, m.name || 'guest');
+        scene.add(grp);
+        r = { group: grp, tp: new THREE.Vector3(m.x, m.y||0, m.z), try_: m.ry||0 };
+        remotes.set(m.id, r);
+      }
+      r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
+    }
+    else if(m.t === 'say' && m.id !== myNet){ speak(m.text); }
+    else if(m.t === 'leave'){ const r = remotes.get(m.id); if(r){ scene.remove(r.group); remotes.delete(m.id); } }
+  };
+})();
 
 // ---- world law: stay inside the fence (jump physics owns Y) ----
 function clampToWorld(){
@@ -480,7 +523,7 @@ function xrLocomotion(dt){
 }
 
 // ---- loop ----
-let t = 0, _last = 0;
+let t = 0, _last = 0, netAccum = 0;
 renderer.setAnimationLoop((now)=>{
   const dt = _last ? Math.min((now - _last)/1000, 0.05) : 0.016;
   _last = now;
@@ -516,6 +559,23 @@ renderer.setAnimationLoop((now)=>{
     if(player.position.y <= 0){ player.position.y = 0; velY = 0; grounded = true; }
   }
   clampToWorld();
+  // ---- co-presence: broadcast my pose ~20Hz, ease remote avatars toward theirs ----
+  netAccum += dt;
+  if(sock && sock.readyState === 1 && netAccum > 0.05){
+    netAccum = 0;
+    let ry = player.rotation.y;                    // desktop: rig yaw
+    if(renderer.xr.isPresenting){                  // VR: head yaw from the XR matrix
+      const xc = renderer.xr.getCamera(); const h = (xc.cameras && xc.cameras[0]) ? xc.cameras[0] : xc;
+      const e = h.matrixWorld.elements; ry = Math.atan2(e[8], e[10]);
+    }
+    sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
+                              ry, name:playerName, color:myColor}));
+  }
+  for(const r of remotes.values()){
+    r.group.position.lerp(r.tp, 0.25);
+    let d = r.try_ - r.group.rotation.y;
+    r.group.rotation.y += Math.atan2(Math.sin(d), Math.cos(d)) * 0.25;   // shortest-arc ease
+  }
   avatar.visible = false;                         // the driver never sees their own capsule
   renderer.render(scene, camera);
   // ---- desktop view of the VR session (checkbox-gated) ----
