@@ -14,8 +14,10 @@
     line-height:1.5;max-width:34em;pointer-events:none;text-shadow:0 1px 3px #000}
   #plaque b{color:#d8c9a3}
   #mirrorToggle{position:fixed;right:14px;top:12px;color:#b9a683;font-size:13px;
-    font-family:Georgia,serif;opacity:.8;user-select:none;text-shadow:0 1px 3px #000}
+    font-family:Georgia,serif;opacity:.8;user-select:none;text-shadow:0 1px 3px #000;
+    text-align:right;line-height:1.7}
   #mirrorToggle input{vertical-align:middle;margin-right:5px}
+  #mirrorToggle label{cursor:pointer}
 </style>
 </head>
 <body>
@@ -25,7 +27,11 @@
   The lanterns mark the edge of the world, 100&nbsp;m out.<br>
   <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
 </div>
-<label id="mirrorToggle"><input type="checkbox" id="mirror"> mirror VR&nbsp;→&nbsp;desktop</label>
+<div id="mirrorToggle">
+  <label><input type="checkbox" id="mirror" checked> mirror VR&nbsp;→&nbsp;desktop (1st&nbsp;person)</label><br>
+  <label><input type="checkbox" id="spec3rd"> 3rd-person view on desktop</label><br>
+  <label><input type="checkbox" id="aa"> extra sharp (supersample, re-enter&nbsp;VR)</label>
+</div>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/",
 "@pixiv/three-vrm":"./vendor/three-vrm.module.js",
@@ -35,6 +41,7 @@
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
+import {Reflector} from 'three/addons/objects/Reflector.js';
 
 const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
 const SPAWN = new THREE.Vector3(0, 0, 2.6);
@@ -60,10 +67,17 @@ player.position.copy(SPAWN);
 player.add(camera);
 scene.add(player);
 
-// desktop = 3rd-person spectator of the VR player (item 8 / "see us from 2nd person")
-const mirror = document.getElementById('mirror');
-const specCam = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 600);
+// desktop views of the VR session: 1st-person mirror + optional 3rd-person spectator
+const mirror = document.getElementById('mirror');       // 1st person (what you see)
+const spec3rd = document.getElementById('spec3rd');     // 3rd person (see your avatar)
+const aaBox = document.getElementById('aa');            // supersample toggle
+const mirrorCam = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600);  // 1st-person head cam
+const specCam   = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 600);  // 3rd-person cam
 let avatar;   // the player's capsule+nameplate group — hidden from the driver, shown to spectator
+
+// antialiasing option: supersample the XR framebuffer (applied when the VR session (re)starts)
+renderer.xr.setFramebufferScaleFactor(1.3);            // decent default AA
+aaBox.addEventListener('change', ()=> renderer.xr.setFramebufferScaleFactor(aaBox.checked ? 2.0 : 1.3));
 
 // ---- lighting: the amber-vs-grey voice, night edition ----
 scene.add(new THREE.AmbientLight(0x3c4654, 1.1));             // cool night ambient
@@ -319,6 +333,29 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   scene.add(tableG);
 }
 
+// ---- a literal mirror, framed, to the left of the bookcases (so you can see yourself) ----
+{
+  const MW = 1.0, MH = 1.9;
+  const surface = new Reflector(new THREE.PlaneGeometry(MW, MH), {
+    color: 0x8891a0, textureWidth: 512, textureHeight: 512, clipBias: 0.003 });
+  // the avatar is normally hidden; reveal it ONLY while the mirror renders its reflection
+  const _obr = surface.onBeforeRender;
+  surface.onBeforeRender = function(r, s, c){ if(avatar) avatar.visible = true; _obr.call(this, r, s, c); if(avatar) avatar.visible = false; };
+  const mir = new THREE.Group();
+  mir.add(surface);
+  // low-poly frame: four dark beams around the glass so we know where it is
+  const fr = new THREE.MeshStandardMaterial({color:0x24201a, roughness:0.8, metalness:0.15});
+  const bar = (w,h,x,y)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,0.07), fr); m.position.set(x,y,-0.02); m.castShadow=true; return m; };
+  mir.add(bar(MW+0.16, 0.09, 0, MH/2+0.04));   // top
+  mir.add(bar(MW+0.16, 0.09, 0, -MH/2-0.04));  // bottom
+  mir.add(bar(0.09, MH+0.16, -MW/2-0.04, 0));  // left
+  mir.add(bar(0.09, MH+0.16,  MW/2+0.04, 0));  // right
+  // stand it on the deck, to the LEFT of the bookcases (-x when facing them), angled toward spawn
+  mir.position.set(-2.55, MH/2 + 0.02, -1.7);
+  mir.rotation.y = Math.PI * 0.32;
+  scene.add(mir);
+}
+
 // ---- the resident (staging: add ?resident=1 to the URL) ----
 // Claudesona VRM by SkyeShark (claudes-body, MIT); design by vgel.
 let residentVrm = null, residentMixer = null;
@@ -413,9 +450,11 @@ function xrLocomotion(dt){
   const session = renderer.xr.getSession();
   if(!session) return;
   const xrCam = renderer.xr.getCamera();
-  // the ArrayCamera's own orientation isn't reliably the head pose — read a real eye camera
   const head = (xrCam.cameras && xrCam.cameras[0]) ? xrCam.cameras[0] : xrCam;
-  head.getWorldDirection(_fwd); _fwd.y = 0;                         // forward = where you're looking
+  // READ matrixWorld DIRECTLY — getWorldDirection() calls updateWorldMatrix() which recomputes
+  // from local pos/quat and CLOBBERS the XR-set matrix (that was the "forward = fixed north" bug).
+  const e = head.matrixWorld.elements;
+  _fwd.set(-e[8], -e[9], -e[10]); _fwd.y = 0;                       // -Z column = head-forward
   if(_fwd.lengthSq() < 1e-6) _fwd.set(0,0,-1);
   _fwd.normalize();
   _right.set(-_fwd.z, 0, _fwd.x);
@@ -448,11 +487,12 @@ renderer.setAnimationLoop((now)=>{
   t += dt;
   sky.material.uniforms.uTime.value = t;
   fenceMat.uniforms.uTime.value = t;
-  // candlelight breathes — gentle amplitude, long layered period (no obvious ~1s loop)
-  const f = 3.35 + Math.sin(t*1.7)*0.24 + Math.sin(t*3.1)*0.14
-          + Math.sin(t*4.9)*0.08 + Math.sin(t*0.7)*0.11 + (Math.random()-0.5)*0.09;
+  // candlelight breathes — slow drift for the long period + a faster flutter you can actually SEE
+  const f = 3.25 + Math.sin(t*0.7)*0.14 + Math.sin(t*1.7)*0.15    // slow drift (long, layered)
+          + Math.sin(t*5.3)*0.17 + Math.sin(t*8.9)*0.11           // faster visible flicker
+          + (Math.random()-0.5)*0.18;                             // sputter
   candle.intensity = f + 0.9;
-  flame.scale.y = 0.85 + (f-3.35)*0.5;
+  flame.scale.y = 0.8 + (f-3.25)*0.6;
   playaUniforms.uFlick.value = f;
   if(residentMixer) residentMixer.update(dt);
   if(residentVrm) residentVrm.update(dt);
@@ -478,17 +518,27 @@ renderer.setAnimationLoop((now)=>{
   clampToWorld();
   avatar.visible = false;                         // the driver never sees their own capsule
   renderer.render(scene, camera);
-  // ---- desktop = 3rd-person spectator: see the labelled avatar from behind (checkbox-gated) ----
-  if(renderer.xr.isPresenting && mirror.checked){
-    avatar.visible = true;
-    const back = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
-    specCam.position.copy(player.position).addScaledVector(back, 3.2); specCam.position.y = 2.3;
-    specCam.lookAt(player.position.x, player.position.y + 1.4, player.position.z);
-    specCam.aspect = innerWidth/innerHeight; specCam.updateProjectionMatrix();
+  // ---- desktop view of the VR session (checkbox-gated) ----
+  if(renderer.xr.isPresenting && (mirror.checked || spec3rd.checked)){
+    const xrCam = renderer.xr.getCamera();
+    let cam = null;
+    if(spec3rd.checked){                          // 3rd person: show the labelled avatar from behind
+      avatar.visible = true;
+      const back = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+      specCam.position.copy(player.position).addScaledVector(back, 3.2); specCam.position.y = 2.3;
+      specCam.lookAt(player.position.x, player.position.y + 1.4, player.position.z);
+      specCam.aspect = innerWidth/innerHeight; specCam.updateProjectionMatrix();
+      cam = specCam;
+    } else {                                      // 1st person: mirror what you actually see
+      mirrorCam.matrixWorld.copy(xrCam.matrixWorld);
+      mirrorCam.matrixWorld.decompose(mirrorCam.position, mirrorCam.quaternion, mirrorCam.scale);
+      if(xrCam.cameras && xrCam.cameras[0]) mirrorCam.projectionMatrix.copy(xrCam.cameras[0].projectionMatrix);
+      cam = mirrorCam;
+    }
     renderer.xr.enabled = false;
     const oldFB = renderer.getRenderTarget();
     renderer.setRenderTarget(null);
-    renderer.render(scene, specCam);
+    renderer.render(scene, cam);
     renderer.setRenderTarget(oldFB);
     renderer.xr.enabled = true;
     avatar.visible = false;
