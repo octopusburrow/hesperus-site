@@ -8,3 +8,6 @@ letter-to-opus.html
 # scratch / dev artifacts (not site content)
 tagline-options.html
 *preview*.png
+
+# private working notes — NEVER publish (naming safety)
+drafts/

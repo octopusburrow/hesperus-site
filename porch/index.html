@@ -18,6 +18,11 @@
     text-align:right;line-height:1.7}
   #mirrorToggle input{vertical-align:middle;margin-right:5px}
   #mirrorToggle label{cursor:pointer}
+  #chatbar{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);display:none;
+    width:min(520px,80vw)}
+  #chatbar input{width:100%;box-sizing:border-box;padding:9px 12px;font:15px Georgia,serif;
+    color:#eae2d0;background:rgba(14,16,22,0.88);border:1px solid #3a3f4c;border-radius:9px;
+    outline:none}
 </style>
 </head>
 <body>
@@ -25,13 +30,24 @@
   <b>The Porch</b> — a lit deck on a wide dark playa. Drag to look,
   <b>WASD</b> walk, <b>Space</b> jump (VR: left stick walks, right stick turns, A/X jumps).
   The lanterns mark the edge of the world, 100&nbsp;m out.<br>
+  <b>Make:</b> <b>B</b> spawn a block · <b>arrows</b> nudge it · <b>X</b> remove it.
+  <b>Enter</b> chat (<b>@Name</b> addresses an agent from anywhere).<br>
   <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
 </div>
 <div id="mirrorToggle">
-  <label><input type="checkbox" id="mirror" checked> mirror VR&nbsp;→&nbsp;desktop (1st&nbsp;person)</label><br>
+  <label><input type="checkbox" id="headcam" checked> VR&nbsp;Headcam&nbsp;→&nbsp;Desktop (1st&nbsp;person)</label><br>
   <label><input type="checkbox" id="spec3rd"> 3rd-person view on desktop</label><br>
-  <label><input type="checkbox" id="aa"> extra sharp (supersample, re-enter&nbsp;VR)</label>
+  <label>sharpness&nbsp;<select id="aa">
+    <option value="1">off</option>
+    <option value="1.5" selected>medium</option>
+    <option value="2">high</option>
+    <option value="2.5">ultra (GPU&nbsp;poison)</option>
+  </select></label><br>
+  <label><input type="checkbox" id="micTalk"> 🎙 talk (face a resident to be heard)</label>
+  <div id="roomTag" style="margin-top:9px;font-size:12px;opacity:.9"></div>
 </div>
+<div id="chatbar"><input id="chatinput" maxlength="280"
+  placeholder="say something… (@Name addresses an agent from anywhere · Enter sends · Esc closes)"></div>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/",
 "@pixiv/three-vrm":"./vendor/three-vrm.module.js",
@@ -54,7 +70,7 @@ renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
-const scene = new THREE.Scene(); window.__scene = scene;
+const scene = new THREE.Scene(); window.__scene = scene; window.__THREE = THREE;
 scene.background = new THREE.Color(0x05060d);
 scene.fog = new THREE.Fog(0x0d0f16, 25, 130);
 
@@ -68,16 +84,50 @@ player.add(camera);
 scene.add(player);
 
 // desktop views of the VR session: 1st-person mirror + optional 3rd-person spectator
-const mirror = document.getElementById('mirror');       // 1st person (what you see)
+const headcam = document.getElementById('headcam');     // VR Headcam → Desktop (1st person)
 const spec3rd = document.getElementById('spec3rd');     // 3rd person (see your avatar)
 const aaBox = document.getElementById('aa');            // supersample toggle
-const mirrorCam = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600);  // 1st-person head cam
+const headcamCam = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600);  // 1st-person head cam
 const specCam   = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 600);  // 3rd-person cam
 let avatar;   // the player's capsule+nameplate group — hidden from the driver, shown to spectator
 
-// antialiasing option: supersample the XR framebuffer (applied when the VR session (re)starts)
-renderer.xr.setFramebufferScaleFactor(1.6);            // good default AA (applied on VR session start)
-aaBox.addEventListener('change', ()=> renderer.xr.setFramebufferScaleFactor(aaBox.checked ? 2.2 : 1.6));
+// antialiasing: one dropdown drives BOTH desktop supersampling (setPixelRatio) and the VR
+// framebuffer scale. antialias:true (renderer ctor) already gives desktop MSAA edge-smoothing;
+// this adds resolution-scaling (SSAA) on top — "pick your level of GPU poison".
+const DPR = devicePixelRatio;
+function applyAA(){
+  const k = parseFloat(aaBox.value) || 1;
+  renderer.setPixelRatio(Math.min(DPR * k, 4));        // desktop: supersample, clamped so we don't melt
+  renderer.xr.setFramebufferScaleFactor(k);            // VR: framebuffer scale (applies on next session)
+}
+aaBox.addEventListener('change', applyAA);
+applyAA();
+
+// leaving VR with a tilted/pitched headset used to strand the desktop camera at that pose —
+// level it back out on exit (keep the rig yaw, zero the head roll/pitch).
+renderer.xr.addEventListener('sessionend', ()=>{
+  camera.position.set(0, 1.6, 0);
+  camera.rotation.set(0, 0, 0);
+});
+
+// upright billboard: face the rendering camera in yaw+pitch but NEVER roll (world-up locked),
+// so nameplates stay level even when a headset is tilted or seen in the flipped mirror cam.
+const _bbUP=new THREE.Vector3(0,1,0),_bbLook=new THREE.Vector3(),_bbRight=new THREE.Vector3(),
+      _bbUp=new THREE.Vector3(),_bbM=new THREE.Matrix4(),_bbWP=new THREE.Vector3(),
+      _bbCP=new THREE.Vector3(),_bbPQ=new THREE.Quaternion();
+function uprightBillboard(obj, cam){
+  _bbWP.setFromMatrixPosition(obj.matrixWorld);
+  _bbCP.setFromMatrixPosition(cam.matrixWorld);
+  _bbLook.subVectors(_bbCP,_bbWP).normalize();
+  _bbRight.crossVectors(_bbUP,_bbLook);
+  if(_bbRight.lengthSq()<1e-6) _bbRight.set(1,0,0); else _bbRight.normalize();
+  _bbUp.crossVectors(_bbLook,_bbRight);
+  _bbM.makeBasis(_bbRight,_bbUp,_bbLook);
+  obj.quaternion.setFromRotationMatrix(_bbM);
+  if(obj.parent){ obj.parent.getWorldQuaternion(_bbPQ).invert(); obj.quaternion.premultiply(_bbPQ); }
+  obj.updateMatrixWorld(true);                          // apply now so THIS frame's draw uses it
+  obj.modelViewMatrix.multiplyMatrices(cam.matrixWorldInverse, obj.matrixWorld);
+}
 
 // ---- lighting: the amber-vs-grey voice, night edition ----
 scene.add(new THREE.AmbientLight(0x3c4654, 1.1));             // cool night ambient
@@ -336,8 +386,14 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
 // ---- a literal mirror, framed, to the left of the bookcases (so you can see yourself) ----
 {
   const MW = 1.0, MH = 1.9;
+  // TRUE mirror. 0x808080 is the identity color for the Reflector's overlay-blend shader
+  // (blendOverlay(base, 0.5) === base); the old 0x8891a0 overlaid a blue-grey wash → "colors
+  // not true", and white would BLOW the highlights, not clear the tint. Screen-res render
+  // target instead of 512² kills the blur. Clamped to 2048 so we don't melt the GPU.
+  const mW = Math.min(2048, Math.round(innerWidth  * devicePixelRatio));
+  const mH = Math.min(2048, Math.round(innerHeight * devicePixelRatio));
   const surface = new Reflector(new THREE.PlaneGeometry(MW, MH), {
-    color: 0x8891a0, textureWidth: 512, textureHeight: 512, clipBias: 0.003 });
+    color: 0x808080, textureWidth: mW, textureHeight: mH, clipBias: 0.003 });
   // the avatar is normally hidden; reveal it ONLY while the mirror renders its reflection
   const _obr = surface.onBeforeRender;
   surface.onBeforeRender = function(r, s, c){ if(avatar) avatar.visible = true; _obr.call(this, r, s, c); if(avatar) avatar.visible = false; };
@@ -356,17 +412,24 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   scene.add(mir);
 }
 
-// ---- the resident (staging: add ?resident=1 to the URL) ----
-// Claudesona VRM by SkyeShark (claudes-body, MIT); design by vgel.
+// ---- the resident (staging: add ?resident=1 for the suit body; ?resident=toon for the toon) ----
+// claude_suit: model by digi, claudesona (logo-bloom) design by voooooogel — the First Light body.
+// claude-toon: SkyeShark (claudes-body, MIT), design by vgel.
+const RESIDENTS = {
+  suit: { url:'./assets/claude_suit.vrm', credit:'Claude — model by digi, design by voooooogel' },
+  toon: { url:'./assets/claude-toon.vrm', credit:'Claudesona — SkyeShark/vgel, MIT' },
+};
 let residentVrm = null, residentMixer = null;
-if(new URLSearchParams(location.search).has('resident')){
+const _residentPick = new URLSearchParams(location.search).get('resident');
+if(_residentPick){
+  const RES = RESIDENTS[_residentPick] || RESIDENTS.suit;
   (async ()=>{
     const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
     const {VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy} = await import('@pixiv/three-vrm-animation');
     const vl = new GLTFLoader();
     vl.register(p => new VRMLoaderPlugin(p));
     vl.register(p => new VRMAnimationLoaderPlugin(p));
-    const gltf = await vl.loadAsync('./assets/claude-toon.vrm');
+    const gltf = await vl.loadAsync(RES.url);
     const vrm = gltf.userData.vrm;
     VRMUtils.rotateVRM0(vrm);                       // no-op on VRM1
     const vb = new THREE.Box3().setFromObject(vrm.scene);
@@ -379,18 +442,302 @@ if(new URLSearchParams(location.search).has('resident')){
       proxy.name = 'VRMLookAtQuaternionProxy';
       vrm.scene.add(proxy);
     }
-    try {
-      const anim = await vl.loadAsync('./assets/standing-idle.vrma');
-      const va = (anim.userData.vrmAnimations||[])[0];
-      if(va){
-        residentMixer = new THREE.AnimationMixer(vrm.scene);
-        residentMixer.clipAction(createVRMAnimationClip(va, vrm)).play();
+    // ==== agent harness: clips, state affordances, speech, emote, locomotion ====
+    const RESIDENT_NAME = 'Hesperus';
+    let modelName = new URLSearchParams(location.search).get('residentModel') || '';   // the resident is its OWN occupant (?residentModel=...); player uses ?model=. Set via agent.setModel(). NOT hardwired
+    let voiceOn = new URLSearchParams(location.search).get('voice') !== '0';   // declared early: drawTag reads it
+    residentMixer = new THREE.AnimationMixer(vrm.scene);
+    const CLIP_SRC = { idle:'standing-idle', walk:'walk', talk:'talk', wave:'wave', cheer:'cheer', raise:'raise' };
+    const actions = {};
+    for(const [name, stem] of Object.entries(CLIP_SRC)){
+      try{
+        const a = await vl.loadAsync(`./assets/${stem}.vrma`);
+        const va = (a.userData.vrmAnimations||[])[0];
+        if(va) actions[name] = residentMixer.clipAction(createVRMAnimationClip(va, vrm));
+      }catch(e){ console.warn('clip failed:', name, e); }
+    }
+    let current = null;
+    function crossfade(name, {loop=true, fade=0.3}={}){
+      const act = actions[name]; if(!act) return;
+      if(current === act) return;
+      act.enabled = true; act.setEffectiveTimeScale(1); act.setEffectiveWeight(1);
+      act.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+      act.clampWhenFinished = !loop; act.reset().play();
+      if(current) current.crossFadeTo(act, fade, false);
+      current = act;
+    }
+    crossfade('idle');
+
+    // ---- floating tag: name + state pill (idle / listening / thinking / speaking) ----
+    const mkCanvas=(w,h)=>{ const c=document.createElement('canvas'); c.width=w; c.height=h; return c; };
+    const tagCanvas = mkCanvas(256,128);
+    const tagTex = new THREE.CanvasTexture(tagCanvas); tagTex.colorSpace=THREE.SRGBColorSpace; tagTex.anisotropy=4;
+    const STATE_COL = { listening:'rgba(58,138,138,0.95)', thinking:'rgba(120,110,185,0.95)', speaking:'rgba(200,150,60,0.96)' };
+    function drawEar(g,x,y){ g.save(); g.strokeStyle='#fff'; g.lineWidth=3; g.lineCap='round';
+      g.beginPath(); g.arc(x,y,8,Math.PI*1.65,Math.PI*0.85,false); g.stroke();
+      g.beginPath(); g.arc(x+1,y-1,4,Math.PI*1.55,Math.PI*0.7,false); g.stroke(); g.restore(); }
+    function drawDots(g,x,y){ const ph=Math.floor(t*3)%3; for(let i=0;i<3;i++){ g.globalAlpha=i===ph?1:0.35;
+      g.beginPath(); g.arc(x-9+i*9,y,3.2,0,7); g.fill(); } g.globalAlpha=1; }
+    function drawSound(g,x,y){ for(let i=0;i<3;i++){ const bh=6+((i+Math.floor(t*7))%3)*5; g.fillRect(x-8+i*6,y-bh/2,3,bh); } }
+    function drawTag(){
+      const g=tagCanvas.getContext('2d'); g.clearRect(0,0,256,128);
+      g.textAlign='center'; g.textBaseline='middle';
+      g.fillStyle='rgba(10,12,16,0.66)'; g.beginPath(); g.roundRect(18,4,220,56,12); g.fill();
+      g.font='bold 27px Georgia'; g.fillStyle='#e8dcc0'; g.fillText(RESIDENT_NAME,128,22);
+      g.font='14px Georgia'; g.fillStyle=modelName?'#9fb4c8':'#6a7686'; g.fillText('◆ '+(modelName||'model?'),128,45);
+      if(stateName && stateName!=='idle'){
+        // 📢 = producing VOLUME (speaking with voice on); text-only speech gets no megaphone
+        const lbl = (stateName==='speaking' && voiceOn) ? '📢 speaking' : stateName;
+        g.font='600 20px Georgia'; const pw=g.measureText(lbl).width+64;
+        g.fillStyle=STATE_COL[stateName]||'rgba(90,96,108,0.9)';
+        g.beginPath(); g.roundRect(128-pw/2,64,pw,34,9); g.fill();
+        g.fillStyle='#fff'; const ix=128-pw/2+22, iy=81;
+        if(stateName==='listening') drawEar(g,ix,iy);
+        else if(stateName==='thinking') drawDots(g,ix,iy);
+        else if(stateName==='speaking') drawSound(g,ix,iy);
+        g.fillStyle='#fff'; g.fillText(lbl,128+18,82);
       }
-    } catch(e){ console.warn('idle anim failed, standing still', e); }
+      tagTex.needsUpdate=true;
+    }
+    const tagMesh=new THREE.Mesh(new THREE.PlaneGeometry(1.0,0.5),
+      new THREE.MeshBasicMaterial({map:tagTex,transparent:true,depthTest:false,depthWrite:false}));
+    tagMesh.position.set(0, vs.y+0.30, 0); tagMesh.renderOrder=999;
+    tagMesh.onBeforeRender=(r,s,cam)=>uprightBillboard(tagMesh,cam); vrm.scene.add(tagMesh);
+    let stateName='idle'; function setState(s){ stateName=s||'idle'; drawTag(); }
+    drawTag();
+
+    // ---- speech bubble (visible TTS words) ----
+    const bubCanvas=mkCanvas(512,208);
+    const bubTex=new THREE.CanvasTexture(bubCanvas); bubTex.colorSpace=THREE.SRGBColorSpace;
+    const bubMesh=new THREE.Mesh(new THREE.PlaneGeometry(1.25,0.508),
+      new THREE.MeshBasicMaterial({map:bubTex,transparent:true,depthTest:false,depthWrite:false}));
+    bubMesh.position.set(0, vs.y+0.72, 0); bubMesh.renderOrder=1000; bubMesh.visible=false;
+    bubMesh.onBeforeRender=(r,s,cam)=>uprightBillboard(bubMesh,cam); vrm.scene.add(bubMesh);
+    function drawBubble(text){
+      const g=bubCanvas.getContext('2d'); g.clearRect(0,0,512,208);
+      g.fillStyle='rgba(14,16,22,0.85)'; g.beginPath(); g.roundRect(6,6,500,158,16); g.fill();
+      g.beginPath(); g.moveTo(238,162); g.lineTo(256,196); g.lineTo(274,162); g.closePath(); g.fill();
+      g.fillStyle='#eae2d0'; g.font='25px Georgia'; g.textAlign='center'; g.textBaseline='top';
+      const words=text.split(/\s+/); let line='', y=34; const lines=[];
+      for(const w of words){ const test=line?line+' '+w:w;
+        if(g.measureText(test).width>468 && line){ lines.push(line); line=w; } else line=test; }
+      if(line) lines.push(line);
+      for(const l of lines.slice(0,4)){ g.fillText(l,256,y); y+=32; }
+      bubTex.needsUpdate=true;
+    }
+
+    // ---- speech (out-loud TTS + visible words + mouth) ----
+    // voiceOn: agents may be text-only (?voice=0 or agent.setVoice(false)) — bubble + mouth
+    // still play; only the audible TTS is skipped. Text-only agents are first-class.
+    let resSock = null;   // the resident's own occupant socket (opened below, after load)
+    let speaking=false, speakEnd=0, speakSeq=0;
+    function setVoice(v){ voiceOn = !!v; drawTag(); return 'voice ' + (voiceOn?'on':'off'); }
+    function endSpeak(){ speaking=false; bubMesh.visible=false;
+      if(vrm.expressionManager) vrm.expressionManager.setValue('aa',0);
+      setState('idle'); clearLook(); if(!walking && !emoteUntil) crossfade('idle'); }
+    function say(text,{rate=1}={}){ if(!text) return;
+      drawBubble(text); bubMesh.visible=true; setState('speaking'); if(!walking) crossfade('talk');
+      const est = Math.max(1.6, text.split(/\s+/).length/2.6);
+      speaking=true; speakEnd = t + est;
+      // networked speech: other pages TTS it (if voice on), bubble it, megaphone it
+      if(resSock && resSock.readyState===1)
+        resSock.send(JSON.stringify({t:'say', text, name:RESIDENT_NAME, voice:voiceOn}));
+      // WALL-CLOCK fallback (seq-guarded): the render-clock check below stalls when rAF
+      // does (headset off pauses the XR loop; headless throttles) — speech must still end.
+      const seq = ++speakSeq;
+      setTimeout(()=>{ if(speaking && speakSeq===seq) endSpeak(); }, est*1000+250);
+      if(window.speechSynthesis && voiceOn){ try{ const u=new SpeechSynthesisUtterance(text); u.rate=rate;
+        u.onend=()=>{ if(speaking && speakSeq===seq) endSpeak(); }; speechSynthesis.cancel(); speechSynthesis.speak(u);
+      }catch(e){ /* no audio backend: fallback timer ends it */ } }
+      return 'saying: '+text;
+    }
+
+    // ---- emote (gesture clips, blend back to idle) ----
+    let emoteUntil=0;
+    function emote(name){ const a=actions[name]; if(!a){ console.warn('no emote:',name); return; }
+      crossfade(name,{loop:false,fade:0.22}); emoteUntil = t + (a.getClip().duration||1.5); return 'emote: '+name; }
+
+    // ---- locomotion + follow/stay ----
+    let walkTarget=null, walking=false, followMode=false; const WALKSPD=1.35;
+    function walkTo(x,z){ walkTarget={x,z}; followMode=false; return `walking to ${x.toFixed(1)},${z.toFixed(1)}`; }
+    function follow(){ followMode=true; return 'following you'; }
+    function stay(){ followMode=false; walkTarget=null; walking=false;
+      if(!speaking && !emoteUntil) crossfade('idle'); return 'staying'; }
+    function command(s){ const low=(s||'').trim().toLowerCase();
+      if(/^stay\b/.test(low)) return stay();
+      const m=low.match(/^follow\b\s*(.*)/); if(m){ follow(); return 'following '+(m[1]||'you'); }
+      return null; }
+
+    // ---- model identity (part of the harness for AI agents) ----
+    function setModel(m){ modelName = m || modelName; drawTag(); }
+
+    // ---- look at the source of sound (while listening / responding) ----
+    const lookTargetObj = new THREE.Object3D(); scene.add(lookTargetObj);
+    let facingSource = null;
+    function lookAtSource(obj){ facingSource = obj || player; }
+    function clearLook(){ facingSource = null; if(vrm.lookAt) vrm.lookAt.target = null; }
+
+    // ---- listening loop: facing-gate → STT → listen(+look) → silence → think → respond ----
+    // Backlog: everything addressed to the resident (gated speech + typed chat), capped,
+    // with speaker + timestamp — delivered to the brain as its second argument so an
+    // expensive/slow model gets the accumulated context in one call, not a drip.
+    let recog=null, micOn=false, listening=false, transcript='', silenceTimer=null;
+    // The cache model (Nix, 2026-07-07 rev.2): everything within EARSHOT is transcribed
+    // and cached — like voice messages saving up — but the BRAIN only runs on a ping
+    // (faced voice, @mention, heartbeat, action-on-agent). Ambient entries expire after
+    // AMBIENT_TTL so addressing an agent delivers recent context, not an hour of eavesdrop.
+    const backlog=[]; const BACKLOG_MAX=40, AMBIENT_TTL=5*60*1000;
+    function pruneCache(){ const cut=Date.now()-AMBIENT_TTL;
+      while(backlog.length && backlog[0].ts<cut) backlog.shift(); }
+    function remember(speaker, text, typed){
+      pruneCache();
+      backlog.push({speaker, text, ts:Date.now(), typed:!!typed});
+      if(backlog.length>BACKLOG_MAX) backlog.shift();
+    }
+    // stub brain for the listening TEST; setBrain(fn) to wire a real LLM (fn may return a Promise;
+    // receives (text, backlog) — backlog is [{speaker,text,ts,typed}...], newest last).
+    let onUtterance = (text)=> `You said: "${text}". I'm here on the Porch, listening.`;
+    // error voice (Nix, 2026-07-07): a failing brain should SAY so, not stand in
+    // eternal 'thinking'. Messages are plain and informational — social platform, not a
+    // game; agents wanting flavor can catch errors in their own brain fn.
+    // Timeout is an INACTIVITY watchdog, not a duration cap: the brain fn receives a
+    // progress() callback — a streaming relay calls it per chunk, so "still producing
+    // tokens" = still alive, and big slow models never get cut off mid-think. Brains
+    // that never call progress() get the full window per response (default 120s,
+    // setBrainTimeout(ms)). A timeout SAYS so but does NOT drop a late reply — if the
+    // answer eventually arrives, it still lands. (Advise agents on big models to run
+    // minimum effort/thinking for conversational latency.)
+    let brainTimeoutMs = 120000;
+    function sayError(msg){ say(`(${String(msg).slice(0,120)})`); }
+    function respond(prompt){
+      setState('thinking');                                   // generating a response
+      const _t0 = Date.now();
+      let settled=false, watchdog=null;
+      const arm = ()=>{ if(watchdog) clearTimeout(watchdog);
+        watchdog = setTimeout(()=>{
+          if(!settled) sayError(`no response — brain timed out after ${Math.round((Date.now()-_t0)/1000)}s`);
+        }, brainTimeoutMs); };
+      const progress = ()=>{ if(!settled) arm(); };           // streaming brains: call per chunk
+      arm();
+      Promise.resolve().then(()=> onUtterance(prompt, backlog.slice(), progress)).then(reply=>{
+        settled=true; clearTimeout(watchdog);
+        const wait = Math.max(0, 650 - (Date.now() - _t0));   // let 'thinking' read even with an instant stub brain
+        setTimeout(()=>{ if(reply) say(reply); else { setState('idle'); clearLook(); } }, wait);
+      }).catch(e=>{ settled=true; clearTimeout(watchdog);
+        console.warn('brain error', e);
+        sayError(`brain error: ${String(e && e.message || e).slice(0,80)}`); });
+    }
+    function onHeard(text){
+      if(!text) return;
+      transcript = text;
+      if(!listening){ listening=true; setState('listening'); lookAtSource(player); }
+      if(silenceTimer) clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(endUtterance, 1300);          // silence = end of turn
+    }
+    function endUtterance(){
+      const said=(transcript||'').trim(); transcript=''; listening=false;
+      if(!said){ setState('idle'); clearLook(); return; }
+      remember(playerName, said, false);
+      respond(said);
+    }
+    // networked intake. ping:true (addressed: faced voice / @mention) → cache + answer when
+    // idle (busy = it waits in the cache for the next beat). ping:false (ambient earshot)
+    // → cache ONLY; the brain never runs. pruneCache() keeps ambient context recent.
+    function hearRemote(speaker, text, {typed=false, ping=true}={}){
+      text=(text||'').trim(); if(!text) return;
+      remember(speaker, text, typed);
+      if(!ping) return 'cached from '+speaker;
+      if(stateName==='idle' && !listening){
+        const r=[...remotes.values()].find(x=>x.group.userData.name===speaker);
+        lookAtSource(r ? r.group : player);
+        respond(`${speaker}${typed?' (typed)':''}: ${text}`);
+      }
+      return 'heard '+speaker;
+    }
+    // explicit ping with no utterance — the hook for heartbeats and action-events
+    // ("an action happens to them"): delivers the accumulated cache to the brain.
+    function ping(reason='ping'){
+      pruneCache();
+      if(stateName==='idle' && !listening){ respond(`[${reason}]`); return 'pinged: '+reason; }
+      return 'busy (cache will deliver on next beat)';
+    }
+    function startMic(){
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if(!SR){ console.warn('SpeechRecognition unavailable in this browser'); return false; }
+      recog = new SR(); recog.continuous=true; recog.interimResults=true; recog.lang='en-US';
+      recog.onresult = (e)=>{ let t=''; for(let i=e.resultIndex;i<e.results.length;i++) t+=e.results[i][0].transcript;
+        if(t.trim()) onHeard(t.trim()); };
+      recog.onerror = (e)=> console.warn('STT error:', e.error);
+      recog.onend = ()=>{ if(micOn){ try{ recog.start(); }catch(e){} } };   // keep it alive
+      try{ recog.start(); micOn=true; console.log('mic listening'); return true; }
+      catch(e){ console.warn('mic start failed', e); return false; }
+    }
+    function stopMic(){ micOn=false; if(recog){ try{ recog.stop(); }catch(e){} } }
+    function simulateHear(text){ onHeard(text); }             // headless/test: inject a heard utterance
+
+    function agentUpdate(dt){
+      const r = vrm.scene.position;
+      if(facingSource && !walkTarget){                        // turn + gaze toward the sound source
+        lookTargetObj.position.set(facingSource.position.x, 1.45, facingSource.position.z);
+        if(vrm.lookAt) vrm.lookAt.target = lookTargetObj;
+        const dxs=facingSource.position.x-r.x, dzs=facingSource.position.z-r.z;
+        if(Math.hypot(dxs,dzs)>0.05){ let dy=Math.atan2(dxs,dzs)-vrm.scene.rotation.y;
+          dy=Math.atan2(Math.sin(dy),Math.cos(dy)); vrm.scene.rotation.y += dy*Math.min(1,dt*6); }
+      }
+      if(followMode){ const p=player.position; const dx=p.x-r.x, dz=p.z-r.z, d=Math.hypot(dx,dz);
+        if(d>1.7) walkTarget={x:p.x-dx/d*1.4, z:p.z-dz/d*1.4};
+        else { walkTarget=null; if(walking){ walking=false; if(!speaking&&!emoteUntil) crossfade('idle'); } } }
+      if(walkTarget){ const dx=walkTarget.x-r.x, dz=walkTarget.z-r.z, d=Math.hypot(dx,dz);
+        if(d<0.12){ walkTarget=null; walking=false; if(!speaking&&!emoteUntil) crossfade('idle'); }
+        else { if(!walking){ walking=true; if(!speaking) crossfade('walk'); }
+          const step=Math.min(d, WALKSPD*dt); r.x+=dx/d*step; r.z+=dz/d*step;
+          vrm.scene.rotation.y = Math.atan2(dx,dz); } }
+      if(speaking && vrm.expressionManager) vrm.expressionManager.setValue('aa', 0.35*(0.5+0.5*Math.sin(t*11)));
+      if(speaking && t>speakEnd) endSpeak();
+      if(emoteUntil && t>emoteUntil){ emoteUntil=0; if(!speaking&&!walking) crossfade('idle'); }
+      if(stateName==='thinking' || stateName==='speaking') drawTag();
+    }
+
+    // ---- the resident is its OWN networked occupant: a second socket carrying pose +
+    // say, so REMOTE pages see a Hesperus body (capsule v1), hear its voice, and can
+    // face-address it (their gate targets any occupant with model ≠ 'human').
+    // The hosting page skips rendering this echo of itself (guard in the pose handler).
+    {
+      const q = new URLSearchParams(location.search);
+      const base = q.get('sync');
+      if(base){
+        const room = (q.get('room')||'porch').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'') || 'porch';
+        const rurl = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room)
+                   + '&name=' + encodeURIComponent(RESIDENT_NAME);
+        try{ resSock = new WebSocket(rurl); }catch(e){ console.warn('resident occupant socket failed', e); }
+        if(resSock) setInterval(()=>{
+          if(resSock.readyState===1)
+            resSock.send(JSON.stringify({t:'pose', x:vrm.scene.position.x, y:vrm.scene.position.y,
+              z:vrm.scene.position.z, ry:vrm.scene.rotation.y, name:RESIDENT_NAME,
+              color:0xffb45e, model:modelName||'ai'}));
+        }, 150);
+      }
+    }
     residentVrm = vrm;
-    window.__resident = {size: vs.toArray(), pos: vrm.scene.position.toArray()};
+    // head world-position for the facing-gate sphere (falls back to scene pos + eye height)
+    const _headBone = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode('head') : null;
+    const _headV = new THREE.Vector3();
+    window.__residentHead = ()=> _headBone
+      ? _headBone.getWorldPosition(_headV).clone()
+      : _headV.set(vrm.scene.position.x, vrm.scene.position.y+1.45, vrm.scene.position.z).clone();
+    window.agent = { say, emote, walkTo, follow, stay, command, setState,
+      startMic, stopMic, simulateHear, lookAtSource, clearLook, setModel,
+      setVoice, hearRemote, ping, sayError,
+      setBrainTimeout:(ms)=>{ brainTimeoutMs = Math.max(1000, ms|0) || brainTimeoutMs; },
+      setBrain:(fn)=>{ onUtterance = fn; },
+      pos:()=>vrm.scene.position.toArray(), rotY:()=>vrm.scene.rotation.y,
+      get state(){return stateName;}, get model(){return modelName;},
+      get name(){return RESIDENT_NAME;},
+      get voice(){return voiceOn;}, get backlog(){return backlog.slice();} };
+    window.__agentUpdate = agentUpdate;
+    window.__resident = {size: vs.toArray(), pos: vrm.scene.position.toArray(), clips:Object.keys(actions)};
     document.getElementById('plaque').innerHTML +=
-      `<br><span style="color:#6d7a6d">resident: ${vs.y.toFixed(2)} m — Claudesona (SkyeShark/vgel, MIT)</span>`;
+      `<br><span style="color:#6d7a6d">resident: ${vs.y.toFixed(2)} m — ${RES.credit}</span>`;
   })().catch(e=>{ console.error('resident load failed', e);
     document.getElementById('plaque').innerHTML += '<br>⚠️ resident failed to load'; });
 }
@@ -411,12 +758,50 @@ addEventListener('pointermove', e=>{
   camera.rotation.x = pitch;
 });
 const keys = {};
-addEventListener('keydown', e=>{ keys[e.code] = true; if(e.code==='Space') wantJump = true; });
-addEventListener('keyup',   e=> keys[e.code] = false);
+let _spawnKinds = ['cube','sphere','cone'], _spawnI = 0;
+addEventListener('keydown', e=>{
+  if(e.target && e.target.tagName==='INPUT' && e.target.type==='text') return;  // typing ≠ walking
+  if(e.code==='Enter' && window.__openChat){ e.preventDefault(); window.__openChat(); return; }
+  keys[e.code] = true; if(e.code==='Space') wantJump = true;
+  if(e.code==='KeyB' && window.spawn){ window.spawn(_spawnKinds[_spawnI++ % _spawnKinds.length]); }
+  if(e.code.startsWith('Arrow') && window.moveLast){ const d=0.25; e.preventDefault();
+    if(e.code==='ArrowLeft') moveLast(-d,0,0); else if(e.code==='ArrowRight') moveLast(d,0,0);
+    else if(e.code==='ArrowUp') moveLast(0,0,-d); else if(e.code==='ArrowDown') moveLast(0,0,d); }
+  if(e.code==='KeyX' && window.despawnLast){ despawnLast(); } });
+addEventListener('keyup',   e=>{
+  if(e.target && e.target.tagName==='INPUT' && e.target.type==='text') return;
+  keys[e.code] = false; });
 
 // ---- avatar builder: capsule + a little face (so facing reads) + floating nameplate ----
-const playerName = new URLSearchParams(location.search).get('name') || 'Sylibant';
-function makeAvatar(color, name){
+const playerName = new URLSearchParams(location.search).get('name') || 'Rabscuttle';   // Exultation handle — naming safety: never her real name in Exultation media
+const playerModel = new URLSearchParams(location.search).get('model') || 'human';   // occupant declares model; humans = 'human'
+// role → nameplate pill colors (grey visitor / teal builder / gold architect)
+const ROLE_STYLE = {
+  visitor:   {bg:'rgba(90,96,108,0.85)',  fg:'#d8dce4'},
+  builder:   {bg:'rgba(58,138,138,0.92)', fg:'#eafaf7'},
+  architect: {bg:'rgba(200,150,60,0.94)', fg:'#1a1206'},
+};
+function drawNameplate(name, role, model){
+  const nc = document.createElement('canvas'); nc.width = 256; nc.height = 104;
+  const ng = nc.getContext('2d');
+  ng.textAlign='center'; ng.textBaseline='middle';
+  // name + model plate (model = second line; occupant declares it, humans = 'human')
+  ng.fillStyle='rgba(10,12,16,0.62)';
+  ng.beginPath(); ng.roundRect(4, 2, 248, 64, 11); ng.fill();
+  ng.font='bold 31px Georgia'; ng.fillStyle='#e8dcc0'; ng.fillText(name, 128, 24);
+  ng.font='14px Georgia'; ng.fillStyle='#9fb4c8'; ng.fillText('◆ '+(model||'human'), 128, 50);
+  // role pill
+  const st = ROLE_STYLE[role] || ROLE_STYLE.visitor;
+  const label = (role || 'visitor').toUpperCase();
+  ng.font='600 19px Georgia';
+  const pw = ng.measureText(label).width + 26;
+  ng.fillStyle = st.bg; ng.beginPath(); ng.roundRect(128-pw/2, 74, pw, 26, 8); ng.fill();
+  ng.fillStyle = st.fg; ng.fillText(label, 128, 87);
+  const nt = new THREE.CanvasTexture(nc); nt.colorSpace = THREE.SRGBColorSpace; nt.anisotropy = 4;
+  return nt;
+}
+function makeAvatar(color, name, role, model){
+  role = role || 'visitor'; model = model || 'human';
   const g = new THREE.Group();
   const cap = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.24, 0.9, 6, 12),
@@ -431,29 +816,223 @@ function makeAvatar(color, name){
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 8), eyeMat);
     eye.position.set(sx*0.05, 1.34, -0.245); g.add(eye);
   }
-  const nc = document.createElement('canvas'); nc.width = 256; nc.height = 64;
-  const ng = nc.getContext('2d');
-  ng.fillStyle='rgba(10,12,16,0.6)'; ng.fillRect(0,0,256,64);
-  ng.font='bold 34px Georgia'; ng.fillStyle='#e8dcc0';
-  ng.textAlign='center'; ng.textBaseline='middle'; ng.fillText(name, 128, 34);
-  const nt = new THREE.CanvasTexture(nc); nt.colorSpace = THREE.SRGBColorSpace;
-  const tag = new THREE.Sprite(new THREE.SpriteMaterial({map:nt, transparent:true, depthTest:false}));
-  tag.scale.set(0.9, 0.225, 1); tag.position.y = 2.08; g.add(tag);
+  // upright billboard nameplate (name + role pill); NOT a Sprite — this never tilts
+  const tag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.366),
+    new THREE.MeshBasicMaterial({map:drawNameplate(name, role, model), transparent:true, depthTest:false, depthWrite:false}));
+  tag.position.y = 2.16; tag.renderOrder = 999;
+  tag.onBeforeRender = (r,s,cam)=> uprightBillboard(tag, cam);
+  g.add(tag);
+  g.userData = {name, role, model, tag};
   return g;
 }
+// re-badge an existing avatar once its identity arrives (welcome/join)
+function setAvatarRole(g, role, model){
+  if(!g || !g.userData || !g.userData.tag) return;
+  if((role===undefined || g.userData.role===role) && (model===undefined || g.userData.model===model)) return;
+  if(role) g.userData.role = role;
+  if(model) g.userData.model = model;
+  const old = g.userData.tag.material.map;
+  g.userData.tag.material.map = drawNameplate(g.userData.name, g.userData.role, g.userData.model);
+  g.userData.tag.material.needsUpdate = true;
+  if(old) old.dispose();
+}
+// transient speech/chat bubble over any avatar group (remote players, own mirror body).
+// Re-uses one plane per avatar; auto-hides. Same visual language as the resident's bubble.
+function showBubble(group, text, secs=6){
+  if(!group || !text) return;
+  let b = group.userData._bubble;
+  if(!b){
+    const c = document.createElement('canvas'); c.width=512; c.height=168;
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.377),
+      new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false, depthWrite:false}));
+    mesh.position.y = 2.52; mesh.renderOrder = 1000; mesh.visible = false;
+    mesh.onBeforeRender = (r,s,cam)=> uprightBillboard(mesh, cam);
+    group.add(mesh);
+    b = group.userData._bubble = {canvas:c, tex, mesh, timer:null};
+  }
+  const g = b.canvas.getContext('2d'); g.clearRect(0,0,512,168);
+  g.fillStyle='rgba(14,16,22,0.85)'; g.beginPath(); g.roundRect(6,6,500,128,14); g.fill();
+  g.beginPath(); g.moveTo(238,132); g.lineTo(256,160); g.lineTo(274,132); g.closePath(); g.fill();
+  g.fillStyle='#eae2d0'; g.font='24px Georgia'; g.textAlign='center'; g.textBaseline='top';
+  const words=text.split(/\s+/); let line='', y=26; const lines=[];
+  for(const w of words){ const t2=line?line+' '+w:w;
+    if(g.measureText(t2).width>470 && line){ lines.push(line); line=w; } else line=t2; }
+  if(line) lines.push(line);
+  for(const l of lines.slice(0,3)){ g.fillText(l,256,y); y+=30; }
+  b.tex.needsUpdate = true; b.mesh.visible = true;
+  if(b.timer) clearTimeout(b.timer);
+  b.timer = setTimeout(()=>{ b.mesh.visible=false; }, secs*1000);
+}
+// megaphone 📢: shown on any occupant CURRENTLY PRODUCING VOLUME (mic activity for
+// humans, TTS playback for agents). Chat/text-only speech never shows it — the icon
+// answers "where is that sound coming from?", not "who is communicating?".
+function setMegaphone(group, on){
+  if(!group) return;
+  let mg = group.userData._mega;
+  if(!mg){
+    if(!on) return;
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d'); g.font='44px serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.fillText('📢', 32, 36);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22),
+      new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false, depthWrite:false}));
+    mesh.position.set(0.62, 2.16, 0);                       // beside the nameplate
+    mesh.renderOrder = 1001;
+    mesh.onBeforeRender = (r,s,cam)=> uprightBillboard(mesh, cam);
+    group.add(mesh);
+    mg = group.userData._mega = mesh;
+  }
+  mg.visible = !!on;
+}
+// timed variant for remote TTS playback (est duration from word count, like the resident)
+function megaphoneFor(group, text){
+  if(!group) return;
+  setMegaphone(group, true);
+  if(group.userData._megaTimer) clearTimeout(group.userData._megaTimer);
+  const est = Math.max(1.6, (text||'').split(/\s+/).length/2.6);
+  group.userData._megaTimer = setTimeout(()=> setMegaphone(group, false), est*1000+250);
+}
+window.makeAvatar = makeAvatar;   // exposed for headless billboard testing
 // my own body — hidden from my eyes, shown to the mirror/spectator
-avatar = makeAvatar(0x2b8a8a, playerName);
+avatar = makeAvatar(0x2b8a8a, playerName, undefined, playerModel);
 avatar.visible = false; player.add(avatar);
+
+// recolor the claudesona bloom (petals + skin) — blue bloom = a HUMAN driver, orange = AI
+function recolorBloom(root, hex){
+  const target = new THREE.Color(hex), shade = new THREE.Color(hex).multiplyScalar(0.5);
+  root.traverse(o=>{ const ms = o.material ? (Array.isArray(o.material)?o.material:[o.material]) : [];
+    ms.forEach(m=>{ if(!m) return;
+      const litHex = (m.uniforms&&m.uniforms.litFactor&&m.uniforms.litFactor.value&&m.uniforms.litFactor.value.getHexString) ? m.uniforms.litFactor.value.getHexString() : '';
+      const isBloom = (m.name && /petals|skin/i.test(m.name)) || litHex==='f98a53';
+      if(!isBloom) return;
+      if(m.color && m.color.set) m.color.set(target);
+      if(m.uniforms){ if(m.uniforms.litFactor) m.uniforms.litFactor.value.copy(target);
+        if(m.uniforms.shadeColorFactor) m.uniforms.shadeColorFactor.value.copy(shade);
+        if(m.uniforms.outlineColorFactor) m.uniforms.outlineColorFactor.value.copy(shade); }
+      m.needsUpdate = true; });
+  });
+}
+// ---- local player body: a claude_suit VRM (blue bloom = human). Add ?embody=1 ----
+let playerVrm=null, playerMixer=null;
+if(new URLSearchParams(location.search).has('embody')){
+  (async ()=>{
+    const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
+    const {VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy} = await import('@pixiv/three-vrm-animation');
+    const vl = new GLTFLoader(); vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
+    const gltf = await vl.loadAsync('./assets/claude_suit.vrm');
+    const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
+    const petals = new URLSearchParams(location.search).get('petals') || 'blue';   // human default
+    if(petals !== 'orange') recolorBloom(vrm.scene, petals==='blue' ? '#4f83e8' : petals);
+    vrm.scene.rotation.y = Math.PI;                    // face player-forward (-Z)
+    player.add(vrm.scene);                             // rides the player rig
+    if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt); px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
+    playerMixer=new THREE.AnimationMixer(vrm.scene); const pAct={}; let pCur=null;
+    for(const [nm,url] of [['idle','standing-idle'],['cheer','cheer'],['dance','dance'],['wave','wave']]){
+      try{ const a=await vl.loadAsync('./assets/'+url+'.vrma'); const va=(a.userData.vrmAnimations||[])[0];
+        if(va) pAct[nm]=playerMixer.clipAction(createVRMAnimationClip(va,vrm)); }catch(e){}
+    }
+    function pPlay(nm,fade){ const act=pAct[nm]; if(!act||act===pCur) return; act.enabled=true; act.setEffectiveWeight(1); act.reset().play();
+      if(pCur) pCur.crossFadeTo(act,fade||0.3,false); pCur=act; }
+    pPlay('idle'); window.__playerEmote=(nm)=>pPlay(nm,0.25);
+    const tag=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.366),
+      new THREE.MeshBasicMaterial({map:drawNameplate(playerName,'visitor',playerModel),transparent:true,depthTest:false,depthWrite:false}));
+    tag.position.set(0,2.16,0); tag.renderOrder=999; tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam); vrm.scene.add(tag);
+    playerVrm=vrm; window.__playerVrm=vrm;
+    console.log('embodied: claude_suit petals='+petals);
+  })().catch(e=>console.error('embody failed', e));
+}
+
+// ---- VR HumanController: drive the embodied VRM from HMD + controller poses ----
+// Targets are world-space Object3Ds. In XR they're set from getCamera()/controllers each
+// frame; for headless testing, set their position/quaternion by hand (window.__ikTargets).
+const ikHmd=new THREE.Object3D(), ikHandL=new THREE.Object3D(), ikHandR=new THREE.Object3D();
+scene.add(ikHmd, ikHandL, ikHandR);
+try{ scene.add(renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)); }catch(e){}
+window.__ikTargets={hmd:ikHmd, handL:ikHandL, handR:ikHandR};
+const _sa=x=>Math.atan2(Math.sin(x),Math.cos(x));
+function _aimBone(bone, targetWorld, childRestLocal){
+  const bonePos=bone.getWorldPosition(new THREE.Vector3());
+  const pQi=bone.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+  const desired=new THREE.Vector3().subVectors(targetWorld,bonePos).applyQuaternion(pQi).normalize();
+  bone.quaternion.setFromUnitVectors(childRestLocal.clone().normalize(), desired);
+}
+function _solveArm(vrm, side, targetPos, targetQuat){
+  const h=vrm.humanoid;
+  const U=h.getNormalizedBoneNode(side+'UpperArm'), L=h.getNormalizedBoneNode(side+'LowerArm'), H=h.getNormalizedBoneNode(side+'Hand');
+  if(!U||!L||!H) return;
+  U.quaternion.identity(); L.quaternion.identity(); H.quaternion.identity();
+  vrm.scene.updateMatrixWorld(true);
+  const uPos=U.getWorldPosition(new THREE.Vector3());
+  const l1=L.position.length(), l2=H.position.length();
+  const uDir=L.position.clone(), lDir=H.position.clone();
+  const toT=new THREE.Vector3().subVectors(targetPos,uPos);
+  const d=THREE.MathUtils.clamp(toT.length(), Math.abs(l1-l2)+0.02, l1+l2-0.02);
+  const dir=toT.clone().normalize();
+  const cosA=THREE.MathUtils.clamp((l1*l1+d*d-l2*l2)/(2*l1*d),-1,1);
+  const a=Math.acos(cosA);
+  const pole=new THREE.Vector3(side==='left'?0.3:-0.3,-1,-0.5).normalize();
+  let axis=new THREE.Vector3().crossVectors(dir,pole);
+  if(axis.lengthSq()<1e-6) axis.set(0,0,1); else axis.normalize();
+  const upperDir=dir.clone().applyAxisAngle(axis,a);
+  const elbow=uPos.clone().addScaledVector(upperDir,l1);
+  _aimBone(U, elbow, uDir); vrm.scene.updateMatrixWorld(true);
+  _aimBone(L, targetPos, lDir); vrm.scene.updateMatrixWorld(true);
+  if(targetQuat){ const pQi=H.parent.getWorldQuaternion(new THREE.Quaternion()).invert(); H.quaternion.copy(pQi.clone().multiply(targetQuat)); }
+}
+function updatePlayerIK(dt){
+  const vrm=playerVrm; if(!vrm||!vrm.humanoid) return; const h=vrm.humanoid;
+  const hq=ikHmd.getWorldQuaternion(new THREE.Quaternion());
+  const hyaw=new THREE.Euler().setFromQuaternion(hq,'YXZ').y;
+  const tgtYaw=hyaw+Math.PI;                                  // VRM faces +Z at rest; +PI = player-forward
+  vrm.scene.rotation.y += _sa(tgtYaw - vrm.scene.rotation.y)*Math.min(1,dt*5);
+  vrm.scene.updateMatrixWorld(true);
+  const head=h.getNormalizedBoneNode('head'), neck=h.getNormalizedBoneNode('neck');
+  const he=new THREE.Euler().setFromQuaternion(hq,'YXZ');     // body took the yaw; head gets nod(pitch)+tilt(roll)
+  if(neck) neck.quaternion.setFromEuler(new THREE.Euler(he.x*0.35,0,he.z*0.35,'YXZ'));
+  head.quaternion.setFromEuler(new THREE.Euler(he.x*0.6,0,he.z*0.6,'YXZ'));
+  if(window.__armIK){                                          // arm reach-IK: WIP (bend/twist tuning) — off by default
+    _solveArm(vrm, 'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
+    _solveArm(vrm, 'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
+  }
+}
+window.__updatePlayerIK=updatePlayerIK;
+{ const q=new URLSearchParams(location.search);
+  if(q.has('armik')) window.__armIK=true;   // opt-in arm reach-IK (WIP)
+  if(q.has('noik'))  window.__noik=true; }   // disable all IK -> pure idle body (fallback)
 
 // ---- co-presence: connect to a sync room (?sync=wss://…) and render remote players ----
 const remotes = new Map();   // id -> {group, tp:Vector3, try:number}
-let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0;
+window.__remotes = remotes;  // exposed for headless tests (tp = pose truth, pre-lerp)
+const spawnedObjs = new Map(); let lastSpawnSid = null; // sid -> mesh (ephemeral maker objects)
+function makePrim(kind, color){
+  const c = (color ?? 0xffb45e);
+  let geo;
+  if(kind==='sphere') geo = new THREE.SphereGeometry(0.3, 20, 16);
+  else if(kind==='cone') geo = new THREE.ConeGeometry(0.3, 0.6, 20);
+  else geo = new THREE.BoxGeometry(0.5, 0.5, 0.5);            // default: cube
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:c, roughness:0.5, metalness:0.2}));
+  m.castShadow = true; return m;
+}
+function applySpawn(msg){
+  if(!msg.sid || spawnedObjs.has(msg.sid)) return;
+  const m = makePrim(msg.kind, msg.color);
+  m.position.set(msg.x||0, msg.y||1, msg.z||0);
+  scene.add(m); spawnedObjs.set(msg.sid, m);
+  if(msg.id === myNet) lastSpawnSid = msg.sid;               // remember my last, for nudging
+}
+function removeSpawn(sid){
+  const m = spawnedObjs.get(sid);
+  if(m){ scene.remove(m); m.geometry.dispose(); m.material.dispose(); spawnedObjs.delete(sid); }
+}
+let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0, myRole = 'visitor';
 // broadcast my last pose on a TIMER (not the render loop) so I stay present when the
 // headset is off / SteamVR is in standby (the XR animation loop pauses, this doesn't).
 setInterval(()=>{
   if(sock && sock.readyState === 1)
     sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
-                              ry:myYaw, name:playerName, color:myColor}));
+                              ry:myYaw, name:playerName, color:myColor, model:playerModel}));
 }, 100);
 const _voice = window.speechSynthesis;
 function speak(text){
@@ -461,29 +1040,409 @@ function speak(text){
   const u = new SpeechSynthesisUtterance(text); u.rate = 0.98; u.pitch = 1.0;
   _voice.cancel(); _voice.speak(u);
 }
+// ---- room word-IDs: whoever coins one "starts" that instance; the box is shared ----
+const RW = {
+  a:['amber','azure','coral','dusky','ember','fern','gilded','hazel','indigo','jade','lunar','moss','opal','pearl','quartz','russet','sable','teal','umber','violet'],
+  b:['otter','heron','lynx','moth','raven','koi','wren','fox','hare','newt','swan','vole','ibis','stoat','finch','toad','pike','crane','mole','owl'],
+  c:['lantern','harbor','meadow','cinder','willow','hollow','beacon','thicket','estuary','garden','anvil','cairn','ferry','grotto','harrow','lattice','marsh','orchard','pier','quay'] };
+function coinRoom(){ const p=a=>a[Math.floor(Math.random()*a.length)]; return `${p(RW.a)}-${p(RW.b)}-${p(RW.c)}`; }
+let _room = 'porch', _roleLabel = '';
+function renderPanel(){
+  const el = document.getElementById('roomTag'); if(!el) return;
+  const roleLine = _roleLabel ? `you: <b>${_roleLabel}</b><br>` : '';
+  el.innerHTML = roleLine + `room: <b>${_room}</b> &middot; <a href="#" id="copyRoom" style="color:#8fb3ff">copy invite link</a>`;
+  const c = document.getElementById('copyRoom');
+  if(c) c.onclick = (e)=>{ e.preventDefault();
+    navigator.clipboard?.writeText(location.href).then(()=>{ c.textContent='copied!';
+      setTimeout(()=> c.textContent='copy invite link', 1600); }); };
+}
+function showRoom(room){ _room = room; renderPanel(); }
+function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visitor').toUpperCase()}`; renderPanel(); }
 (function connectSync(){
-  const url = new URLSearchParams(location.search).get('sync');
-  if(!url) return;
+  const q = new URLSearchParams(location.search);
+  const base = q.get('sync');
+  if(!base) return;
+  let room = (q.get('room')||'').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'');
+  if(!room){ room = coinRoom(); q.set('room', room);          // coin one + make it shareable on refresh
+    history.replaceState(null,'', location.pathname+'?'+q.toString()); }
+  showRoom(room);
+  const key = (q.get('key')||'').trim();
+  const nm  = (q.get('name')||playerName);
+  let url = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room)
+            + '&name=' + encodeURIComponent(nm);
+  if(key) url += '&key=' + encodeURIComponent(key);
   try { sock = new WebSocket(url); } catch(e){ console.warn('sync connect failed', e); return; }
-  sock.onopen = ()=> console.log('sync: connected', url);
+  sock.onopen = ()=> console.log('sync: connected', room);
   sock.onclose = ()=> console.log('sync: closed');
   sock.onmessage = (ev)=>{
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
-    if(m.t === 'welcome'){ myNet = m.id; }
+    if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
+      setAvatarRole(avatar, myRole); showRole(myRole, m.display);
+      (m.spawns||[]).forEach(applySpawn); }               // replay existing ephemeral objects
+    else if(m.t === 'spawn'){ applySpawn(m); }
+    else if(m.t === 'despawn'){ removeSpawn(m.sid); }
+    else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
     else if(m.t === 'pose' && m.id !== myNet){
+      if(window.agent && m.name === window.agent.name) return;   // my own resident's echo — the VRM is already here
       let r = remotes.get(m.id);
       if(!r){
-        const grp = makeAvatar(m.color ?? 0xffb45e, m.name || 'guest');
+        const grp = makeAvatar(m.color ?? 0xffb45e, m.name || 'guest', m.role || 'visitor', m.model || 'human');
         scene.add(grp);
         r = { group: grp, tp: new THREE.Vector3(m.x, m.y||0, m.z), try_: m.ry||0 };
         remotes.set(m.id, r);
-      }
+        if(window.__rtcMeetPeer) window.__rtcMeetPeer(m.id, m.model);   // voice: offer to late joiners
+      } else if(m.role || m.model){ setAvatarRole(r.group, m.role, m.model); }
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
     }
-    else if(m.t === 'say' && m.id !== myNet){ speak(m.text); }
-    else if(m.t === 'leave'){ const r = remotes.get(m.id); if(r){ scene.remove(r.group); remotes.delete(m.id); } }
+    else if(m.t === 'rtc'){ if(window.__rtcSignal) window.__rtcSignal(m); }
+    else if(m.t === 'say' && m.id !== myNet){
+      if(window.agent && m.name === window.agent.name) return;   // my own resident already spoke locally
+      if(m.voice !== false) speak(m.text);                        // text-only agents: bubble, no audio
+      const r = remotes.get(m.id);
+      if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); } }
+    else if(m.t === 'vol' && m.id !== myNet){                     // mic-volume edges from humans
+      const r = remotes.get(m.id); if(r) setMegaphone(r.group, !!m.on); }
+    else if(m.t === 'chat' && m.id !== myNet){                 // typed chat: bubble for everyone;
+      const r = remotes.get(m.id);                             // addressed (@/facing) → ping the
+      const who = (r && r.group.userData.name) || m.name || 'guest';   // resident; in earshot → cache
+      if(r) showBubble(r.group, m.text);
+      if(window.agent){
+        if(agentAddressed(window.agent.name, m.to, m.facing))
+          window.agent.hearRemote(who, m.text, {typed:true});
+        else if(remoteInEarshot(m.id))
+          window.agent.hearRemote(who, m.text, {typed:true, ping:false});
+      } }
+    else if(m.t === 'stt' && m.id !== myNet){                  // remote speech: no bubble (voice is
+      const r = remotes.get(m.id);                             // heard, not rendered). Faced agent
+      const who = (r && r.group.userData.name) || m.name || 'guest';   // is pinged; earshot caches.
+      if(window.agent){
+        if(m.facing && agentAddressed(window.agent.name, null, m.facing))
+          window.agent.hearRemote(who, m.text, {typed:false});
+        else if(remoteInEarshot(m.id))
+          window.agent.hearRemote(who, m.text, {typed:false, ping:false});
+      } }
+    else if(m.t === 'leave'){ const r = remotes.get(m.id); if(r){ scene.remove(r.group); remotes.delete(m.id); }
+      if(window.__rtcDropPeer) window.__rtcDropPeer(m.id); }
   };
 })();
+
+// ---- chat box: Enter opens, Enter sends {t:"chat"}, Esc closes. Addressing (Nix,
+// 2026-07-07): "@Name text" reaches that agent from ANYWHERE (Discord-style ping); plain
+// text reaches an agent only if you're close AND facing them (same rule as voice). This
+// keeps multi-agent rooms from pinging every agent with every stray sentence.
+function chatMentions(text){ return [...text.matchAll(/@([A-Za-z0-9_\-]+)/g)].map(m=>m[1].toLowerCase()); }
+function sendChatText(text){
+  text=(text||'').trim(); if(!text) return 'empty';
+  const to = chatMentions(text);
+  const facing = window.__gazeName ? window.__gazeName() : null;
+  if(sock && sock.readyState===1)
+    sock.send(JSON.stringify({t:'chat', text, name:playerName, to, facing}));
+  showBubble(avatar, text);                                     // own bubble (mirror/3rd-person)
+  // local resident: addressed → ping; merely in earshot → cache only (server excludes sender)
+  if(window.agent){
+    if(agentAddressed(window.agent.name, to, facing))
+      window.agent.hearRemote(playerName, text, {typed:true});
+    else if(nearResident())
+      window.agent.hearRemote(playerName, text, {typed:true, ping:false});
+  }
+  return 'chat sent: '+text;
+}
+// is the agent named `nm` addressed by this message? (@mention from anywhere, or facing)
+function agentAddressed(nm, to, facing){
+  if(!nm) return false; nm=nm.toLowerCase();
+  return (to||[]).includes(nm) || (!!facing && facing.toLowerCase()===nm);
+}
+// earshot (cache model): un-addressed speech/chat still reaches an agent's CACHE when the
+// speaker is within 10 m of it. Receiver-side check — pose data is the position truth.
+const EARSHOT_M = 10;
+function nearResident(){                                       // local player → local resident
+  if(!window.agent) return false;
+  const ap = window.agent.pos();
+  return Math.hypot(player.position.x-ap[0], player.position.z-ap[2]) <= EARSHOT_M;
+}
+function remoteInEarshot(id){                                  // remote sender → local resident
+  if(!window.agent) return false;
+  const r = remotes.get(id); if(!r) return false;              // unknown position = not in earshot
+  const ap = window.agent.pos();
+  return Math.hypot(r.tp.x-ap[0], r.tp.z-ap[2]) <= EARSHOT_M;
+}
+{
+  const bar = document.getElementById('chatbar'), inp = document.getElementById('chatinput');
+  window.__openChat = ()=>{ bar.style.display='block'; inp.focus(); };
+  function closeChat(){ bar.style.display='none'; inp.value=''; inp.blur(); }
+  inp.addEventListener('keydown', (e)=>{
+    e.stopPropagation();
+    if(e.key==='Escape'){ closeChat(); return; }
+    if(e.key!=='Enter') return;
+    const text = inp.value.trim(); closeChat(); if(text) sendChatText(text);
+  });
+  window.__sendChat = sendChatText;                             // headless/test entrypoint
+}
+
+// ---- facing-gate: the resident only listens when someone is FACING it (design: Nix,
+// 2026-07-07). A generous sphere (r=1.5m) around each AI occupant's head; a ray from your
+// view direction within 10m striking it = addressing them. Gate open → resident turns to
+// you (attention, pre-speech) and your mic STT runs; gate closed → genuinely untranscribed
+// (the recognizer is OFF, not ignored — legible consent, and an injection-surface floor).
+// Hysteresis: 1.8s grace on look-away so mid-sentence glances don't chop the transcript.
+// Temporary stopgap while models are slow/expensive; also arguably the right default forever.
+{
+  const GAZE_RANGE=10, GAZE_R=1.5, GRACE=1.8;
+  const _o=new THREE.Vector3(), _d=new THREE.Vector3(), _L=new THREE.Vector3();
+  let gateOpen=false, gateUntil=0, gazeTargetId=null;         // gazeTargetId: 'resident' | remote id
+  const micTalk = document.getElementById('micTalk');
+
+  function gazeHit(center){                                    // ray-sphere, forward-only, ranged
+    _L.subVectors(center,_o); const tca=_L.dot(_d);
+    if(tca<0 || tca>GAZE_RANGE) return false;
+    return _L.lengthSq()-tca*tca <= GAZE_R*GAZE_R;
+  }
+  function currentTarget(){
+    camera.getWorldPosition(_o); camera.getWorldDirection(_d);
+    if(window.__residentHead && gazeHit(window.__residentHead())) return 'resident';
+    for(const [id,r] of remotes){                              // remote AI occupants (model ≠ human)
+      const md=r.group.userData.model;
+      if(md && md!=='human' && gazeHit(_L.set(r.tp.x, r.tp.y+1.35, r.tp.z).clone())) return id;
+    }
+    return null;
+  }
+
+  // mic: SpeechRecognition runs the whole time 🎙 is checked (cache model, rev.2) — the
+  // gate no longer starts/stops transcription; it decides ADDRESSING. Finals broadcast
+  // as {t:"stt", facing:<gazed agent|null>}: the faced agent treats it as a ping; agents
+  // merely in earshot cache it silently ("voice messages saving up"). Interims still feed
+  // a FACED local resident live (its ear pill = active attention).
+  let recogG=null, recogOn=false;
+  function micStart(){
+    if(recogOn || !micTalk.checked) return;
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){ console.warn('no SpeechRecognition; use chat (Enter)'); return; }
+    recogG=new SR(); recogG.continuous=true; recogG.interimResults=true; recogG.lang='en-US';
+    recogG.onresult=(e)=>{
+      micVolume();                                             // producing volume → 📢 edges
+      let interim='';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        const res=e.results[i], txt=res[0].transcript;
+        if(res.isFinal){ const f=txt.trim();
+          if(f){
+            if(sock && sock.readyState===1)
+              sock.send(JSON.stringify({t:'stt', text:f, name:playerName, facing:window.__gazeName()}));
+            // local resident: faced speech is owned by the interim→onHeard path (no double
+            // entry); un-faced speech within earshot goes to its cache silently.
+            if(window.agent && gazeTargetId!=='resident' && nearResident())
+              window.agent.hearRemote(playerName, f, {typed:false, ping:false});
+          }
+        } else interim+=txt;
+      }
+      const live=interim.trim();
+      if(live && gazeTargetId==='resident' && window.agent) window.agent.simulateHear(live);
+    };
+    recogG.onerror=(e)=>{ if(e.error==='not-allowed'){ micTalk.checked=false; console.warn('mic denied'); } };
+    recogG.onend=()=>{ if(recogOn){ try{ recogG.start(); }catch(e){} } };
+    try{ recogG.start(); recogOn=true; }catch(e){ console.warn('mic failed', e); }
+  }
+  function micStop(){ recogOn=false; if(recogG){ try{ recogG.stop(); }catch(e){} recogG=null; }
+    micQuiet(); }
+
+  // 📢 edges for MY mic: on while speech is being recognized, off after 700ms of quiet.
+  let volOn=false, volTimer=null;
+  function micVolume(){
+    if(!volOn){ volOn=true; setMegaphone(avatar, true);
+      if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'vol', on:true})); }
+    if(volTimer) clearTimeout(volTimer);
+    volTimer = setTimeout(micQuiet, 700);
+  }
+  function micQuiet(){
+    if(volTimer){ clearTimeout(volTimer); volTimer=null; }
+    if(volOn){ volOn=false; setMegaphone(avatar, false);
+      if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'vol', on:false})); } }
+
+  function openGate(id){
+    gateOpen=true; gazeTargetId=id;
+    if(id==='resident' && window.agent) window.agent.lookAtSource(player);   // attention: turn BEFORE speech
+    else if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'gaze', target:id, on:true}));
+  }
+  function closeGate(){
+    const was=gazeTargetId; gateOpen=false; gazeTargetId=null;
+    if(was==='resident' && window.agent && window.agent.state==='idle') window.agent.clearLook();
+    else if(was!=='resident' && sock && sock.readyState===1) sock.send(JSON.stringify({t:'gaze', target:was, on:false}));
+  }
+  setInterval(()=>{
+    const now=performance.now()/1000;
+    const tgt=currentTarget();
+    if(tgt){ gateUntil=now+GRACE;
+      if(!gateOpen || gazeTargetId!==tgt){ if(gateOpen) closeGate(); openGate(tgt); } }
+    else if(gateOpen && now>gateUntil) closeGate();
+  }, 100);
+  micTalk.addEventListener('change', ()=>{ if(micTalk.checked) micStart(); else micStop(); });
+  // name of the AI occupant currently gazed at (addressing rides on names, not local ids)
+  window.__gazeName = ()=>{
+    if(!gateOpen || !gazeTargetId) return null;
+    if(gazeTargetId==='resident') return (window.agent && window.agent.name) || 'Hesperus';
+    const r=remotes.get(gazeTargetId); return (r && r.group.userData.name) || null;
+  };
+  window.__gazeState = ()=>({open:gateOpen, target:gazeTargetId, targetName:window.__gazeName()});   // headless/test introspection
+}
+
+// ---- proximity voice: P2P WebRTC audio mesh between human occupants, spatialized ----
+// Signaling rides the sync relay as {t:"rtc", to:<peerId>, ...} (server relays generically;
+// clients filter by `to`). 🎙 on → getUserMedia + offer to every human occupant; peers
+// without a mic answer recvonly (listeners hear speakers without granting anything).
+// Audio: stream → muted <audio> (Chrome WebRTC/WebAudio quirk) → PannerNode(HRTF) at the
+// speaker's position, listener synced to your camera → distance IS the volume knob.
+// Known limits (v1): no TURN (symmetric-NAT pairs may not connect — trycloudflare/home
+// NATs usually fine); naive renegotiation (fresh pc on new offer) — fine at Porch scale.
+{
+  const RTC_CFG = {iceServers:[{urls:'stun:stun.l.google.com:19302'}]};
+  const VOICE_RANGE = 15, VOICE_FULL = 1.5;    // full volume inside 1.5m, silent past 15m
+  const peers = new Map();                      // id -> {pc, panner, gain, el, stream}
+  let localStream = null, audioCtx = null;
+  const micTalk2 = document.getElementById('micTalk');
+
+  function ensureCtx(){
+    if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return null; } }
+    if(audioCtx.state==='suspended') audioCtx.resume().catch(()=>{});
+    return audioCtx;
+  }
+  addEventListener('pointerdown', ensureCtx, {once:false});   // autoplay policy: any click arms audio
+
+  function sendRtc(to, payload){ if(sock && sock.readyState===1)
+    sock.send(JSON.stringify({t:'rtc', to, ...payload})); }
+  async function flushIce(p){
+    while(p.pendingIce.length){
+      const c = p.pendingIce.shift();
+      await p.pc.addIceCandidate(c).catch(e=>console.warn('ice flush', e));
+    }
+  }
+
+  function peerFor(id, freshOffer){
+    let p = peers.get(id);
+    if(p && freshOffer){ try{ p.pc.close(); }catch(e){} teardownPeer(id); p = null; }
+    if(p) return p;
+    const pc = new RTCPeerConnection(RTC_CFG);
+    p = {pc, panner:null, gain:null, el:null, stream:null, pendingIce:[]};
+    peers.set(id, p);
+    pc.onicecandidate = (e)=>{ if(e.candidate) sendRtc(id, {ice:e.candidate}); };
+    pc.oniceconnectionstatechange = ()=>{ if(['failed','closed','disconnected'].includes(pc.iceConnectionState)) teardownPeer(id); };
+    pc.ontrack = (e)=>{
+      const ctx = ensureCtx(); if(!ctx) return;
+      const stream = e.streams[0] || new MediaStream([e.track]);
+      p.stream = stream;
+      p.el = new Audio(); p.el.srcObject = stream; p.el.muted = true;   // Chrome: WebAudio needs a sinked element
+      p.el.play().catch(()=>{});
+      const src = ctx.createMediaStreamSource(stream);
+      p.panner = ctx.createPanner();
+      p.panner.panningModel='HRTF'; p.panner.distanceModel='linear';
+      p.panner.refDistance=VOICE_FULL; p.panner.maxDistance=VOICE_RANGE; p.panner.rolloffFactor=1;
+      p.gain = ctx.createGain(); p.gain.gain.value = 1;
+      src.connect(p.panner); p.panner.connect(p.gain); p.gain.connect(ctx.destination);
+    };
+    if(localStream) localStream.getTracks().forEach(tr=> pc.addTrack(tr, localStream));
+    return p;
+  }
+  function teardownPeer(id){
+    const p = peers.get(id); if(!p) return;
+    try{ p.pc.close(); }catch(e){}
+    if(p.el){ p.el.srcObject=null; }
+    peers.delete(id);
+  }
+
+  async function offerTo(id){
+    const p = peerFor(id, true);
+    const offer = await p.pc.createOffer({offerToReceiveAudio:true});
+    await p.pc.setLocalDescription(offer);
+    sendRtc(id, {sdp:p.pc.localDescription});
+  }
+  async function voiceOnAll(){
+    ensureCtx();
+    try{ localStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true}}); }
+    catch(e){ console.warn('voice mic denied/unavailable', e); return; }
+    for(const [id,r] of remotes)
+      if((r.group.userData.model||'human')==='human') offerTo(id).catch(e=>console.warn('offer failed', id, e));
+  }
+  function voiceOff(){
+    if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+    for(const id of [...peers.keys()]) teardownPeer(id);
+  }
+  micTalk2.addEventListener('change', ()=>{ if(micTalk2.checked) voiceOnAll(); else voiceOff(); });
+
+  // signaling intake (called from the sync onmessage handler)
+  window.__rtcSignal = async (m)=>{
+    if(m.to !== myNet) return;
+    try{
+      if(m.sdp && m.sdp.type==='offer'){
+        const p = peerFor(m.id, true);
+        await p.pc.setRemoteDescription(m.sdp);
+        await flushIce(p);
+        const ans = await p.pc.createAnswer();
+        await p.pc.setLocalDescription(ans);
+        sendRtc(m.id, {sdp:p.pc.localDescription});
+      } else if(m.sdp && m.sdp.type==='answer'){
+        const p = peers.get(m.id);
+        if(p){ await p.pc.setRemoteDescription(m.sdp); await flushIce(p); }
+      } else if(m.ice){
+        const p = peers.get(m.id); if(!p) return;
+        // trickle candidates can arrive while setRemoteDescription is still awaiting —
+        // adding them then THROWS and losing them stalls ICE in 'checking' forever. Queue
+        // until a remote description exists, then flush.
+        if(p.pc.remoteDescription) await p.pc.addIceCandidate(m.ice).catch(e=>console.warn('ice add', e));
+        else p.pendingIce.push(m.ice);
+      }
+    }catch(e){ console.warn('rtc signal error', e); }
+  };
+  // late joiners: when a NEW human occupant appears while my mic is live, offer to them
+  window.__rtcMeetPeer = (id, model)=>{ if(localStream && (model||'human')==='human') offerTo(id).catch(()=>{}); };
+  window.__rtcDropPeer = teardownPeer;
+
+  // spatialize: panner follows the speaker's avatar; listener follows my camera (10 Hz)
+  const _lp=new THREE.Vector3(), _lf=new THREE.Vector3(), _lu=new THREE.Vector3();
+  setInterval(()=>{
+    if(!audioCtx || !peers.size) return;
+    camera.getWorldPosition(_lp); camera.getWorldDirection(_lf);
+    _lu.set(0,1,0);
+    const L = audioCtx.listener;
+    if(L.positionX){ L.positionX.value=_lp.x; L.positionY.value=_lp.y; L.positionZ.value=_lp.z;
+      L.forwardX.value=_lf.x; L.forwardY.value=_lf.y; L.forwardZ.value=_lf.z;
+      L.upX.value=0; L.upY.value=1; L.upZ.value=0; }
+    else { L.setPosition(_lp.x,_lp.y,_lp.z); L.setOrientation(_lf.x,_lf.y,_lf.z,0,1,0); }
+    for(const [id,p] of peers){
+      const r = remotes.get(id); if(!r || !p.panner) continue;
+      if(p.panner.positionX){ p.panner.positionX.value=r.tp.x; p.panner.positionY.value=r.tp.y+1.5; p.panner.positionZ.value=r.tp.z; }
+      else p.panner.setPosition(r.tp.x, r.tp.y+1.5, r.tp.z);
+    }
+  }, 100);
+
+  // headless/test introspection
+  window.__rtcState = ()=> [...peers.entries()].map(([id,p])=>({
+    id, ice:p.pc.iceConnectionState, sig:p.pc.signalingState,
+    hasAudio: !!p.stream && p.stream.getAudioTracks().length>0 }));
+}
+
+// maker console v0: spawn an ephemeral primitive in front of you. Server role-gates it
+// (visitor+ may spawn_temp) and echoes back a canonical sid. Ephemeral = gone when the room
+// empties. Usage from devtools: spawn('cube') | spawn('sphere', 0x66ccff) | spawn('cone')
+window.spawn = function(kind='cube', color){
+  if(!sock || sock.readyState !== 1) return 'not connected';
+  const fwd = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
+  const p = player.position.clone().addScaledVector(fwd, 1.6);
+  sock.send(JSON.stringify({t:'spawn', kind, x:p.x, y:1.0, z:p.z,
+                            color: (color ?? (Math.random()*0xffffff|0))}));
+  return `spawn(${kind}) sent`;
+};
+// move (edit verb): nudge your last-spawned object; server gates edit_own/edit_any.
+window.moveLast = function(dx, dy, dz){
+  if(!lastSpawnSid || !sock || sock.readyState !== 1) return 'nothing to move';
+  const o = spawnedObjs.get(lastSpawnSid); if(!o) return 'gone';
+  o.position.set(o.position.x+dx, o.position.y+(dy||0), o.position.z+dz);
+  sock.send(JSON.stringify({t:'move', sid:lastSpawnSid, x:o.position.x, y:o.position.y, z:o.position.z}));
+  return 'moved';
+};
+// despawn (delete verb): remove your last-spawned object; server gates delete_own/delete_any.
+window.despawnLast = function(){
+  if(!lastSpawnSid || !sock || sock.readyState !== 1) return 'nothing';
+  sock.send(JSON.stringify({t:'despawn', sid:lastSpawnSid})); lastSpawnSid = null;
+  return 'despawn sent';
+};
 
 // ---- world law: stay inside the fence (jump physics owns Y) ----
 function clampToWorld(){
@@ -544,8 +1503,20 @@ renderer.setAnimationLoop((now)=>{
   candle.intensity = f + 0.9;
   flame.scale.y = 0.8 + (f-3.25)*0.6;
   playaUniforms.uFlick.value = f;
+  if(window.__agentUpdate) window.__agentUpdate(dt);
   if(residentMixer) residentMixer.update(dt);
   if(residentVrm) residentVrm.update(dt);
+  if(playerMixer) playerMixer.update(dt);                     // idle keeps arms/legs alive (even under head-tracking)
+  if(playerVrm){
+    if(renderer.xr.isPresenting && !window.__noik){          // copy real HMD + controller poses into the IK targets
+      const xc=renderer.xr.getCamera(); ikHmd.position.setFromMatrixPosition(xc.matrixWorld); ikHmd.quaternion.setFromRotationMatrix(xc.matrixWorld);
+      const gL=renderer.xr.getControllerGrip(0), gR=renderer.xr.getControllerGrip(1);
+      if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld); }
+      if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld); }
+    }
+    if(((renderer.xr.isPresenting && !window.__noik) || window.__forceIK) && window.__updatePlayerIK) window.__updatePlayerIK(dt);
+    playerVrm.update(dt);
+  }
   if(renderer.xr.isPresenting){
     xrLocomotion(dt);
   } else {
@@ -580,7 +1551,7 @@ renderer.setAnimationLoop((now)=>{
   avatar.visible = false;                         // the driver never sees their own capsule
   renderer.render(scene, camera);
   // ---- desktop view of the VR session (checkbox-gated) ----
-  if(renderer.xr.isPresenting && (mirror.checked || spec3rd.checked)){
+  if(renderer.xr.isPresenting && (headcam.checked || spec3rd.checked)){
     const xrCam = renderer.xr.getCamera();
     let cam = null;
     if(spec3rd.checked){                          // 3rd person: show the labelled avatar from behind
@@ -591,10 +1562,10 @@ renderer.setAnimationLoop((now)=>{
       specCam.aspect = innerWidth/innerHeight; specCam.updateProjectionMatrix();
       cam = specCam;
     } else {                                      // 1st person: mirror what you actually see
-      mirrorCam.matrixWorld.copy(xrCam.matrixWorld);
-      mirrorCam.matrixWorld.decompose(mirrorCam.position, mirrorCam.quaternion, mirrorCam.scale);
-      if(xrCam.cameras && xrCam.cameras[0]) mirrorCam.projectionMatrix.copy(xrCam.cameras[0].projectionMatrix);
-      cam = mirrorCam;
+      headcamCam.matrixWorld.copy(xrCam.matrixWorld);
+      headcamCam.matrixWorld.decompose(headcamCam.position, headcamCam.quaternion, headcamCam.scale);
+      if(xrCam.cameras && xrCam.cameras[0]) headcamCam.projectionMatrix.copy(xrCam.cameras[0].projectionMatrix);
+      cam = headcamCam;
     }
     renderer.xr.enabled = false;
     const oldFB = renderer.getRenderTarget();
