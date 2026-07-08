@@ -24,15 +24,30 @@
     text-align:right;line-height:1.7}
   #mirrorToggle input{vertical-align:middle;margin-right:5px}
   #mirrorToggle label{cursor:pointer}
-  #chatbar{position:fixed;right:12px;bottom:12px;width:min(380px,44vw);
-    opacity:.6;transition:opacity .15s}                          /* tucked bottom-right, out of the way (Nix) */
+  #chatbar{position:fixed;right:12px;bottom:12px;width:min(560px,54vw);
+    display:flex;flex-direction:column;gap:6px;opacity:.72;transition:opacity .15s}  /* bottom-right widget: history + input */
   #chatbar.hid{display:none}
   #chatbar:focus-within{opacity:1}
+  #chathist{max-height:34vh;overflow-y:auto;padding:8px 11px;font:14px Georgia,serif;
+    line-height:1.42;color:#d7cfbe;background:rgba(14,16,22,0.72);border:1px solid #2c313c;
+    border-radius:9px;display:none}                              /* transcript: shown once it has entries */
+  #chathist.on{display:block}
+  #chathist .cl{margin:2px 0;overflow-wrap:break-word}
+  #chathist .cl b{color:#9db4d6}                                 /* default speaker */
+  #chathist .res b{color:#d8a24a}                                /* Hesperus → amber */
+  #chathist .you b{color:#7fb08a}                                /* you → green */
+  #chathist .cl i{color:#6f7787;font-style:normal}               /* channel tag (mic/typed) */
   #chatbar textarea{width:100%;box-sizing:border-box;padding:9px 12px;font:15px Georgia,serif;
     line-height:1.35;color:#eae2d0;background:rgba(14,16,22,0.88);border:1px solid #3a3f4c;
-    border-radius:9px;outline:none;resize:none;overflow-y:auto;
-    height:38px;max-height:104px}                                /* ~1 line, auto-grows to ~4, then scrolls */
+    border-radius:9px;outline:none;resize:none;overflow-y:auto;height:38px;max-height:104px}
   #chatbar textarea:focus{border-color:#6d8fbf}
+  /* themed scrollbars — no OS-white track/buttons (Nix) */
+  #chatbar textarea::-webkit-scrollbar, #chathist::-webkit-scrollbar{width:10px}
+  #chatbar textarea::-webkit-scrollbar-track, #chathist::-webkit-scrollbar-track{background:rgba(14,16,22,0.5);border-radius:5px}
+  #chatbar textarea::-webkit-scrollbar-thumb, #chathist::-webkit-scrollbar-thumb{background:#3a3f4c;border-radius:5px}
+  #chatbar textarea::-webkit-scrollbar-thumb:hover, #chathist::-webkit-scrollbar-thumb:hover{background:#566073}
+  #chatbar textarea::-webkit-scrollbar-button, #chathist::-webkit-scrollbar-button{display:none}
+  #chatbar textarea, #chathist{scrollbar-width:thin;scrollbar-color:#3a3f4c rgba(14,16,22,0.5)}
   #dbgfeed{position:fixed;right:10px;bottom:10px;width:380px;max-height:46vh;display:none;
     overflow-y:auto;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#b8c4d0;
     background:rgba(8,10,14,0.82);border:1px solid #2a3040;border-radius:8px;padding:8px 10px;
@@ -62,7 +77,7 @@
   <label><input type="checkbox" id="micTalk"> <span id="micDot" style="color:#5a6474">●</span> 🎙 talk (VR: B/Y toggles)</label>
   <div id="roomTag" style="margin-top:9px;font-size:12px;opacity:.9"></div>
 </div>
-<div id="chatbar"><textarea id="chatinput" maxlength="280" rows="1"
+<div id="chatbar"><div id="chathist"></div><textarea id="chatinput" maxlength="280" rows="1"
   placeholder="type to talk — Enter sends · Shift+Enter newline · @Name to address"></textarea></div>
 <div id="dbgfeed"></div>
 <div id="michud"><img id="michudimg" alt="mic status"></div>
@@ -613,6 +628,10 @@ if(_residentPick){
     // still play; only the audible TTS is skipped. Text-only agents are first-class.
     let resSock = null;   // the resident's own occupant socket (opened below, after load)
     let speaking=false, speakEnd=0, speakSeq=0;
+    // mouth: pulse per WORD (open then close, with pauses) instead of a constant hum (Nix: "continuous flapping").
+    // Real TTS word boundaries drive it when the browser fires them; a synthetic cadence covers voices that don't.
+    let mouthEnv=0, lastPulseT=0, nextPulseT=0;
+    function mouthPulse(){ lastPulseT = performance.now(); nextPulseT = lastPulseT + 120 + Math.random()*150; }
     function setVoice(v){ voiceOn = !!v; drawTag(); return 'voice ' + (voiceOn?'on':'off'); }
     // ---- working: do-not-disturb that dances (Nix, 2026-07-07 rev.2). DELIBERATE switch,
     // not per-turn: the terminal me flips it on for clean headspace (porch_status.py on).
@@ -632,7 +651,7 @@ if(_residentPick){
       return 'working: '+workingOn;
     }
     function endSpeak(){ speaking=false; bubMesh.visible=false;
-      if(vrm.expressionManager){ vrm.expressionManager.setValue('aa',0); vrm.expressionManager.setValue('oh',0); }
+      if(vrm.expressionManager){ vrm.expressionManager.setValue('aa',0); vrm.expressionManager.setValue('oh',0); } mouthEnv=0;
       setState(workingOn ? 'working' : 'idle'); clearLook();
       if(!walking && !emoteUntil) crossfade(workingOn ? 'dance' : 'idle'); }
     function say(text,{rate=1, keepWorking=false}={}){ if(!text) return;
@@ -641,9 +660,10 @@ if(_residentPick){
       let kw = keepWorking;
       if(/^\s*\[working\]\s*/i.test(text)){ kw = true; text = text.replace(/^\s*\[working\]\s*/i,''); }
       if(workingOn && !kw) working(false);
+      logChat(RESIDENT_NAME, text, 'res', voiceOn?'TTS':'text');
       const est = Math.max(1.6, text.split(/\s+/).length/2.6);
       drawBubble(text, est); bubMesh.visible=true; setState('speaking'); if(!walking) crossfade('talk');
-      speaking=true; speakEnd = t + est;
+      speaking=true; speakEnd = t + est; mouthPulse();
       // networked speech: other pages TTS it (if voice on), bubble it, megaphone it
       dbg('say→', `${voiceOn?'📢 ':''}"${text.slice(0,80)}"`);
       if(resSock && resSock.readyState===1)
@@ -653,6 +673,7 @@ if(_residentPick){
       const seq = ++speakSeq;
       setTimeout(()=>{ if(speaking && speakSeq===seq) endSpeak(); }, est*1000+250);
       if(window.speechSynthesis && voiceOn){ try{ const u=new SpeechSynthesisUtterance(text); u.rate=rate;
+        u.onboundary=()=>{ if(speaking && speakSeq===seq) mouthPulse(); };   // real word-level sync when the voice fires boundaries
         u.onend=()=>{ if(speaking && speakSeq===seq) endSpeak(); }; speechSynthesis.cancel(); speechSynthesis.speak(u);
       }catch(e){ /* no audio backend: fallback timer ends it */ } }
       return 'saying: '+text;
@@ -752,6 +773,7 @@ if(_residentPick){
       if(!said){ setState('idle'); clearLook(); return; }
       dbg('hear', `ADDRESSED by ${playerName} (faced, local mic): ${said.slice(0,60)}`, 'g');
       remember(playerName, said, false);
+      logChat(playerName, said, 'you', 'mic');
       respond(said);
     }
     // networked intake. ping:true (addressed: faced voice / @mention) → cache + answer when
@@ -807,10 +829,14 @@ if(_residentPick){
         else { if(!walking){ walking=true; if(!speaking) crossfade('walk'); }
           const step=Math.min(d, WALKSPD*dt); r.x+=dx/d*step; r.z+=dz/d*step;
           vrm.scene.rotation.y = Math.atan2(dx,dz); } }
-      if(speaking && vrm.expressionManager){                     // livelier jaw: peaks ~1.0, closes between syllables so it reads as talking (Nix caught the old 0.35 quiver)
-        const em=vrm.expressionManager, jaw=0.5+0.5*Math.sin(t*15);
-        em.setValue('aa', 0.15 + 0.85*jaw*jaw);                   // jaw² → more time closed = snappier, speech-like
-        em.setValue('oh', 0.18*(0.5+0.5*Math.sin(t*6.3+1)));      // faint roundness variety so it's not a metronome
+      if(speaking && vrm.expressionManager){                     // per-word pulse: open on each word, fall closed between → looks like talking, not a hum
+        const em=vrm.expressionManager, now=performance.now();
+        if(now > nextPulseT) mouthPulse();                       // synthetic word cadence (also covers no-onboundary voices)
+        const since=(now - lastPulseT)/1000;
+        const open = since<0.12 ? (1 - since/0.12)*(0.8+0.2*Math.sin(t*30)) : 0;  // open ~120ms per word, then CLOSED until next pulse → real gaps
+        mouthEnv += (open - mouthEnv)*0.7;                        // quick attack so each word opens wide
+        em.setValue('aa', Math.min(1, 0.04 + 1.5*mouthEnv));     // wide open on words, closes to ~0.04 between (verified 36% closed / 29% wide @60fps)
+        em.setValue('oh', 0.10*mouthEnv);
       }
       if(speaking && bubPages.length>1){                          // page long replies through the fixed box, timed to speech (real ms)
         const pg = Math.min(bubPages.length-1, Math.floor((performance.now() - bubPageT)/bubPageDur));
@@ -1284,7 +1310,8 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       dbg('say←', `${m.name||('#'+m.id)}${m.voice===false?' (text-only)':''}: ${(m.text||'').slice(0,90)}`);
       if(m.voice !== false) speak(m.text);                        // text-only agents: bubble, no audio
       const r = remotes.get(m.id);
-      if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); } }
+      if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); }
+      logChat(m.name || (r&&r.group.userData.name) || 'guest', m.text, 'remote', m.voice!==false?'TTS':'text'); }
     else if(m.t === 'vol' && m.id !== myNet){                     // mic-volume edges from humans
       const r = remotes.get(m.id); if(r) setMegaphone(r.group, !!m.on); }
     else if(m.t === 'agentStatus'){                               // deliberate working switch
@@ -1297,6 +1324,7 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       const r = remotes.get(m.id);                             // addressed (@/facing) → ping the
       const who = (r && r.group.userData.name) || m.name || 'guest';   // resident; in earshot → cache
       if(r) showBubble(r.group, m.text);
+      logChat(who, m.text, 'remote', 'typed');
       let disp = 'no-agent';
       if(window.agent){
         if(agentAddressed(window.agent.name, m.to, m.facing)){
@@ -1309,6 +1337,7 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
     else if(m.t === 'stt' && m.id !== myNet){                  // remote speech: no bubble (voice is
       const r = remotes.get(m.id);                             // heard, not rendered). Faced agent
       const who = (r && r.group.userData.name) || m.name || 'guest';   // is pinged; earshot caches.
+      logChat(who, m.text, 'remote', 'mic');
       let disp = 'no-agent';
       if(window.agent){
         if(m.facing && agentAddressed(window.agent.name, null, m.facing)){
@@ -1330,8 +1359,25 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
 // text reaches an agent only if you're close AND facing them (same rule as voice). This
 // keeps multi-agent rooms from pinging every agent with every stray sentence.
 function chatMentions(text){ return [...text.matchAll(/@([A-Za-z0-9_\-]+)/g)].map(m=>m[1].toLowerCase()); }
+// scrollable transcript of every channel (typed chat, TTS spoken, STT heard) — debug history
+const CHAT_HIST_MAX = 250;
+function logChat(who, text, cls, chan){
+  if(!text) return;
+  const el = document.getElementById('chathist'); if(!el) return;
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;   // don't yank the view if user scrolled up
+  const line = document.createElement('div'); line.className = 'cl ' + (cls||'');
+  const b = document.createElement('b'); b.textContent = who + ' ';
+  line.appendChild(b);
+  if(chan){ const i=document.createElement('i'); i.textContent = '('+chan+') '; line.appendChild(i); }
+  line.appendChild(document.createTextNode(text));
+  el.appendChild(line); el.classList.add('on');
+  while(el.childNodes.length > CHAT_HIST_MAX) el.removeChild(el.firstChild);
+  if(nearBottom) el.scrollTop = el.scrollHeight;
+}
+window.__logChat = logChat;
 function sendChatText(text){
   text=(text||'').trim(); if(!text) return 'empty';
+  logChat(playerName, text, 'you', 'typed');
   const to = chatMentions(text);
   const facing = window.__gazeName ? window.__gazeName() : null;
   dbg('chat→', `"${text.slice(0,70)}" to=[${to}] facing=${facing||'nobody'}`);
