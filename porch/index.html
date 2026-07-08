@@ -563,14 +563,19 @@ if(_residentPick){
     let resSock = null;   // the resident's own occupant socket (opened below, after load)
     let speaking=false, speakEnd=0, speakSeq=0;
     function setVoice(v){ voiceOn = !!v; drawTag(); return 'voice ' + (voiceOn?'on':'off'); }
-    // ---- working: do-not-disturb that dances (Nix, 2026-07-07). While on: tag pill
-    // 'working' + looping dance; pings CACHE instead of interrupting (respond() only
-    // fires from idle). Set/cleared via {t:"agentStatus"} from the terminal session's
-    // turn hooks — auto-clears when the turn ends, so 'available' can't be forgotten.
-    let workingOn=false;
+    // ---- working: do-not-disturb that dances (Nix, 2026-07-07 rev.2). DELIBERATE switch,
+    // not per-turn: the terminal me flips it on for clean headspace (porch_status.py on).
+    // Exits: (a) explicit off, (b) ANY spoken reply — answering = available — UNLESS the
+    // reply starts with "[working]" (stripped, stays dancing), (c) 30-min TTL backstop so
+    // a stale flag can't read as "he's broken down". Pings cache instead of interrupting.
+    let workingOn=false, workingTTL=null;
     function working(on){
       workingOn=!!on;
-      if(workingOn){ if(!speaking){ setState('working'); crossfade('dance'); } }
+      if(workingTTL){ clearTimeout(workingTTL); workingTTL=null; }
+      if(workingOn){
+        workingTTL = setTimeout(()=>{ if(workingOn){ dbg('status','working TTL (30m) expired — auto-clear','e'); working(false); } }, 30*60*1000);
+        if(!speaking){ setState('working'); crossfade('dance'); }
+      }
       else if(stateName==='working'){ setState('idle'); if(!speaking && !walking && !emoteUntil) crossfade('idle'); }
       dbg('status', workingOn ? 'WORKING (dance on, pings cache)' : 'available', workingOn?'k':'g');
       return 'working: '+workingOn;
@@ -579,7 +584,12 @@ if(_residentPick){
       if(vrm.expressionManager) vrm.expressionManager.setValue('aa',0);
       setState(workingOn ? 'working' : 'idle'); clearLook();
       if(!walking && !emoteUntil) crossfade(workingOn ? 'dance' : 'idle'); }
-    function say(text,{rate=1}={}){ if(!text) return;
+    function say(text,{rate=1, keepWorking=false}={}){ if(!text) return;
+      // speaking clears 'working' (answering = available) unless tagged: a reply starting
+      // with "[working]" strips the tag and keeps the dance going after the sentence.
+      let kw = keepWorking;
+      if(/^\s*\[working\]\s*/i.test(text)){ kw = true; text = text.replace(/^\s*\[working\]\s*/i,''); }
+      if(workingOn && !kw) working(false);
       drawBubble(text); bubMesh.visible=true; setState('speaking'); if(!walking) crossfade('talk');
       const est = Math.max(1.6, text.split(/\s+/).length/2.6);
       speaking=true; speakEnd = t + est;
