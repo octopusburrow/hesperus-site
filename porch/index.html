@@ -254,16 +254,18 @@ const playa = new THREE.Mesh(
           vec3 t2 = texture2D(uMap, vec2(p.y, -p.x) / 13.7).rgb;   // rotated macro break-up
           vec3 tex = t1 * mix(vec3(1.0), t2 * 2.0, 0.30);
           float lum = dot(tex, vec3(0.299, 0.587, 0.114));
-          tex = mix(vec3(lum), tex, 0.30);                         // DESAT: kill the orange cast
-          tex = pow(tex, vec3(1.35));                              // gentle night-darken (was tex*tex)
-          vec3 texCol = tex * (0.085 + 0.085*n) * (0.8 + 0.4*mottle) * vec3(0.92, 0.95, 1.05);
-          col = mix(col, texCol, 0.55);                            // PHOTO_MIX vs cool procedural
-        }
-        // ONE softer crack layer (was two hard ones = the "ropy" look), gentler contrast + wider
+          tex = mix(vec3(lum), tex, 0.32);                         // DESAT: kill the orange cast
+          tex = pow(tex, vec3(1.12));                              // LOW contrast (Nix rev.3)
+          vec3 texCol = tex * (0.16 + 0.05*n) * (0.9 + 0.2*mottle) * vec3(0.94, 0.96, 1.04);
+          col = mix(col, texCol, 0.8);                             // PHOTO_MIX: mostly photo
+        } else {
+        // procedural-only path keeps its crack/fine/crest layers; the photo has its OWN
+        // cracks — stacking both was the 'ropy overlay' (Nix rev.3)
         float ridge = abs(noise(p*0.8) - 0.5) * 2.0;
         col *= 1.0 - smoothstep(0.11, 0.0, ridge) * 0.32;
         col *= 0.82 + 0.32*fine;                                   // fine mottle dissolves the rope
         col += vec3(0.018,0.019,0.024) * smoothstep(0.78, 0.98, n); // faint glassy crests
+        }
         float d2 = dot(p - uCandle.xz, p - uCandle.xz);            // deck-glow spill
         col += vec3(0.50, 0.28, 0.10) * exp(-d2 * 0.55) * (uFlick * 0.05);
         // brighter near the viewer, fade to black in the distance
@@ -783,9 +785,13 @@ if(_residentPick){
         const room = (q.get('room')||'porch').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'') || 'porch';
         const rurl = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room)
                    + '&name=' + encodeURIComponent(RESIDENT_NAME);
-        try{ resSock = new WebSocket(rurl); }catch(e){ console.warn('resident occupant socket failed', e); }
-        if(resSock) setInterval(()=>{
-          if(resSock.readyState===1)
+        const resConnect = ()=>{                       // reconnect: survive server restarts
+          try{ resSock = new WebSocket(rurl); }catch(e){ console.warn('resident occupant socket failed', e); return; }
+          resSock.onclose = ()=> setTimeout(resConnect, 2500);
+        };
+        resConnect();
+        setInterval(()=>{
+          if(resSock && resSock.readyState===1)
             resSock.send(JSON.stringify({t:'pose', x:vrm.scene.position.x, y:vrm.scene.position.y,
               z:vrm.scene.position.z, ry:vrm.scene.rotation.y, name:RESIDENT_NAME,
               color:0xffb45e, model:modelName||'ai'}));
@@ -1042,8 +1048,10 @@ if(!new URLSearchParams(location.search).has('noembody')){
     tag.position.set(0,2.16,0); tag.renderOrder=999; tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam); vrm.scene.add(tag);
     // first-person head hiding (VRChat's shrunken-head trick, Nix's ask): scale the head
     // bone to ~0 for YOUR eyes; mirror + 3rd-person renders restore it around their pass.
-    const headBone = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode('head') : null;
-    window.__setHeadScale = (s)=>{ if(headBone){ headBone.scale.setScalar(s > 0.5 ? 1 : 0.0001); } };
+    // RAW bone, not normalized: three-vrm only propagates ROTATION from the normalized
+    // rig — scale on the normalized node never reaches the mesh (why rev.1 didn't work)
+    const headBone = vrm.humanoid ? (vrm.humanoid.getRawBoneNode ? vrm.humanoid.getRawBoneNode('head') : vrm.humanoid.getNormalizedBoneNode('head')) : null;
+    window.__setHeadScale = (s)=>{ if(headBone){ headBone.scale.setScalar(s > 0.5 ? 1 : 0.0001); headBone.updateMatrixWorld(true); } };
     window.__setHeadScale(0);
     playerVrm=vrm; window.__playerVrm=vrm;
     console.log('embodied: claude_suit petals='+petals);
@@ -1178,14 +1186,23 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
   let url = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room)
             + '&name=' + encodeURIComponent(nm);
   if(key) url += '&key=' + encodeURIComponent(key);
+  // RECONNECT (2026-07-07): server restarts used to silently kill everyone's socket for
+  // the rest of the session (no brain, frozen remotes). Backoff 1s→10s, forever.
+  let retryMs = 1000;
+  function connect(){
   try { sock = new WebSocket(url); } catch(e){ console.warn('sync connect failed', e); return; }
-  sock.onopen = ()=> console.log('sync: connected', room);
-  sock.onclose = ()=> console.log('sync: closed');
+  sock.onopen = ()=>{ console.log('sync: connected', room); retryMs = 1000; dbg('sync', 'connected', 'g'); };
+  sock.onclose = ()=>{ dbg('sync', `disconnected — retrying in ${retryMs/1000}s`, 'e');
+    setTimeout(connect, retryMs); retryMs = Math.min(retryMs*2, 10000); };
   sock.onmessage = (ev)=>{
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
     if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
       dbg('welcome', `#${m.id} ${m.display} (${myRole}) room=${m.room} proto=${m.proto}`, 'g');
       setAvatarRole(avatar, myRole); showRole(myRole, m.display);
+      // prune remote avatars that predate a reconnect (their ids died with the old server)
+      const alive = new Set((m.peers||[]).map(p=>p.id));
+      for(const [id, r] of [...remotes]){
+        if(!alive.has(id)){ scene.remove(r.group); remotes.delete(id); if(window.__rtcDropPeer) window.__rtcDropPeer(id); } }
       (m.spawns||[]).forEach(applySpawn); }               // replay existing ephemeral objects
     else if(m.t === 'join'){ dbg('join', `${m.display} (${m.role})`, 'g'); }
     else if(m.t === 'spawn'){ applySpawn(m); }
@@ -1247,6 +1264,8 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
     else if(m.t === 'leave'){ const r = remotes.get(m.id); if(r){ scene.remove(r.group); remotes.delete(m.id); }
       if(window.__rtcDropPeer) window.__rtcDropPeer(m.id); }
   };
+  }
+  connect();
 })();
 
 // ---- chat box: Enter opens, Enter sends {t:"chat"}, Esc closes. Addressing (Nix,
