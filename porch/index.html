@@ -24,14 +24,15 @@
     text-align:right;line-height:1.7}
   #mirrorToggle input{vertical-align:middle;margin-right:5px}
   #mirrorToggle label{cursor:pointer}
-  #chatbar{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);
-    width:min(520px,80vw);opacity:.6;transition:opacity .15s}
+  #chatbar{position:fixed;right:12px;bottom:12px;width:min(380px,44vw);
+    opacity:.6;transition:opacity .15s}                          /* tucked bottom-right, out of the way (Nix) */
   #chatbar.hid{display:none}
   #chatbar:focus-within{opacity:1}
-  #chatbar input{width:100%;box-sizing:border-box;padding:9px 12px;font:15px Georgia,serif;
-    color:#eae2d0;background:rgba(14,16,22,0.88);border:1px solid #3a3f4c;border-radius:9px;
-    outline:none}
-  #chatbar input:focus{border-color:#6d8fbf}
+  #chatbar textarea{width:100%;box-sizing:border-box;padding:9px 12px;font:15px Georgia,serif;
+    line-height:1.35;color:#eae2d0;background:rgba(14,16,22,0.88);border:1px solid #3a3f4c;
+    border-radius:9px;outline:none;resize:none;overflow-y:auto;
+    height:38px;max-height:104px}                                /* ~1 line, auto-grows to ~4, then scrolls */
+  #chatbar textarea:focus{border-color:#6d8fbf}
   #dbgfeed{position:fixed;right:10px;bottom:10px;width:380px;max-height:46vh;display:none;
     overflow-y:auto;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#b8c4d0;
     background:rgba(8,10,14,0.82);border:1px solid #2a3040;border-radius:8px;padding:8px 10px;
@@ -61,8 +62,8 @@
   <label><input type="checkbox" id="micTalk"> <span id="micDot" style="color:#5a6474">●</span> 🎙 talk (VR: B/Y toggles)</label>
   <div id="roomTag" style="margin-top:9px;font-size:12px;opacity:.9"></div>
 </div>
-<div id="chatbar"><input id="chatinput" maxlength="280"
-  placeholder="type to talk — click or press Enter, then type · @Name to address an agent"></div>
+<div id="chatbar"><textarea id="chatinput" maxlength="280" rows="1"
+  placeholder="type to talk — Enter sends · Shift+Enter newline · @Name to address"></textarea></div>
 <div id="dbgfeed"></div>
 <div id="michud"><img id="michudimg" alt="mic status"></div>
 <script type="importmap">
@@ -909,10 +910,10 @@ addEventListener('pointermove', e=>{
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0035));
   camera.rotation.x = pitch;
 });
-const keys = {};
+const keys = {}; window.__keys = keys;                     // exposed for headless WASD-stuck test
 let _spawnKinds = ['cube','sphere','cone'], _spawnI = 0;
 addEventListener('keydown', e=>{
-  if(e.target && e.target.tagName==='INPUT' && e.target.type==='text') return;  // typing ≠ walking
+  if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;  // typing ≠ walking
   if(e.code==='Enter' && window.__openChat){ e.preventDefault(); window.__openChat(); return; }
   if(e.code==='Backquote' && window.__toggleDbg){ e.preventDefault(); window.__toggleDbg(); return; }
   keys[e.code] = true; if(e.code==='Space') wantJump = true;
@@ -922,7 +923,7 @@ addEventListener('keydown', e=>{
     else if(e.code==='ArrowUp') moveLast(0,0,-d); else if(e.code==='ArrowDown') moveLast(0,0,d); }
   if(e.code==='KeyX' && window.despawnLast){ despawnLast(); } });
 addEventListener('keyup',   e=>{
-  if(e.target && e.target.tagName==='INPUT' && e.target.type==='text') return;
+  if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
   keys[e.code] = false; });
 
 // ---- avatar builder: capsule + a little face (so facing reads) + floating nameplate ----
@@ -1369,13 +1370,20 @@ function remoteInEarshot(id){                                  // remote sender 
   // desktop: chat bar is ALWAYS visible (Nix: "how do I type to you?") — click it or
   // press Enter to focus, type, Enter sends + unfocuses so WASD works again. Hidden in VR.
   const bar = document.getElementById('chatbar'), inp = document.getElementById('chatinput');
+  const clearKeys = ()=>{ for(const k in keys) keys[k]=false; wantJump=false; };  // focus change must not leave a movement key "held" (WASD-stuck bug, Nix)
+  const autogrow = ()=>{ inp.style.height='auto'; inp.style.height=Math.min(inp.scrollHeight,104)+'px'; };
   window.__openChat = ()=>{ bar.classList.remove('hid'); inp.focus(); };
-  function closeChat(){ inp.value=''; inp.blur(); }             // stays visible, just unfocus
+  function closeChat(){ inp.value=''; inp.blur(); autogrow(); }  // stays visible, just unfocus + collapse
+  inp.addEventListener('focus', clearKeys);                      // entering chat releases any held WASD
+  inp.addEventListener('blur',  clearKeys);                      // leaving chat too — no ghost-walk
+  inp.addEventListener('input', autogrow);                      // grow up to ~4 lines, then scroll
   inp.addEventListener('keydown', (e)=>{
     e.stopPropagation();
     if(e.key==='Escape'){ closeChat(); return; }
-    if(e.key!=='Enter') return;
-    const text = inp.value.trim(); closeChat(); if(text) sendChatText(text);
+    if(e.key==='Enter' && !e.shiftKey){                          // Enter sends; Shift+Enter = newline
+      e.preventDefault();
+      const text = inp.value.trim(); closeChat(); if(text) sendChatText(text);
+    }
   });
   renderer.xr.addEventListener('sessionstart', ()=> bar.classList.add('hid'));
   renderer.xr.addEventListener('sessionend',   ()=> bar.classList.remove('hid'));
