@@ -53,7 +53,7 @@
     <option value="2">high</option>
     <option value="2.5">ultra (GPU&nbsp;poison)</option>
   </select></label><br>
-  <label><input type="checkbox" id="micTalk"> 🎙 talk (face a resident to be heard)</label>
+  <label><input type="checkbox" id="micTalk"> <span id="micDot" style="color:#5a6474">●</span> 🎙 talk (VR: B/Y toggles)</label>
   <div id="roomTag" style="margin-top:9px;font-size:12px;opacity:.9"></div>
 </div>
 <div id="chatbar"><input id="chatinput" maxlength="280"
@@ -204,12 +204,21 @@ const sky = new THREE.Mesh(
   }));
 scene.add(sky);
 
-// ---- the playa: one lightweight shader — cracked dust, fog-faded ----
+// ---- the playa: cracked-earth PHOTO texture (First Light's CC0 ground, Nix's ask
+// 2026-07-07) modulated by the original procedural layers — fades, spill, crests kept ----
 const playaUniforms = {
   uFog:    {value: new THREE.Color(0x0d0f16)},
   uCandle: {value: candle.position.clone()},
   uFlick:  {value: 3.1},
+  uMap:    {value: null},
+  uHasMap: {value: 0.0},
 };
+new THREE.TextureLoader().load('./assets/playa_diff.jpg', (t)=>{
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  playaUniforms.uMap.value = t; playaUniforms.uHasMap.value = 1.0;
+});
 const playa = new THREE.Mesh(
   new THREE.PlaneGeometry(500, 500),
   new THREE.ShaderMaterial({
@@ -221,6 +230,7 @@ const playa = new THREE.Mesh(
     fragmentShader: `
       varying vec3 vWorld;
       uniform vec3 uFog; uniform vec3 uCandle; uniform float uFlick;
+      uniform sampler2D uMap; uniform float uHasMap;
       float hash2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
       float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
         return mix(mix(hash2(i), hash2(i+vec2(1,0)), f.x),
@@ -233,6 +243,15 @@ const playa = new THREE.Mesh(
         float mottle = noise(p*0.07);
         vec3 base = mix(vec3(0.018,0.017,0.022), vec3(0.046,0.041,0.050), mottle);
         vec3 col = base * (0.6 + 0.55*n);
+        if(uHasMap > 0.5){
+          // photo albedo, tiled ~4.5m, de-repeated by sampling a 2nd rotated scale;
+          // darkened hard (night playa) and modulated by the procedural layers
+          vec3 t1 = texture2D(uMap, p / 4.5).rgb;
+          vec3 t2 = texture2D(uMap, vec2(p.y, -p.x) / 13.7).rgb;   // rotated macro break-up
+          vec3 tex = t1 * mix(vec3(1.0), t2 * 2.0, 0.35);
+          tex *= tex;                                              // gamma-darken for night
+          col = tex * (0.055 + 0.075*n) * (0.75 + 0.5*mottle);
+        }
         // ONE softer crack layer (was two hard ones = the "ropy" look), gentler contrast + wider
         float ridge = abs(noise(p*0.8) - 0.5) * 2.0;
         col *= 1.0 - smoothstep(0.11, 0.0, ridge) * 0.32;
@@ -455,7 +474,7 @@ if(_residentPick){
     }
     // ==== agent harness: clips, state affordances, speech, emote, locomotion ====
     const RESIDENT_NAME = 'Hesperus';
-    let modelName = new URLSearchParams(location.search).get('residentModel') || '';   // the resident is its OWN occupant (?residentModel=...); player uses ?model=. Set via agent.setModel(). NOT hardwired
+    let modelName = new URLSearchParams(location.search).get('residentModel') || 'AI model';   // established resident: generic default (Nix, 2026-07-07); override ?residentModel= or agent.setModel(). Player uses ?model=.
     let voiceOn = new URLSearchParams(location.search).get('voice') !== '0';   // declared early: drawTag reads it
     residentMixer = new THREE.AnimationMixer(vrm.scene);
     const CLIP_SRC = { idle:'standing-idle', walk:'walk', talk:'talk', wave:'wave', cheer:'cheer', raise:'raise' };
@@ -947,9 +966,10 @@ function recolorBloom(root, hex){
       m.needsUpdate = true; });
   });
 }
-// ---- local player body: a claude_suit VRM (blue bloom = human). Add ?embody=1 ----
+// ---- local player body: a claude_suit VRM (blue bloom = human). DEFAULT ON for humans
+// (Nix, 2026-07-07: "humans are the blue claudesona by default") — ?noembody opts out ----
 let playerVrm=null, playerMixer=null;
-if(new URLSearchParams(location.search).has('embody')){
+if(!new URLSearchParams(location.search).has('noembody')){
   (async ()=>{
     const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
     const {VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy} = await import('@pixiv/three-vrm-animation');
@@ -1293,6 +1313,31 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
   // merely in earshot cache it silently ("voice messages saving up"). Interims still feed
   // a FACED local resident live (its ear pill = active attention).
   let recogG=null, recogOn=false;
+
+  // ---- mic status indicator (Nix, first VR session: "can't tell if my mic is live") ----
+  // Desktop: colored dot beside the 🎙 label. VR: small camera-anchored badge, bottom-right
+  // of view. grey = off · teal = live (transcribing) · amber = TALKING (producing volume).
+  // VR mute toggle: B/Y button (A/X = jump).
+  const micDot = document.getElementById('micDot');
+  const _micCanvas = document.createElement('canvas'); _micCanvas.width=_micCanvas.height=64;
+  const _micTex = new THREE.CanvasTexture(_micCanvas);
+  const micBadge = new THREE.Mesh(new THREE.PlaneGeometry(0.055, 0.055),
+    new THREE.MeshBasicMaterial({map:_micTex, transparent:true, depthTest:false, depthWrite:false}));
+  micBadge.position.set(0.20, -0.20, -0.6); micBadge.renderOrder = 2000;
+  camera.add(micBadge);
+  const MIC_COL = {off:'#5a6474', live:'#3a8a8a', talk:'#e0a53c'};
+  function micState(s){
+    if(micDot) micDot.style.color = MIC_COL[s] || MIC_COL.off;
+    const g=_micCanvas.getContext('2d'); g.clearRect(0,0,64,64);
+    g.fillStyle='rgba(10,12,16,0.72)'; g.beginPath(); g.arc(32,32,29,0,7); g.fill();
+    g.strokeStyle=MIC_COL[s]||MIC_COL.off; g.lineWidth=4; g.beginPath(); g.arc(32,32,29,0,7); g.stroke();
+    g.font='30px serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.globalAlpha = s==='off' ? 0.45 : 1; g.fillText('🎙',32,34); g.globalAlpha=1;
+    if(s==='off'){ g.strokeStyle='#c05555'; g.lineWidth=5; g.beginPath(); g.moveTo(14,50); g.lineTo(50,14); g.stroke(); }
+    _micTex.needsUpdate = true;
+  }
+  micState('off');
+  window.__micState = micState;   // headless/test introspection hook
   function micStart(){
     if(recogOn || !micTalk.checked) return;
     const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -1320,22 +1365,22 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
     };
     recogG.onerror=(e)=>{ if(e.error==='not-allowed'){ micTalk.checked=false; console.warn('mic denied'); } };
     recogG.onend=()=>{ if(recogOn){ try{ recogG.start(); }catch(e){} } };
-    try{ recogG.start(); recogOn=true; dbg('mic', 'STT on', 'g'); }catch(e){ console.warn('mic failed', e); dbg('mic', 'start failed: '+e, 'e'); }
+    try{ recogG.start(); recogOn=true; dbg('mic', 'STT on', 'g'); micState('live'); }catch(e){ console.warn('mic failed', e); dbg('mic', 'start failed: '+e, 'e'); }
   }
   function micStop(){ recogOn=false; if(recogG){ try{ recogG.stop(); }catch(e){} recogG=null; }
-    micQuiet(); }
+    micQuiet(); micState('off'); }
 
   // 📢 edges for MY mic: on while speech is being recognized, off after 700ms of quiet.
   let volOn=false, volTimer=null;
   function micVolume(){
-    if(!volOn){ volOn=true; setMegaphone(avatar, true);
+    if(!volOn){ volOn=true; setMegaphone(avatar, true); micState('talk');
       if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'vol', on:true})); }
     if(volTimer) clearTimeout(volTimer);
     volTimer = setTimeout(micQuiet, 700);
   }
   function micQuiet(){
     if(volTimer){ clearTimeout(volTimer); volTimer=null; }
-    if(volOn){ volOn=false; setMegaphone(avatar, false);
+    if(volOn){ volOn=false; setMegaphone(avatar, false); micState(recogOn ? 'live' : 'off');
       if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'vol', on:false})); } }
 
   function openGate(id){
@@ -1567,11 +1612,18 @@ function xrLocomotion(dt){
       if(Math.abs(x) > 0.12) player.rotation.y -= x * TURN_SPEED * dt;  // smooth analog turn (ramps w/ deflection)
     }
     const b = src.gamepad.buttons;
-    if((b[4] && b[4].pressed) || (b[5] && b[5].pressed)) jumpBtn = true;  // A / X
+    if(b[4] && b[4].pressed) jumpBtn = true;                          // A / X = jump
+    if(b[5] && b[5].pressed) micBtn = true;                           // B / Y = mic toggle
   }
   if(jumpBtn && !prevJumpBtn) wantJump = true;
   prevJumpBtn = jumpBtn;
+  if(micBtn && !prevMicBtn){                                          // edge: toggle 🎙 from VR
+    const cb = document.getElementById('micTalk');
+    cb.checked = !cb.checked; cb.dispatchEvent(new Event('change'));
+  }
+  prevMicBtn = micBtn; micBtn = false;
 }
+let micBtn = false, prevMicBtn = false;
 
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
