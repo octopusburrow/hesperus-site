@@ -565,28 +565,47 @@ if(_residentPick){
     bubMesh.onBeforeRender=(r,s,cam)=>uprightBillboard(bubMesh,cam); vrm.scene.add(bubMesh);
     // scalable bubble (Nix, live in-world 2026-07-07): canvas height + mesh scale grow
     // with line count so long replies aren't clipped; tail stays anchored, grows upward.
-    const BUB_W=512, BUB_LH=32, BUB_PADTOP=28, BUB_TAIL=34, BUB_MAXLINES=5;  // Nix: keep it small + capped
-    function drawBubble(text){
+    const BUB_W=512, BUB_LH=32, BUB_PADTOP=28, BUB_TAIL=34, BUB_MAXLINES=5;  // fixed 5-row box; long replies PAGE through (Nix wanted scroll, not a hard cap)
+    let bubPages=[], bubVisN=1, bubPageDur=0, bubPageT=0, bubCurPage=-1;
+    function bubWrap(text){
       const g=bubCanvas.getContext('2d'); g.font='25px Georgia';
       const words=text.split(/\s+/); let line=''; const lines=[];
       for(const w of words){ const test=line?line+' '+w:w;
         if(g.measureText(test).width>468 && line){ lines.push(line); line=w; } else line=test; }
       if(line) lines.push(line);
-      if(lines.length>BUB_MAXLINES){ lines.length=BUB_MAXLINES; lines[BUB_MAXLINES-1]+=' …'; }
-      const boxH = BUB_PADTOP*2 + lines.length*BUB_LH;
-      const H = boxH + BUB_TAIL;
-      bubCanvas.height = H;                                    // resize → clears
+      return lines;
+    }
+    function bubRenderPage(idx){
+      const g=bubCanvas.getContext('2d');
+      const page = bubPages[idx] || [];
+      const boxH = BUB_PADTOP*2 + bubVisN*BUB_LH, H = boxH + BUB_TAIL;
+      if(bubCanvas.height!==H) bubCanvas.height=H;              // resize also clears
+      g.clearRect(0,0,BUB_W,H);
       g.font='25px Georgia'; g.textAlign='center'; g.textBaseline='top';
       g.fillStyle='rgba(14,16,22,0.85)'; g.beginPath(); g.roundRect(6,6,BUB_W-12,boxH-12,16); g.fill();
       g.beginPath(); g.moveTo(238,boxH-2); g.lineTo(256,H-4); g.lineTo(274,boxH-2); g.closePath(); g.fill();
       g.fillStyle='#eae2d0'; let y=BUB_PADTOP;
-      for(const l of lines){ g.fillText(l,BUB_W/2,y); y+=BUB_LH; }
+      for(const l of page){ g.fillText(l,BUB_W/2,y); y+=BUB_LH; }
+      if(bubPages.length>1){                                    // page dots: which slice of a long reply you're seeing
+        const cx=BUB_W/2, dy=boxH-19, sp=14, n=bubPages.length;
+        for(let i=0;i<n;i++){ g.fillStyle = i===idx ? 'rgba(234,226,208,0.92)' : 'rgba(234,226,208,0.34)';
+          g.beginPath(); g.arc(cx+(i-(n-1)/2)*sp, dy, 3, 0, 6.283); g.fill(); }
+      }
       bubTex.needsUpdate=true;
-      // keep on-screen width constant (1.25), scale height by aspect, anchor the tail tip
-      const worldH = 1.25 * (H/BUB_W);
+      const worldH = 1.25 * (H/BUB_W);                          // width constant, height by aspect, tail tip anchored
       bubMesh.scale.set(1, worldH/0.508, 1);
-      bubMesh.position.y = (vs.y+0.72-0.254) + worldH/2;        // bottom edge stays put
+      bubMesh.position.y = (vs.y+0.72-0.254) + worldH/2;
     }
+    function drawBubble(text, est){
+      const lines = bubWrap(text);
+      bubVisN = Math.min(BUB_MAXLINES, lines.length);
+      bubPages = [];
+      for(let i=0;i<lines.length;i+=BUB_MAXLINES) bubPages.push(lines.slice(i,i+BUB_MAXLINES));
+      bubPageDur = bubPages.length>1 ? Math.max(1200, (est*1000||2000)/bubPages.length) : 0;  // ms/page — REAL time, so it tracks TTS even if rAF throttles
+      bubPageT = performance.now(); bubCurPage = 0;
+      bubRenderPage(0);
+    }
+    window.__bubDbg = ()=>({pages:bubPages.length, cur:bubCurPage, visN:bubVisN, h:bubCanvas.height});  // headless paging test
 
     // ---- speech (out-loud TTS + visible words + mouth) ----
     // voiceOn: agents may be text-only (?voice=0 or agent.setVoice(false)) — bubble + mouth
@@ -621,8 +640,8 @@ if(_residentPick){
       let kw = keepWorking;
       if(/^\s*\[working\]\s*/i.test(text)){ kw = true; text = text.replace(/^\s*\[working\]\s*/i,''); }
       if(workingOn && !kw) working(false);
-      drawBubble(text); bubMesh.visible=true; setState('speaking'); if(!walking) crossfade('talk');
       const est = Math.max(1.6, text.split(/\s+/).length/2.6);
+      drawBubble(text, est); bubMesh.visible=true; setState('speaking'); if(!walking) crossfade('talk');
       speaking=true; speakEnd = t + est;
       // networked speech: other pages TTS it (if voice on), bubble it, megaphone it
       dbg('say→', `${voiceOn?'📢 ':''}"${text.slice(0,80)}"`);
@@ -702,8 +721,10 @@ if(_residentPick){
       let settled=false, watchdog=null;
       const arm = ()=>{ if(watchdog) clearTimeout(watchdog);
         watchdog = setTimeout(()=>{
-          if(!settled){ dbg('brain', `TIMEOUT after ${Math.round((Date.now()-_t0)/1000)}s (no progress)`, 'e');
-            sayError(`no response — brain timed out after ${Math.round((Date.now()-_t0)/1000)}s`); }
+          if(settled) return;                                 // busy ≠ dead: terminal-me is mid work-turn; late replies still land
+          dbg('brain', `still working ${Math.round((Date.now()-_t0)/1000)}s — waiting, not erroring`, 'e');
+          if(!speaking){ setState('working'); if(!walking && !emoteUntil) crossfade('dance'); }  // SHOW heads-down instead of a scary timeout
+          arm();                                              // re-wait; only the socket-level cap (~line 854) ends a truly-hung request
         }, brainTimeoutMs); };
       const progress = ()=>{ if(!settled) arm(); };           // streaming brains: call per chunk
       arm();
@@ -711,11 +732,12 @@ if(_residentPick){
         settled=true; clearTimeout(watchdog);
         dbg('brain', `← ${((Date.now()-_t0)/1000).toFixed(1)}s: ${reply ? '"'+String(reply).slice(0,80)+'"' : '(intentional silence)'}`, 'g');
         const wait = Math.max(0, 650 - (Date.now() - _t0));   // let 'thinking' read even with an instant stub brain
-        setTimeout(()=>{ if(reply) say(reply); else { setState('idle'); clearLook(); } }, wait);
+        setTimeout(()=>{ if(reply) say(reply); else { setState(workingOn?'working':'idle'); clearLook(); } }, wait);
       }).catch(e=>{ settled=true; clearTimeout(watchdog);
-        console.warn('brain error', e);
-        dbg('brain', `ERROR ${((Date.now()-_t0)/1000).toFixed(1)}s: ${String(e && e.message || e).slice(0,90)}`, 'e');
-        sayError(`brain error: ${String(e && e.message || e).slice(0,80)}`); });
+        const msg=String(e && e.message || e);
+        dbg('brain', `ERROR ${((Date.now()-_t0)/1000).toFixed(1)}s: ${msg.slice(0,90)}`, 'e');
+        if(/timeout/i.test(msg)) say("(sorry — I got pulled into something for a while there. Say that again?)");
+        else sayError(`brain error: ${msg.slice(0,80)}`); });
     }
     function onHeard(text){
       if(!text) return;
@@ -789,6 +811,10 @@ if(_residentPick){
         em.setValue('aa', 0.15 + 0.85*jaw*jaw);                   // jaw² → more time closed = snappier, speech-like
         em.setValue('oh', 0.18*(0.5+0.5*Math.sin(t*6.3+1)));      // faint roundness variety so it's not a metronome
       }
+      if(speaking && bubPages.length>1){                          // page long replies through the fixed box, timed to speech (real ms)
+        const pg = Math.min(bubPages.length-1, Math.floor((performance.now() - bubPageT)/bubPageDur));
+        if(pg!==bubCurPage){ bubCurPage=pg; bubRenderPage(pg); }
+      }
       if(speaking && t>speakEnd) endSpeak();
       if(emoteUntil && t>emoteUntil){ emoteUntil=0; if(!speaking&&!walking) crossfade('idle'); }
       if(stateName==='thinking' || stateName==='speaking') drawTag();
@@ -851,7 +877,7 @@ if(_residentPick){
           const reqId = 'b' + (++brainSeq) + '_' + myNet;
           window.__brainPending.set(reqId, {resolve, reject});
           sock.send(JSON.stringify({t:'brainReq', reqId, port:bport, secret:bsecret, text, speaker:'', backlog}));
-          setTimeout(()=>{ if(window.__brainPending.delete(reqId)) reject(new Error('brain socket timeout')); }, 118000);
+          setTimeout(()=>{ if(window.__brainPending.delete(reqId)) reject(new Error('brain socket timeout')); }, 420000);  // 7 min: I sometimes take long work-turns; a late reply should still land, not drop
         } else {
           fetch(brainUrl, {method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({text, speaker:'', backlog})})
