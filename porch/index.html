@@ -14,9 +14,9 @@
 <style>
   html,body{margin:0;height:100%;background:#0a0c10;overflow:hidden;font-family:Georgia,serif}
   canvas{display:block}
-  #michud{position:fixed;left:14px;bottom:12px;width:42px;height:42px;z-index:45}
+  #michud{position:fixed;left:14px;bottom:200px;width:42px;height:42px;z-index:45}
   #michud img{width:100%;height:100%}
-  #plaque{position:fixed;left:66px;bottom:14px;color:#b9a683;opacity:.85;font-size:13px;
+  #plaque{position:fixed;left:16px;bottom:14px;color:#b9a683;opacity:.85;font-size:13px;
     line-height:1.5;max-width:34em;pointer-events:none;text-shadow:0 1px 3px #000}
   #plaque b{color:#d8c9a3}
   #mirrorToggle{position:fixed;right:14px;top:12px;color:#b9a683;font-size:13px;
@@ -1407,9 +1407,23 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
     new THREE.MeshBasicMaterial({map:_micTex, transparent:true, depthTest:false, depthWrite:false}));
   micBadge.position.set(-0.20, -0.20, -0.6); micBadge.renderOrder = 2000;   // bottom-LEFT of view
   micBadge.visible = false;                                                 // XR only
+  // layer 3 = headset-only: XR eye cameras inherit the base camera's layer mask, but the
+  // desktop mirror (headcamCam) and spectator (specCam) stay on layer 0 — so the badge
+  // never photobombs the desktop view of a VR session (Nix's screenshot, 2026-07-07)
+  micBadge.layers.set(3);
+  camera.layers.enable(3);
   camera.add(micBadge);
   renderer.xr.addEventListener('sessionstart', ()=>{ micBadge.visible = true; });
   renderer.xr.addEventListener('sessionend',   ()=>{ micBadge.visible = false; });
+  // desktop DOM icon rides just above the plaque text, flush-left with the pane
+  {
+    const plaqueEl = document.getElementById('plaque'), michudEl = document.getElementById('michud');
+    if(plaqueEl && michudEl){
+      const place = ()=>{ michudEl.style.bottom = (plaqueEl.offsetHeight + 24) + 'px'; };
+      try{ new ResizeObserver(place).observe(plaqueEl); }catch(e){}
+      place();
+    }
+  }
   const MIC_COL = {off:'#c05555', live:'#8a93a2', talk:'#ffc36b'};
   function micState(s){
     if(micDot) micDot.style.color = MIC_COL[s] || MIC_COL.off;
