@@ -92,6 +92,7 @@ scene.background = new THREE.Color(0x05060d);
 scene.fog = new THREE.Fog(0x0d0f16, 25, 130);
 
 const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600);
+window.__cam = camera; window.__renderer = renderer;            // debug: headless render probes
 camera.position.set(0, 1.6, 0);
 
 // player rig: locomotion moves this; headset/mouse aims the camera inside it
@@ -611,7 +612,7 @@ if(_residentPick){
       return 'working: '+workingOn;
     }
     function endSpeak(){ speaking=false; bubMesh.visible=false;
-      if(vrm.expressionManager) vrm.expressionManager.setValue('aa',0);
+      if(vrm.expressionManager){ vrm.expressionManager.setValue('aa',0); vrm.expressionManager.setValue('oh',0); }
       setState(workingOn ? 'working' : 'idle'); clearLook();
       if(!walking && !emoteUntil) crossfade(workingOn ? 'dance' : 'idle'); }
     function say(text,{rate=1, keepWorking=false}={}){ if(!text) return;
@@ -783,7 +784,11 @@ if(_residentPick){
         else { if(!walking){ walking=true; if(!speaking) crossfade('walk'); }
           const step=Math.min(d, WALKSPD*dt); r.x+=dx/d*step; r.z+=dz/d*step;
           vrm.scene.rotation.y = Math.atan2(dx,dz); } }
-      if(speaking && vrm.expressionManager) vrm.expressionManager.setValue('aa', 0.35*(0.5+0.5*Math.sin(t*11)));
+      if(speaking && vrm.expressionManager){                     // livelier jaw: peaks ~1.0, closes between syllables so it reads as talking (Nix caught the old 0.35 quiver)
+        const em=vrm.expressionManager, jaw=0.5+0.5*Math.sin(t*15);
+        em.setValue('aa', 0.15 + 0.85*jaw*jaw);                   // jaw² → more time closed = snappier, speech-like
+        em.setValue('oh', 0.18*(0.5+0.5*Math.sin(t*6.3+1)));      // faint roundness variety so it's not a metronome
+      }
       if(speaking && t>speakEnd) endSpeak();
       if(emoteUntil && t>emoteUntil){ emoteUntil=0; if(!speaking&&!walking) crossfade('idle'); }
       if(stateName==='thinking' || stateName==='speaking') drawTag();
@@ -814,6 +819,7 @@ if(_residentPick){
       }
     }
     residentVrm = vrm;
+    window.__residentVrm = vrm;                                  // debug: headless viseme A/B
     // head world-position for the facing-gate sphere (falls back to scene pos + eye height)
     const _headBone = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode('head') : null;
     const _headV = new THREE.Vector3();
