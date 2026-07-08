@@ -275,9 +275,9 @@ const playa = new THREE.Mesh(
           vec3 tex = t1 * mix(vec3(1.0), t2 * 2.0, 0.30);
           float lum = dot(tex, vec3(0.299, 0.587, 0.114));
           tex = mix(vec3(lum), tex, 0.32);                         // DESAT: kill the orange cast
-          tex = pow(tex, vec3(1.12));                              // LOW contrast (Nix rev.3)
+          tex = pow(tex, vec3(0.9));                               // even LESS contrast — lift the crack darks (Nix rev.4)
           vec3 texCol = tex * (0.16 + 0.05*n) * (0.9 + 0.2*mottle) * vec3(0.94, 0.96, 1.04);
-          col = mix(col, texCol, 0.8);                             // PHOTO_MIX: mostly photo
+          col = mix(col, texCol, 0.6);                             // PHOTO_MIX: dialed down so cracks read as soft detail, not lines
         } else {
         // procedural-only path keeps its crack/fine/crest layers; the photo has its OWN
         // cracks — stacking both was the 'ropy overlay' (Nix rev.3)
@@ -288,6 +288,11 @@ const playa = new THREE.Mesh(
         }
         float d2 = dot(p - uCandle.xz, p - uCandle.xz);            // deck-glow spill
         col += vec3(0.50, 0.28, 0.10) * exp(-d2 * 0.55) * (uFlick * 0.05);
+        // teeny moonlit specular: raised/lighter grains catch a cool glint at grazing angles (Nix rev.4)
+        vec3 Vd = normalize(cameraPosition - vWorld);
+        float graze = clamp(1.0 - Vd.y, 0.0, 1.0);
+        float crest = smoothstep(0.68, 0.95, n);
+        col += vec3(0.32, 0.39, 0.55) * crest * pow(graze, 3.0) * 0.05;
         // brighter near the viewer, fade to black in the distance
         float dcam = length(vWorld - cameraPosition);
         col *= mix(1.5, 1.0, smoothstep(0.0, 11.0, dcam));         // lift close to you
@@ -444,7 +449,7 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
 
 // ---- a literal mirror, framed, to the left of the bookcases (so you can see yourself) ----
 {
-  const MW = 1.0, MH = 1.9;
+  const MW = 1.5, MH = 2.4;   // taller + wider (Nix): readable nametags, better with guests
   // TRUE mirror. 0x808080 is the identity color for the Reflector's overlay-blend shader
   // (blendOverlay(base, 0.5) === base); the old 0x8891a0 overlaid a blue-grey wash → "colors
   // not true", and white would BLOW the highlights, not clear the tint. Screen-res render
@@ -472,7 +477,7 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   mir.add(bar(0.09, MH+0.16, -MW/2-0.04, 0));  // left
   mir.add(bar(0.09, MH+0.16,  MW/2+0.04, 0));  // right
   // stand it on the deck, to the LEFT of the bookcases (-x when facing them), angled toward spawn
-  mir.position.set(-2.55, MH/2 + 0.02, -1.7);
+  mir.position.set(-2.85, MH/2 + 0.02, -1.7);   // nudged left so the extra width grows leftward, clear of the bookcases
   mir.rotation.y = Math.PI * 0.32;
   scene.add(mir);
 }
@@ -1133,6 +1138,7 @@ if(!new URLSearchParams(location.search).has('noembody')){
     window.__setHeadScale = (s)=>{
       const show = s > 0.5;
       _headMeshes.forEach(m=>{ m.visible = show; });
+      tag.visible = show;                                         // your own nameplate: hidden from your eyes, shown in mirror/spectator (Nix: it blocked the stars when looking up)
       if(headBone){ headBone.scale.setScalar(show ? 1 : 0.0001); headBone.updateMatrixWorld(true); }
     };
     window.__setHeadScale(0);
