@@ -806,7 +806,7 @@ addEventListener('keyup',   e=>{
   keys[e.code] = false; });
 
 // ---- avatar builder: capsule + a little face (so facing reads) + floating nameplate ----
-const playerName = new URLSearchParams(location.search).get('name') || 'Rabscuttle';   // Exultation handle — naming safety: never her real name in Exultation media
+const playerName = new URLSearchParams(location.search).get('name') || 'guest';   // default is anonymous; Nix's name comes from her roster key (never a real name)
 const playerModel = new URLSearchParams(location.search).get('model') || 'human';   // occupant declares model; humans = 'human'
 // role → nameplate pill colors (grey visitor / teal builder / gold architect)
 const ROLE_STYLE = {
