@@ -14,7 +14,9 @@
 <style>
   html,body{margin:0;height:100%;background:#0a0c10;overflow:hidden;font-family:Georgia,serif}
   canvas{display:block}
-  #plaque{position:fixed;left:16px;bottom:14px;color:#b9a683;opacity:.85;font-size:13px;
+  #michud{position:fixed;left:14px;bottom:12px;width:42px;height:42px;z-index:45}
+  #michud img{width:100%;height:100%}
+  #plaque{position:fixed;left:66px;bottom:14px;color:#b9a683;opacity:.85;font-size:13px;
     line-height:1.5;max-width:34em;pointer-events:none;text-shadow:0 1px 3px #000}
   #plaque b{color:#d8c9a3}
   #mirrorToggle{position:fixed;right:14px;top:12px;color:#b9a683;font-size:13px;
@@ -59,6 +61,7 @@
 <div id="chatbar"><input id="chatinput" maxlength="280"
   placeholder="say something… (@Name addresses an agent from anywhere · Enter sends · Esc closes)"></div>
 <div id="dbgfeed"></div>
+<div id="michud"><img id="michudimg" alt="mic status"></div>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/",
 "@pixiv/three-vrm":"./vendor/three-vrm.module.js",
@@ -244,13 +247,17 @@ const playa = new THREE.Mesh(
         vec3 base = mix(vec3(0.018,0.017,0.022), vec3(0.046,0.041,0.050), mottle);
         vec3 col = base * (0.6 + 0.55*n);
         if(uHasMap > 0.5){
-          // photo albedo, tiled ~4.5m, de-repeated by sampling a 2nd rotated scale;
-          // darkened hard (night playa) and modulated by the procedural layers
+          // photo albedo (rev.2 — Nix: 'very orange, very rough'): desaturated hard toward
+          // the night-basalt palette, gentler gamma, and BLENDED with the procedural base
+          // (~55% photo) so the cracks read as detail, not carpet. Dials: DESAT, PHOTO_MIX.
           vec3 t1 = texture2D(uMap, p / 4.5).rgb;
           vec3 t2 = texture2D(uMap, vec2(p.y, -p.x) / 13.7).rgb;   // rotated macro break-up
-          vec3 tex = t1 * mix(vec3(1.0), t2 * 2.0, 0.35);
-          tex *= tex;                                              // gamma-darken for night
-          col = tex * (0.055 + 0.075*n) * (0.75 + 0.5*mottle);
+          vec3 tex = t1 * mix(vec3(1.0), t2 * 2.0, 0.30);
+          float lum = dot(tex, vec3(0.299, 0.587, 0.114));
+          tex = mix(vec3(lum), tex, 0.30);                         // DESAT: kill the orange cast
+          tex = pow(tex, vec3(1.35));                              // gentle night-darken (was tex*tex)
+          vec3 texCol = tex * (0.085 + 0.085*n) * (0.8 + 0.4*mottle) * vec3(0.92, 0.95, 1.05);
+          col = mix(col, texCol, 0.55);                            // PHOTO_MIX vs cool procedural
         }
         // ONE softer crack layer (was two hard ones = the "ropy" look), gentler contrast + wider
         float ridge = abs(noise(p*0.8) - 0.5) * 2.0;
@@ -426,7 +433,13 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
     color: 0x808080, textureWidth: mW, textureHeight: mH, clipBias: 0.003 });
   // the avatar is normally hidden; reveal it ONLY while the mirror renders its reflection
   const _obr = surface.onBeforeRender;
-  surface.onBeforeRender = function(r, s, c){ if(avatar) avatar.visible = true; _obr.call(this, r, s, c); if(avatar) avatar.visible = false; };
+  surface.onBeforeRender = function(r, s, c){
+    if(avatar && !playerVrm) avatar.visible = true;            // capsule only when NOT embodied (one body, not two)
+    if(window.__setHeadScale) window.__setHeadScale(1);        // mirror shows the whole head
+    _obr.call(this, r, s, c);
+    if(avatar) avatar.visible = false;
+    if(window.__setHeadScale) window.__setHeadScale(0);
+  };
   const mir = new THREE.Group();
   mir.add(surface);
   // low-poly frame: four dark beams around the glass so we know where it is
@@ -1016,6 +1029,11 @@ if(!new URLSearchParams(location.search).has('noembody')){
     const tag=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.366),
       new THREE.MeshBasicMaterial({map:drawNameplate(playerName,'visitor',playerModel),transparent:true,depthTest:false,depthWrite:false}));
     tag.position.set(0,2.16,0); tag.renderOrder=999; tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam); vrm.scene.add(tag);
+    // first-person head hiding (VRChat's shrunken-head trick, Nix's ask): scale the head
+    // bone to ~0 for YOUR eyes; mirror + 3rd-person renders restore it around their pass.
+    const headBone = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode('head') : null;
+    window.__setHeadScale = (s)=>{ if(headBone){ headBone.scale.setScalar(s > 0.5 ? 1 : 0.0001); } };
+    window.__setHeadScale(0);
     playerVrm=vrm; window.__playerVrm=vrm;
     console.log('embodied: claude_suit petals='+petals);
   })().catch(e=>console.error('embody failed', e));
@@ -1340,27 +1358,39 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
   // a FACED local resident live (its ear pill = active attention).
   let recogG=null, recogOn=false;
 
-  // ---- mic status indicator (Nix, first VR session: "can't tell if my mic is live") ----
-  // Desktop: colored dot beside the 🎙 label. VR: small camera-anchored badge, bottom-right
-  // of view. grey = off · teal = live (transcribing) · amber = TALKING (producing volume).
-  // VR mute toggle: B/Y button (A/X = jump).
+  // ---- mic status indicator rev.2 (Nix): BOTTOM-LEFT, both modes. Semantics:
+  //   muted  = RED ring + slash (unmissable "you are silent")
+  //   live   = grey, whole icon alpha'd down (armed, hearing nothing)
+  //   sound  = BRIGHT amber ring + glow (your voice is entering the world right now)
+  // Desktop: DOM icon (the 3D badge floated mid-screen there). VR: camera-anchored
+  // badge, XR sessions only. One canvas feeds both. B/Y toggles mic in VR.
   const micDot = document.getElementById('micDot');
+  const micHudImg = document.getElementById('michudimg');
   const _micCanvas = document.createElement('canvas'); _micCanvas.width=_micCanvas.height=64;
   const _micTex = new THREE.CanvasTexture(_micCanvas);
   const micBadge = new THREE.Mesh(new THREE.PlaneGeometry(0.055, 0.055),
     new THREE.MeshBasicMaterial({map:_micTex, transparent:true, depthTest:false, depthWrite:false}));
-  micBadge.position.set(0.20, -0.20, -0.6); micBadge.renderOrder = 2000;
+  micBadge.position.set(-0.20, -0.20, -0.6); micBadge.renderOrder = 2000;   // bottom-LEFT of view
+  micBadge.visible = false;                                                 // XR only
   camera.add(micBadge);
-  const MIC_COL = {off:'#5a6474', live:'#3a8a8a', talk:'#e0a53c'};
+  renderer.xr.addEventListener('sessionstart', ()=>{ micBadge.visible = true; });
+  renderer.xr.addEventListener('sessionend',   ()=>{ micBadge.visible = false; });
+  const MIC_COL = {off:'#c05555', live:'#8a93a2', talk:'#ffc36b'};
   function micState(s){
     if(micDot) micDot.style.color = MIC_COL[s] || MIC_COL.off;
     const g=_micCanvas.getContext('2d'); g.clearRect(0,0,64,64);
-    g.fillStyle='rgba(10,12,16,0.72)'; g.beginPath(); g.arc(32,32,29,0,7); g.fill();
-    g.strokeStyle=MIC_COL[s]||MIC_COL.off; g.lineWidth=4; g.beginPath(); g.arc(32,32,29,0,7); g.stroke();
+    g.globalAlpha = s==='live' ? 0.42 : 1;                    // armed-but-quiet: ghosted
+    g.fillStyle = s==='talk' ? 'rgba(30,24,12,0.88)' : 'rgba(10,12,16,0.72)';
+    g.beginPath(); g.arc(32,32,29,0,7); g.fill();
+    if(s==='talk'){ g.shadowColor='#ffc36b'; g.shadowBlur=10; }
+    g.strokeStyle=MIC_COL[s]||MIC_COL.off; g.lineWidth = s==='talk' ? 5 : 4;
+    g.beginPath(); g.arc(32,32,29,0,7); g.stroke(); g.shadowBlur=0;
     g.font='30px serif'; g.textAlign='center'; g.textBaseline='middle';
-    g.globalAlpha = s==='off' ? 0.45 : 1; g.fillText('🎙',32,34); g.globalAlpha=1;
-    if(s==='off'){ g.strokeStyle='#c05555'; g.lineWidth=5; g.beginPath(); g.moveTo(14,50); g.lineTo(50,14); g.stroke(); }
+    g.fillText('🎙',32,34);
+    if(s==='off'){ g.strokeStyle=MIC_COL.off; g.lineWidth=5; g.beginPath(); g.moveTo(14,50); g.lineTo(50,14); g.stroke(); }
+    g.globalAlpha = 1;
     _micTex.needsUpdate = true;
+    if(micHudImg) micHudImg.src = _micCanvas.toDataURL();     // desktop corner icon
   }
   micState('off');
   window.__micState = micState;   // headless/test introspection hook
@@ -1718,7 +1748,8 @@ renderer.setAnimationLoop((now)=>{
     const xrCam = renderer.xr.getCamera();
     let cam = null;
     if(spec3rd.checked){                          // 3rd person: show the labelled avatar from behind
-      avatar.visible = true;
+      if(!playerVrm) avatar.visible = true;       // one body: capsule only when not embodied
+      if(window.__setHeadScale) window.__setHeadScale(1);
       const back = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
       specCam.position.copy(player.position).addScaledVector(back, 3.2); specCam.position.y = 2.3;
       specCam.lookAt(player.position.x, player.position.y + 1.4, player.position.z);
@@ -1737,6 +1768,7 @@ renderer.setAnimationLoop((now)=>{
     renderer.setRenderTarget(oldFB);
     renderer.xr.enabled = true;
     avatar.visible = false;
+    if(window.__setHeadScale) window.__setHeadScale(0);   // back to first-person shrunken head
   }
 });
 addEventListener('resize', ()=>{
