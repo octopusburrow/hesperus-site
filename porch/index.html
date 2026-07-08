@@ -477,7 +477,7 @@ if(_residentPick){
     let modelName = new URLSearchParams(location.search).get('residentModel') || 'AI model';   // established resident: generic default (Nix, 2026-07-07); override ?residentModel= or agent.setModel(). Player uses ?model=.
     let voiceOn = new URLSearchParams(location.search).get('voice') !== '0';   // declared early: drawTag reads it
     residentMixer = new THREE.AnimationMixer(vrm.scene);
-    const CLIP_SRC = { idle:'standing-idle', walk:'walk', talk:'talk', wave:'wave', cheer:'cheer', raise:'raise' };
+    const CLIP_SRC = { idle:'standing-idle', walk:'walk', talk:'talk', wave:'wave', cheer:'cheer', raise:'raise', dance:'dance' };
     const actions = {};
     for(const [name, stem] of Object.entries(CLIP_SRC)){
       try{
@@ -502,7 +502,7 @@ if(_residentPick){
     const mkCanvas=(w,h)=>{ const c=document.createElement('canvas'); c.width=w; c.height=h; return c; };
     const tagCanvas = mkCanvas(256,128);
     const tagTex = new THREE.CanvasTexture(tagCanvas); tagTex.colorSpace=THREE.SRGBColorSpace; tagTex.anisotropy=4;
-    const STATE_COL = { listening:'rgba(58,138,138,0.95)', thinking:'rgba(120,110,185,0.95)', speaking:'rgba(200,150,60,0.96)' };
+    const STATE_COL = { listening:'rgba(58,138,138,0.95)', thinking:'rgba(120,110,185,0.95)', speaking:'rgba(200,150,60,0.96)', working:'rgba(96,140,86,0.95)' };
     function drawEar(g,x,y){ g.save(); g.strokeStyle='#fff'; g.lineWidth=3; g.lineCap='round';
       g.beginPath(); g.arc(x,y,8,Math.PI*1.65,Math.PI*0.85,false); g.stroke();
       g.beginPath(); g.arc(x+1,y-1,4,Math.PI*1.55,Math.PI*0.7,false); g.stroke(); g.restore(); }
@@ -525,6 +525,7 @@ if(_residentPick){
         if(stateName==='listening') drawEar(g,ix,iy);
         else if(stateName==='thinking') drawDots(g,ix,iy);
         else if(stateName==='speaking') drawSound(g,ix,iy);
+        else if(stateName==='working'){ g.font='19px serif'; g.fillText('🛠',ix,iy+1); g.font='600 20px Georgia'; }
         g.fillStyle='#fff'; g.fillText(lbl,128+18,82);
       }
       tagTex.needsUpdate=true;
@@ -562,9 +563,22 @@ if(_residentPick){
     let resSock = null;   // the resident's own occupant socket (opened below, after load)
     let speaking=false, speakEnd=0, speakSeq=0;
     function setVoice(v){ voiceOn = !!v; drawTag(); return 'voice ' + (voiceOn?'on':'off'); }
+    // ---- working: do-not-disturb that dances (Nix, 2026-07-07). While on: tag pill
+    // 'working' + looping dance; pings CACHE instead of interrupting (respond() only
+    // fires from idle). Set/cleared via {t:"agentStatus"} from the terminal session's
+    // turn hooks — auto-clears when the turn ends, so 'available' can't be forgotten.
+    let workingOn=false;
+    function working(on){
+      workingOn=!!on;
+      if(workingOn){ if(!speaking){ setState('working'); crossfade('dance'); } }
+      else if(stateName==='working'){ setState('idle'); if(!speaking && !walking && !emoteUntil) crossfade('idle'); }
+      dbg('status', workingOn ? 'WORKING (dance on, pings cache)' : 'available', workingOn?'k':'g');
+      return 'working: '+workingOn;
+    }
     function endSpeak(){ speaking=false; bubMesh.visible=false;
       if(vrm.expressionManager) vrm.expressionManager.setValue('aa',0);
-      setState('idle'); clearLook(); if(!walking && !emoteUntil) crossfade('idle'); }
+      setState(workingOn ? 'working' : 'idle'); clearLook();
+      if(!walking && !emoteUntil) crossfade(workingOn ? 'dance' : 'idle'); }
     function say(text,{rate=1}={}){ if(!text) return;
       drawBubble(text); bubMesh.visible=true; setState('speaking'); if(!walking) crossfade('talk');
       const est = Math.max(1.6, text.split(/\s+/).length/2.6);
@@ -764,7 +778,7 @@ if(_residentPick){
       : _headV.set(vrm.scene.position.x, vrm.scene.position.y+1.45, vrm.scene.position.z).clone();
     window.agent = { say, emote, walkTo, follow, stay, command, setState,
       startMic, stopMic, simulateHear, lookAtSource, clearLook, setModel,
-      setVoice, hearRemote, ping, sayError,
+      setVoice, hearRemote, ping, sayError, working,
       setBrainTimeout:(ms)=>{ brainTimeoutMs = Math.max(1000, ms|0) || brainTimeoutMs; },
       setBrain:(fn)=>{ onUtterance = fn; },
       pos:()=>vrm.scene.position.toArray(), rotY:()=>vrm.scene.rotation.y,
@@ -1159,6 +1173,8 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); } }
     else if(m.t === 'vol' && m.id !== myNet){                     // mic-volume edges from humans
       const r = remotes.get(m.id); if(r) setMegaphone(r.group, !!m.on); }
+    else if(m.t === 'agentStatus'){                               // terminal session's turn hooks
+      if(window.agent && m.target === window.agent.name) window.agent.working(!!m.working); }
     else if(m.t === 'chat' && m.id !== myNet){                 // typed chat: bubble for everyone;
       const r = remotes.get(m.id);                             // addressed (@/facing) → ping the
       const who = (r && r.group.userData.name) || m.name || 'guest';   // resident; in earshot → cache
