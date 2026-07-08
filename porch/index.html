@@ -24,11 +24,14 @@
     text-align:right;line-height:1.7}
   #mirrorToggle input{vertical-align:middle;margin-right:5px}
   #mirrorToggle label{cursor:pointer}
-  #chatbar{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);display:none;
-    width:min(520px,80vw)}
+  #chatbar{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);
+    width:min(520px,80vw);opacity:.6;transition:opacity .15s}
+  #chatbar.hid{display:none}
+  #chatbar:focus-within{opacity:1}
   #chatbar input{width:100%;box-sizing:border-box;padding:9px 12px;font:15px Georgia,serif;
     color:#eae2d0;background:rgba(14,16,22,0.88);border:1px solid #3a3f4c;border-radius:9px;
     outline:none}
+  #chatbar input:focus{border-color:#6d8fbf}
   #dbgfeed{position:fixed;right:10px;bottom:10px;width:380px;max-height:46vh;display:none;
     overflow-y:auto;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#b8c4d0;
     background:rgba(8,10,14,0.82);border:1px solid #2a3040;border-radius:8px;padding:8px 10px;
@@ -59,7 +62,7 @@
   <div id="roomTag" style="margin-top:9px;font-size:12px;opacity:.9"></div>
 </div>
 <div id="chatbar"><input id="chatinput" maxlength="280"
-  placeholder="say something… (@Name addresses an agent from anywhere · Enter sends · Esc closes)"></div>
+  placeholder="type to talk — click or press Enter, then type · @Name to address an agent"></div>
 <div id="dbgfeed"></div>
 <div id="michud"><img id="michudimg" alt="mic status"></div>
 <script type="importmap">
@@ -561,7 +564,7 @@ if(_residentPick){
     bubMesh.onBeforeRender=(r,s,cam)=>uprightBillboard(bubMesh,cam); vrm.scene.add(bubMesh);
     // scalable bubble (Nix, live in-world 2026-07-07): canvas height + mesh scale grow
     // with line count so long replies aren't clipped; tail stays anchored, grows upward.
-    const BUB_W=512, BUB_LH=32, BUB_PADTOP=28, BUB_TAIL=34, BUB_MAXLINES=14;
+    const BUB_W=512, BUB_LH=32, BUB_PADTOP=28, BUB_TAIL=34, BUB_MAXLINES=5;  // Nix: keep it small + capped
     function drawBubble(text){
       const g=bubCanvas.getContext('2d'); g.font='25px Georgia';
       const words=text.split(/\s+/); let line=''; const lines=[];
@@ -1331,15 +1334,19 @@ function remoteInEarshot(id){                                  // remote sender 
   return Math.hypot(r.tp.x-ap[0], r.tp.z-ap[2]) <= EARSHOT_M;
 }
 {
+  // desktop: chat bar is ALWAYS visible (Nix: "how do I type to you?") — click it or
+  // press Enter to focus, type, Enter sends + unfocuses so WASD works again. Hidden in VR.
   const bar = document.getElementById('chatbar'), inp = document.getElementById('chatinput');
-  window.__openChat = ()=>{ bar.style.display='block'; inp.focus(); };
-  function closeChat(){ bar.style.display='none'; inp.value=''; inp.blur(); }
+  window.__openChat = ()=>{ bar.classList.remove('hid'); inp.focus(); };
+  function closeChat(){ inp.value=''; inp.blur(); }             // stays visible, just unfocus
   inp.addEventListener('keydown', (e)=>{
     e.stopPropagation();
     if(e.key==='Escape'){ closeChat(); return; }
     if(e.key!=='Enter') return;
     const text = inp.value.trim(); closeChat(); if(text) sendChatText(text);
   });
+  renderer.xr.addEventListener('sessionstart', ()=> bar.classList.add('hid'));
+  renderer.xr.addEventListener('sessionend',   ()=> bar.classList.remove('hid'));
   window.__sendChat = sendChatText;                             // headless/test entrypoint
 }
 
