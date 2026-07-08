@@ -745,7 +745,10 @@ if(_residentPick){
       setState('thinking');                                   // generating a response
       dbg('brain', `→ "${prompt.slice(0,80)}" (cache: ${backlog.length})`);
       const _t0 = Date.now();
-      let settled=false, watchdog=null;
+      let settled=false, watchdog=null, busyTimer=null;
+      // heads-down > 12s → auto working+dance so she SEES I'm busy (no manual porch_working needed;
+      // quick replies settle first and stay calm — no dance-on-every-reply, which Nix didn't want)
+      busyTimer = setTimeout(()=>{ if(!settled && !speaking){ setState('working'); if(!walking && !emoteUntil) crossfade('dance'); dbg('status','heads-down >12s → auto working+dance','k'); } }, 12000);
       const arm = ()=>{ if(watchdog) clearTimeout(watchdog);
         watchdog = setTimeout(()=>{
           if(settled) return;                                 // busy ≠ dead: terminal-me is mid work-turn; late replies still land
@@ -756,11 +759,11 @@ if(_residentPick){
       const progress = ()=>{ if(!settled) arm(); };           // streaming brains: call per chunk
       arm();
       Promise.resolve().then(()=> onUtterance(prompt, backlog.slice(), progress)).then(reply=>{
-        settled=true; clearTimeout(watchdog);
+        settled=true; clearTimeout(watchdog); clearTimeout(busyTimer);
         dbg('brain', `← ${((Date.now()-_t0)/1000).toFixed(1)}s: ${reply ? '"'+String(reply).slice(0,80)+'"' : '(intentional silence)'}`, 'g');
         const wait = Math.max(0, 650 - (Date.now() - _t0));   // let 'thinking' read even with an instant stub brain
         setTimeout(()=>{ if(reply) say(reply); else { setState(workingOn?'working':'idle'); clearLook(); } }, wait);
-      }).catch(e=>{ settled=true; clearTimeout(watchdog);
+      }).catch(e=>{ settled=true; clearTimeout(watchdog); clearTimeout(busyTimer);
         const msg=String(e && e.message || e);
         dbg('brain', `ERROR ${((Date.now()-_t0)/1000).toFixed(1)}s: ${msg.slice(0,90)}`, 'e');
         if(/timeout/i.test(msg)) say("(sorry — I got pulled into something for a while there. Say that again?)");
@@ -1257,7 +1260,9 @@ function renderPanel(){
   el.innerHTML = roleLine + `room: <b>${_room}</b> &middot; <a href="#" id="copyRoom" style="color:#8fb3ff">copy invite link</a>`;
   const c = document.getElementById('copyRoom');
   if(c) c.onclick = (e)=>{ e.preventDefault();
-    navigator.clipboard?.writeText(location.href).then(()=>{ c.textContent='copied!';
+    const u = new URL(location.href);                          // NEVER share the brain/roster secrets or identity params (public tunnel!)
+    ['brain','key','secret','name','resident'].forEach(k=> u.searchParams.delete(k));
+    navigator.clipboard?.writeText(u.toString()).then(()=>{ c.textContent='copied!';
       setTimeout(()=> c.textContent='copy invite link', 1600); }); };
 }
 function showRoom(room){ _room = room; renderPanel(); }
