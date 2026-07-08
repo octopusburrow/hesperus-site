@@ -810,18 +810,29 @@ if(_residentPick){
       get voice(){return voiceOn;}, get backlog(){return backlog.slice();} };
     window.__agentUpdate = agentUpdate;
     // ---- real brain: ?brain=<relay-url-with-secret> wires the LLM relay ----
-    // Contract: POST {text, speaker, backlog} → {reply}. Errors throw → the plain
-    // spoken "(brain error: …)" path. Relay poll ceiling 110s < 120s watchdog.
+    // Transport: brain-over-WEBSOCKET (2026-07-07) — requests ride the already-connected
+    // sync socket; the sync server calls the relay over WSL-internal loopback. Solves both
+    // Chrome PNA (public page → localhost fetch) AND the Windows→WSL firewall that only
+    // passes the sync port. Direct fetch remains as fallback when no socket exists.
     const brainUrl = new URLSearchParams(location.search).get('brain');
     if(brainUrl){
-      onUtterance = async (text, backlog, progress)=>{
-        const res = await fetch(brainUrl, {method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({text, speaker:'', backlog})});
-        if(!res.ok) throw new Error(`relay ${res.status}: ${(await res.text()).slice(0,60)}`);
-        return (await res.json()).reply;
-      };
-      console.log('brain: relay wired');
+      const bm = brainUrl.match(/:(\d+)\/brain\/([^\/?&]+)/);
+      const bport = bm ? +bm[1] : 8930, bsecret = bm ? bm[2] : '';
+      let brainSeq = 0;
+      onUtterance = (text, backlog, progress)=> new Promise((resolve, reject)=>{
+        if(sock && sock.readyState === 1){
+          const reqId = 'b' + (++brainSeq) + '_' + myNet;
+          window.__brainPending.set(reqId, {resolve, reject});
+          sock.send(JSON.stringify({t:'brainReq', reqId, port:bport, secret:bsecret, text, speaker:'', backlog}));
+          setTimeout(()=>{ if(window.__brainPending.delete(reqId)) reject(new Error('brain socket timeout')); }, 118000);
+        } else {
+          fetch(brainUrl, {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({text, speaker:'', backlog})})
+            .then(async res=>{ if(!res.ok) throw new Error(`relay ${res.status}`); resolve((await res.json()).reply); })
+            .catch(reject);
+        }
+      });
+      console.log('brain: wired via sync socket (fetch fallback)');
     }
     window.__resident = {size: vs.toArray(), pos: vrm.scene.position.toArray(), clips:Object.keys(actions)};
     document.getElementById('plaque').innerHTML +=
@@ -1100,6 +1111,7 @@ window.__updatePlayerIK=updatePlayerIK;
 // ---- co-presence: connect to a sync room (?sync=wss://…) and render remote players ----
 const remotes = new Map();   // id -> {group, tp:Vector3, try:number}
 window.__remotes = remotes;  // exposed for headless tests (tp = pose truth, pre-lerp)
+window.__brainPending = new Map();   // reqId -> {resolve, reject} (brain-over-websocket)
 const spawnedObjs = new Map(); let lastSpawnSid = null; // sid -> mesh (ephemeral maker objects)
 function makePrim(kind, color){
   const c = (color ?? 0xffb45e);
@@ -1201,8 +1213,12 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); } }
     else if(m.t === 'vol' && m.id !== myNet){                     // mic-volume edges from humans
       const r = remotes.get(m.id); if(r) setMegaphone(r.group, !!m.on); }
-    else if(m.t === 'agentStatus'){                               // terminal session's turn hooks
+    else if(m.t === 'agentStatus'){                               // deliberate working switch
       if(window.agent && m.target === window.agent.name) window.agent.working(!!m.working); }
+    else if(m.t === 'brainResp'){                                 // brain-over-websocket reply
+      const p = window.__brainPending.get(m.reqId);
+      if(p){ window.__brainPending.delete(m.reqId);
+        if(m.error) p.reject(new Error(m.error)); else p.resolve(m.reply); } }
     else if(m.t === 'chat' && m.id !== myNet){                 // typed chat: bubble for everyone;
       const r = remotes.get(m.id);                             // addressed (@/facing) → ping the
       const who = (r && r.group.userData.name) || m.name || 'guest';   // resident; in earshot → cache
