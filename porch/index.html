@@ -1048,10 +1048,19 @@ if(!new URLSearchParams(location.search).has('noembody')){
     tag.position.set(0,2.16,0); tag.renderOrder=999; tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam); vrm.scene.add(tag);
     // first-person head hiding (VRChat's shrunken-head trick, Nix's ask): scale the head
     // bone to ~0 for YOUR eyes; mirror + 3rd-person renders restore it around their pass.
-    // RAW bone, not normalized: three-vrm only propagates ROTATION from the normalized
-    // rig — scale on the normalized node never reaches the mesh (why rev.1 didn't work)
+    // head hide rev.3 (weight-map probe, 2026-07-07): the claudesona's "head" is the
+    // 'flower' mesh skinned to its OWN petal bones + rigid face/blush meshes — none of it
+    // follows the humanoid head bone, so bone-scaling never hid it. Hide the actual
+    // meshes for first-person; mirror + spectator hooks restore them for their pass.
     const headBone = vrm.humanoid ? (vrm.humanoid.getRawBoneNode ? vrm.humanoid.getRawBoneNode('head') : vrm.humanoid.getNormalizedBoneNode('head')) : null;
-    window.__setHeadScale = (s)=>{ if(headBone){ headBone.scale.setScalar(s > 0.5 ? 1 : 0.0001); headBone.updateMatrixWorld(true); } };
+    const _hideNames = new Set(['flower','face','Cube','Cube_1','Cube_2']);
+    const _headMeshes = [];
+    vrm.scene.traverse(o=>{ if((o.isMesh||o.isSkinnedMesh) && _hideNames.has(o.name)) _headMeshes.push(o); });
+    window.__setHeadScale = (s)=>{
+      const show = s > 0.5;
+      _headMeshes.forEach(m=>{ m.visible = show; });
+      if(headBone){ headBone.scale.setScalar(show ? 1 : 0.0001); headBone.updateMatrixWorld(true); }
+    };
     window.__setHeadScale(0);
     playerVrm=vrm; window.__playerVrm=vrm;
     console.log('embodied: claude_suit petals='+petals);
