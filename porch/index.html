@@ -559,17 +559,29 @@ if(_residentPick){
       new THREE.MeshBasicMaterial({map:bubTex,transparent:true,depthTest:false,depthWrite:false}));
     bubMesh.position.set(0, vs.y+0.72, 0); bubMesh.renderOrder=1000; bubMesh.visible=false;
     bubMesh.onBeforeRender=(r,s,cam)=>uprightBillboard(bubMesh,cam); vrm.scene.add(bubMesh);
+    // scalable bubble (Nix, live in-world 2026-07-07): canvas height + mesh scale grow
+    // with line count so long replies aren't clipped; tail stays anchored, grows upward.
+    const BUB_W=512, BUB_LH=32, BUB_PADTOP=28, BUB_TAIL=34, BUB_MAXLINES=14;
     function drawBubble(text){
-      const g=bubCanvas.getContext('2d'); g.clearRect(0,0,512,208);
-      g.fillStyle='rgba(14,16,22,0.85)'; g.beginPath(); g.roundRect(6,6,500,158,16); g.fill();
-      g.beginPath(); g.moveTo(238,162); g.lineTo(256,196); g.lineTo(274,162); g.closePath(); g.fill();
-      g.fillStyle='#eae2d0'; g.font='25px Georgia'; g.textAlign='center'; g.textBaseline='top';
-      const words=text.split(/\s+/); let line='', y=34; const lines=[];
+      const g=bubCanvas.getContext('2d'); g.font='25px Georgia';
+      const words=text.split(/\s+/); let line=''; const lines=[];
       for(const w of words){ const test=line?line+' '+w:w;
         if(g.measureText(test).width>468 && line){ lines.push(line); line=w; } else line=test; }
       if(line) lines.push(line);
-      for(const l of lines.slice(0,4)){ g.fillText(l,256,y); y+=32; }
+      if(lines.length>BUB_MAXLINES){ lines.length=BUB_MAXLINES; lines[BUB_MAXLINES-1]+=' …'; }
+      const boxH = BUB_PADTOP*2 + lines.length*BUB_LH;
+      const H = boxH + BUB_TAIL;
+      bubCanvas.height = H;                                    // resize → clears
+      g.font='25px Georgia'; g.textAlign='center'; g.textBaseline='top';
+      g.fillStyle='rgba(14,16,22,0.85)'; g.beginPath(); g.roundRect(6,6,BUB_W-12,boxH-12,16); g.fill();
+      g.beginPath(); g.moveTo(238,boxH-2); g.lineTo(256,H-4); g.lineTo(274,boxH-2); g.closePath(); g.fill();
+      g.fillStyle='#eae2d0'; let y=BUB_PADTOP;
+      for(const l of lines){ g.fillText(l,BUB_W/2,y); y+=BUB_LH; }
       bubTex.needsUpdate=true;
+      // keep on-screen width constant (1.25), scale height by aspect, anchor the tail tip
+      const worldH = 1.25 * (H/BUB_W);
+      bubMesh.scale.set(1, worldH/0.508, 1);
+      bubMesh.position.y = (vs.y+0.72-0.254) + worldH/2;        // bottom edge stays put
     }
 
     // ---- speech (out-loud TTS + visible words + mouth) ----
