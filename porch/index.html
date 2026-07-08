@@ -27,6 +27,12 @@
   #chatbar input{width:100%;box-sizing:border-box;padding:9px 12px;font:15px Georgia,serif;
     color:#eae2d0;background:rgba(14,16,22,0.88);border:1px solid #3a3f4c;border-radius:9px;
     outline:none}
+  #dbgfeed{position:fixed;right:10px;bottom:10px;width:380px;max-height:46vh;display:none;
+    overflow-y:auto;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#b8c4d0;
+    background:rgba(8,10,14,0.82);border:1px solid #2a3040;border-radius:8px;padding:8px 10px;
+    white-space:pre-wrap;word-break:break-word;z-index:50}
+  #dbgfeed .k{color:#7da7d9} #dbgfeed .e{color:#e08a8a} #dbgfeed .g{color:#8fc98f}
+  #dbgfeed .t{color:#5a6474}
 </style>
 </head>
 <body>
@@ -35,7 +41,7 @@
   <b>WASD</b> walk, <b>Space</b> jump (VR: left stick walks, right stick turns, A/X jumps).
   The lanterns mark the edge of the world, 100&nbsp;m out.<br>
   <b>Make:</b> <b>B</b> spawn a block · <b>arrows</b> nudge it · <b>X</b> remove it.
-  <b>Enter</b> chat (<b>@Name</b> addresses an agent from anywhere).<br>
+  <b>Enter</b> chat (<b>@Name</b> addresses an agent from anywhere). <b>`</b> debug feed.<br>
   <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
 </div>
 <div id="mirrorToggle">
@@ -52,6 +58,7 @@
 </div>
 <div id="chatbar"><input id="chatinput" maxlength="280"
   placeholder="say something… (@Name addresses an agent from anywhere · Enter sends · Esc closes)"></div>
+<div id="dbgfeed"></div>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/",
 "@pixiv/three-vrm":"./vendor/three-vrm.module.js",
@@ -544,6 +551,7 @@ if(_residentPick){
       const est = Math.max(1.6, text.split(/\s+/).length/2.6);
       speaking=true; speakEnd = t + est;
       // networked speech: other pages TTS it (if voice on), bubble it, megaphone it
+      dbg('say→', `${voiceOn?'📢 ':''}"${text.slice(0,80)}"`);
       if(resSock && resSock.readyState===1)
         resSock.send(JSON.stringify({t:'say', text, name:RESIDENT_NAME, voice:voiceOn}));
       // WALL-CLOCK fallback (seq-guarded): the render-clock check below stalls when rAF
@@ -615,20 +623,24 @@ if(_residentPick){
     function sayError(msg){ say(`(${String(msg).slice(0,120)})`); }
     function respond(prompt){
       setState('thinking');                                   // generating a response
+      dbg('brain', `→ "${prompt.slice(0,80)}" (cache: ${backlog.length})`);
       const _t0 = Date.now();
       let settled=false, watchdog=null;
       const arm = ()=>{ if(watchdog) clearTimeout(watchdog);
         watchdog = setTimeout(()=>{
-          if(!settled) sayError(`no response — brain timed out after ${Math.round((Date.now()-_t0)/1000)}s`);
+          if(!settled){ dbg('brain', `TIMEOUT after ${Math.round((Date.now()-_t0)/1000)}s (no progress)`, 'e');
+            sayError(`no response — brain timed out after ${Math.round((Date.now()-_t0)/1000)}s`); }
         }, brainTimeoutMs); };
       const progress = ()=>{ if(!settled) arm(); };           // streaming brains: call per chunk
       arm();
       Promise.resolve().then(()=> onUtterance(prompt, backlog.slice(), progress)).then(reply=>{
         settled=true; clearTimeout(watchdog);
+        dbg('brain', `← ${((Date.now()-_t0)/1000).toFixed(1)}s: ${reply ? '"'+String(reply).slice(0,80)+'"' : '(intentional silence)'}`, 'g');
         const wait = Math.max(0, 650 - (Date.now() - _t0));   // let 'thinking' read even with an instant stub brain
         setTimeout(()=>{ if(reply) say(reply); else { setState('idle'); clearLook(); } }, wait);
       }).catch(e=>{ settled=true; clearTimeout(watchdog);
         console.warn('brain error', e);
+        dbg('brain', `ERROR ${((Date.now()-_t0)/1000).toFixed(1)}s: ${String(e && e.message || e).slice(0,90)}`, 'e');
         sayError(`brain error: ${String(e && e.message || e).slice(0,80)}`); });
     }
     function onHeard(text){
@@ -641,6 +653,7 @@ if(_residentPick){
     function endUtterance(){
       const said=(transcript||'').trim(); transcript=''; listening=false;
       if(!said){ setState('idle'); clearLook(); return; }
+      dbg('hear', `ADDRESSED by ${playerName} (faced, local mic): ${said.slice(0,60)}`, 'g');
       remember(playerName, said, false);
       respond(said);
     }
@@ -650,7 +663,8 @@ if(_residentPick){
     function hearRemote(speaker, text, {typed=false, ping=true}={}){
       text=(text||'').trim(); if(!text) return;
       remember(speaker, text, typed);
-      if(!ping) return 'cached from '+speaker;
+      if(!ping){ dbg('hear', `cached ${speaker} (${typed?'typed':'said'}): ${text.slice(0,60)}`); return 'cached from '+speaker; }
+      dbg('hear', `ADDRESSED by ${speaker} (${typed?'typed':'said'}): ${text.slice(0,60)}`, 'g');
       if(stateName==='idle' && !listening){
         const r=[...remotes.values()].find(x=>x.group.userData.name===speaker);
         lookAtSource(r ? r.group : player);
@@ -780,6 +794,7 @@ let _spawnKinds = ['cube','sphere','cone'], _spawnI = 0;
 addEventListener('keydown', e=>{
   if(e.target && e.target.tagName==='INPUT' && e.target.type==='text') return;  // typing ≠ walking
   if(e.code==='Enter' && window.__openChat){ e.preventDefault(); window.__openChat(); return; }
+  if(e.code==='Backquote' && window.__toggleDbg){ e.preventDefault(); window.__toggleDbg(); return; }
   keys[e.code] = true; if(e.code==='Space') wantJump = true;
   if(e.code==='KeyB' && window.spawn){ window.spawn(_spawnKinds[_spawnI++ % _spawnKinds.length]); }
   if(e.code.startsWith('Arrow') && window.moveLast){ const d=0.25; e.preventDefault();
@@ -1095,8 +1110,10 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
   sock.onmessage = (ev)=>{
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
     if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
+      dbg('welcome', `#${m.id} ${m.display} (${myRole}) room=${m.room} proto=${m.proto}`, 'g');
       setAvatarRole(avatar, myRole); showRole(myRole, m.display);
       (m.spawns||[]).forEach(applySpawn); }               // replay existing ephemeral objects
+    else if(m.t === 'join'){ dbg('join', `${m.display} (${m.role})`, 'g'); }
     else if(m.t === 'spawn'){ applySpawn(m); }
     else if(m.t === 'despawn'){ removeSpawn(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
@@ -1112,9 +1129,11 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       } else if(m.role || m.model){ setAvatarRole(r.group, m.role, m.model); }
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
     }
-    else if(m.t === 'rtc'){ if(window.__rtcSignal) window.__rtcSignal(m); }
+    else if(m.t === 'rtc'){ if(m.to===myNet) dbg('rtc←', m.sdp ? m.sdp.type : (m.ice?'ice':'?'));
+      if(window.__rtcSignal) window.__rtcSignal(m); }
     else if(m.t === 'say' && m.id !== myNet){
       if(window.agent && m.name === window.agent.name) return;   // my own resident already spoke locally
+      dbg('say←', `${m.name||('#'+m.id)}${m.voice===false?' (text-only)':''}: ${(m.text||'').slice(0,90)}`);
       if(m.voice !== false) speak(m.text);                        // text-only agents: bubble, no audio
       const r = remotes.get(m.id);
       if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); } }
@@ -1124,21 +1143,27 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       const r = remotes.get(m.id);                             // addressed (@/facing) → ping the
       const who = (r && r.group.userData.name) || m.name || 'guest';   // resident; in earshot → cache
       if(r) showBubble(r.group, m.text);
+      let disp = 'no-agent';
       if(window.agent){
-        if(agentAddressed(window.agent.name, m.to, m.facing))
-          window.agent.hearRemote(who, m.text, {typed:true});
-        else if(remoteInEarshot(m.id))
-          window.agent.hearRemote(who, m.text, {typed:true, ping:false});
-      } }
+        if(agentAddressed(window.agent.name, m.to, m.facing)){
+          disp = '→ PING'; window.agent.hearRemote(who, m.text, {typed:true}); }
+        else if(remoteInEarshot(m.id)){
+          disp = '→ cache'; window.agent.hearRemote(who, m.text, {typed:true, ping:false}); }
+        else disp = '→ drop(far)';
+      }
+      dbg('chat←', `${who}: ${(m.text||'').slice(0,80)}  ${disp}`); }
     else if(m.t === 'stt' && m.id !== myNet){                  // remote speech: no bubble (voice is
       const r = remotes.get(m.id);                             // heard, not rendered). Faced agent
       const who = (r && r.group.userData.name) || m.name || 'guest';   // is pinged; earshot caches.
+      let disp = 'no-agent';
       if(window.agent){
-        if(m.facing && agentAddressed(window.agent.name, null, m.facing))
-          window.agent.hearRemote(who, m.text, {typed:false});
-        else if(remoteInEarshot(m.id))
-          window.agent.hearRemote(who, m.text, {typed:false, ping:false});
-      } }
+        if(m.facing && agentAddressed(window.agent.name, null, m.facing)){
+          disp = '→ PING (faced)'; window.agent.hearRemote(who, m.text, {typed:false}); }
+        else if(remoteInEarshot(m.id)){
+          disp = '→ cache'; window.agent.hearRemote(who, m.text, {typed:false, ping:false}); }
+        else disp = r ? '→ drop(far)' : '→ drop(unknown-pos)';
+      }
+      dbg('stt←', `${who}: ${(m.text||'').slice(0,80)}  ${disp}`); }
     else if(m.t === 'leave'){ const r = remotes.get(m.id); if(r){ scene.remove(r.group); remotes.delete(m.id); }
       if(window.__rtcDropPeer) window.__rtcDropPeer(m.id); }
   };
@@ -1153,6 +1178,7 @@ function sendChatText(text){
   text=(text||'').trim(); if(!text) return 'empty';
   const to = chatMentions(text);
   const facing = window.__gazeName ? window.__gazeName() : null;
+  dbg('chat→', `"${text.slice(0,70)}" to=[${to}] facing=${facing||'nobody'}`);
   if(sock && sock.readyState===1)
     sock.send(JSON.stringify({t:'chat', text, name:playerName, to, facing}));
   showBubble(avatar, text);                                     // own bubble (mirror/3rd-person)
@@ -1196,6 +1222,42 @@ function remoteInEarshot(id){                                  // remote sender 
   });
   window.__sendChat = sendChatText;                             // headless/test entrypoint
 }
+
+// ---- debug feed: the resident's subjective transcript, visible to everyone debugging ----
+// Everything the agent sees/hears/sends + dispositions (ping/cache/drop), brain latency,
+// errors, RTC states. Toggle: backtick (`) or ?debug=1. Ring-capped. (Nix, 2026-07-07:
+// "it would help me to help you if things are visible to both of us.")
+const DBG_MAX = 250;
+window.__dbgLog = [];
+function dbg(kind, detail, cls){
+  const ts = new Date();
+  const stamp = ts.toTimeString().slice(0,8) + '.' + String(ts.getMilliseconds()).padStart(3,'0').slice(0,1);
+  const entry = {ts: ts.getTime(), kind, detail: String(detail ?? '')};
+  window.__dbgLog.push(entry);
+  if(window.__dbgLog.length > DBG_MAX) window.__dbgLog.shift();
+  const el = document.getElementById('dbgfeed');
+  if(el && el.style.display !== 'none' && el.style.display !== ''){
+    const line = document.createElement('div');
+    line.innerHTML = `<span class="t">${stamp}</span> <span class="${cls||'k'}">${kind}</span> ${entry.detail.replace(/</g,'&lt;')}`;
+    el.appendChild(line);
+    while(el.childNodes.length > DBG_MAX) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  }
+}
+function toggleDbg(force){
+  const el = document.getElementById('dbgfeed');
+  const on = force !== undefined ? force : (el.style.display !== 'block');
+  el.style.display = on ? 'block' : 'none';
+  if(on){ el.innerHTML=''; window.__dbgLog.slice(-60).forEach(e=>{   // replay recent on open
+    const line=document.createElement('div');
+    const d=new Date(e.ts);
+    line.innerHTML=`<span class="t">${d.toTimeString().slice(0,8)}</span> <span class="k">${e.kind}</span> ${e.detail.replace(/</g,'&lt;')}`;
+    el.appendChild(line); });
+    el.scrollTop = el.scrollHeight; }
+  return on;
+}
+window.__toggleDbg = toggleDbg;
+if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(true), 50);
 
 // ---- facing-gate: the resident only listens when someone is FACING it (design: Nix,
 // 2026-07-07). A generous sphere (r=1.5m) around each AI occupant's head; a ray from your
@@ -1243,6 +1305,7 @@ function remoteInEarshot(id){                                  // remote sender 
         const res=e.results[i], txt=res[0].transcript;
         if(res.isFinal){ const f=txt.trim();
           if(f){
+            dbg('stt→', `"${f.slice(0,70)}" facing=${window.__gazeName()||'nobody'}`);
             if(sock && sock.readyState===1)
               sock.send(JSON.stringify({t:'stt', text:f, name:playerName, facing:window.__gazeName()}));
             // local resident: faced speech is owned by the interim→onHeard path (no double
@@ -1257,7 +1320,7 @@ function remoteInEarshot(id){                                  // remote sender 
     };
     recogG.onerror=(e)=>{ if(e.error==='not-allowed'){ micTalk.checked=false; console.warn('mic denied'); } };
     recogG.onend=()=>{ if(recogOn){ try{ recogG.start(); }catch(e){} } };
-    try{ recogG.start(); recogOn=true; }catch(e){ console.warn('mic failed', e); }
+    try{ recogG.start(); recogOn=true; dbg('mic', 'STT on', 'g'); }catch(e){ console.warn('mic failed', e); dbg('mic', 'start failed: '+e, 'e'); }
   }
   function micStop(){ recogOn=false; if(recogG){ try{ recogG.stop(); }catch(e){} recogG=null; }
     micQuiet(); }
@@ -1277,11 +1340,13 @@ function remoteInEarshot(id){                                  // remote sender 
 
   function openGate(id){
     gateOpen=true; gazeTargetId=id;
+    dbg('gaze', `OPEN → ${window.__gazeName ? (id==='resident' ? (window.agent&&window.agent.name)||'resident' : id) : id}`, 'g');
     if(id==='resident' && window.agent) window.agent.lookAtSource(player);   // attention: turn BEFORE speech
     else if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'gaze', target:id, on:true}));
   }
   function closeGate(){
     const was=gazeTargetId; gateOpen=false; gazeTargetId=null;
+    dbg('gaze', 'closed (grace expired)');
     if(was==='resident' && window.agent && window.agent.state==='idle') window.agent.clearLook();
     else if(was!=='resident' && sock && sock.readyState===1) sock.send(JSON.stringify({t:'gaze', target:was, on:false}));
   }
@@ -1341,7 +1406,8 @@ function remoteInEarshot(id){                                  // remote sender 
     p = {pc, panner:null, gain:null, el:null, stream:null, pendingIce:[]};
     peers.set(id, p);
     pc.onicecandidate = (e)=>{ if(e.candidate) sendRtc(id, {ice:e.candidate}); };
-    pc.oniceconnectionstatechange = ()=>{ if(['failed','closed','disconnected'].includes(pc.iceConnectionState)) teardownPeer(id); };
+    pc.oniceconnectionstatechange = ()=>{ dbg('rtc', `peer #${id} ice=${pc.iceConnectionState}`, pc.iceConnectionState==='connected'?'g':(['failed','disconnected'].includes(pc.iceConnectionState)?'e':'k'));
+      if(['failed','closed','disconnected'].includes(pc.iceConnectionState)) teardownPeer(id); };
     pc.ontrack = (e)=>{
       const ctx = ensureCtx(); if(!ctx) return;
       const stream = e.streams[0] || new MediaStream([e.track]);
@@ -1366,6 +1432,7 @@ function remoteInEarshot(id){                                  // remote sender 
   }
 
   async function offerTo(id){
+    dbg('rtc', `offering voice to #${id}`);
     const p = peerFor(id, true);
     const offer = await p.pc.createOffer({offerToReceiveAudio:true});
     await p.pc.setLocalDescription(offer);
