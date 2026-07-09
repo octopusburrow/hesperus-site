@@ -925,6 +925,10 @@ if(_residentPick){
     let emoteUntil=0;
     function emote(name){ const a=actions[name]; if(!a){ console.warn('no emote:',name); return; }
       crossfade(name,{loop:false,fade:0.22}); emoteUntil = t + (a.getClip().duration||1.5); return 'emote: '+name; }
+    // ---- face (expression presets via face life; blink is automatic for every VRM) ----
+    function face(name, secs){ if(!FACE_NAMES.includes(name)) return 'faces: '+FACE_NAMES.join(' · ');
+      faceLife(vrm).expr={name, t0:t, until:t+(secs||5)}; return 'face: '+name; }
+    window.__residentFace = face;                            // headless probe + agent affordance
 
     // ---- procedural emotes: gestures hand-authored FROM MATH (no mocap clip). Driven per-frame
     // by procTick(), which runs AFTER residentMixer.update in the loop so the math overwrites the
@@ -985,6 +989,11 @@ if(_residentPick){
       if(/\b(cheer|celebrate|hooray|woo+)\b/.test(low)) return emote('cheer');
       if(/\braise (your )?hand\b|\bhand up\b|\braise\b/.test(low)) return emote('raise');
       if(/\bdance\b/.test(low)) return emote('dance');
+      if(/\b(smile|grin|happy face|smiley)\b/.test(low)) return face('happy');       // expressions ("face X" = turn, above)
+      if(/\b(frown|sad face|look sad)\b/.test(low)) return face('sad');
+      if(/\b(scowl|angry face|grr+)\b/.test(low)) return face('angry');
+      if(/\b(gasp|surprised|shocked)\b/.test(low)) return face('surprised');
+      if(/\bcat ?face\b/.test(low)) return face('catface');
       if(/\b(the )?(candle|your spot|host spot)\b/.test(low)) return walkTo(1.7,-1.15);
       if(/\b(the )?(middle|centre|center)\b/.test(low)) return walkTo(0,0);
       return null; }
@@ -1214,7 +1223,8 @@ if(_residentPick){
           if(resSock && resSock.readyState===1)
             resSock.send(JSON.stringify({t:'pose', x:vrm.scene.position.x, y:vrm.scene.position.y,
               z:vrm.scene.position.z, ry:vrm.scene.rotation.y, name:RESIDENT_NAME,
-              color:0xffb45e, model:modelName||'ai'}));
+              color:0xffb45e, model:modelName||'ai',
+              face:(function(){ const s=_faceLife.get(vrm); return (s&&s.expr)?s.expr.name:undefined; })()}));
         }, 150);
       }
     }
@@ -1590,6 +1600,14 @@ if(!new URLSearchParams(location.search).has('noembody')){
       if(ey) window.__avatarEyeY=ey;
       console.log('avatar rest eye height: '+(ey?ey.toFixed(3):'unknown'));
     }catch(e){ console.warn('avatarEyeY failed', e); }
+    // leg rest measurements for foot IK: ankle height above the model floor + hip half-width
+    try{
+      const h3=vrm.humanoid, fL=h3.getNormalizedBoneNode('leftFoot'), uL=h3.getNormalizedBoneNode('leftUpperLeg'), hp3=h3.getNormalizedBoneNode('hips');
+      if(fL&&uL&&hp3){ vrm.scene.updateMatrixWorld(true);
+        vrm.userData.ankleH=Math.max(0.02, fL.getWorldPosition(new THREE.Vector3()).y - vrm.scene.position.y);
+        vrm.userData.hipHalfW=Math.max(0.04, Math.abs(uL.getWorldPosition(new THREE.Vector3()).x - hp3.getWorldPosition(new THREE.Vector3()).x));
+        console.log('leg rest: ankleH='+vrm.userData.ankleH.toFixed(3)+' hipHalfW='+vrm.userData.hipHalfW.toFixed(3)); }
+    }catch(e){ console.warn('leg measurement failed (foot IK will estimate)', e); }
     playerVrm=vrm; window.__playerVrm=vrm;
     console.log('embodied: claude_suit petals='+petals);
   })().catch(e=>console.error('embody failed', e));
@@ -1613,6 +1631,51 @@ try{ for(let i=0;i<4;i++){ const g=renderer.xr.getControllerGrip(i);
   // playspace coordinates ≈ world origin ≈ above the table. Same parent as the camera fixes it.
   player.add(g); _grips.push(g); } }catch(e){}
 window.__ikTargets={hmd:ikHmd, handL:ikHandL, handR:ikHandR};
+// ---- face life (2026-07-09, Nix: "facial expressions and blinking don't seem to be hooked up"):
+// both VRMs ship the full VRM-1 preset set (blink/happy/sad/angry/surprised/relaxed + toon's
+// custom 'catface') — all unwired until now. Pure functions (extraction-tested), applied to
+// EVERY embodied VRM (player, resident, remotes) right before its vrm.update(dt).
+function _blinkStep(st, t, rnd){                 // st mutates; rnd injected so tests are deterministic
+  if(st.next===undefined){ st.next=t+0.5+rnd()*2; st.t0=-1; }
+  if(t>=st.next){ st.t0=t; st.next=t+(rnd()<0.12 ? 0.3 : 2.2+rnd()*3.8); }   // 12% double-blink
+  if(st.t0<0) return 0;
+  const e=t-st.t0;                               // envelope: 70ms close · 50ms hold · 120ms open
+  if(e<0.07) return e/0.07;
+  if(e<0.12) return 1;
+  if(e<0.24) return 1-(e-0.12)/0.12;
+  return 0;
+}
+function _exprWeight(x, t){                      // x={t0,until}: 0.25s ease-in, hold, 0.45s ease-out
+  if(!x) return 0;
+  const up=Math.min(1,(t-x.t0)/0.25);
+  const dn=t>x.until ? Math.max(0,1-(t-x.until)/0.45) : 1;
+  return Math.max(0, up*dn);
+}
+const _faceLife=new WeakMap();                   // vrm → {blink:{}, expr:{name,t0,until}|null, active:name}
+function faceLife(vrm){ let s=_faceLife.get(vrm); if(!s){ s={blink:{}, expr:null, active:null}; _faceLife.set(vrm,s); } return s; }
+function applyFaceLife(vrm, tNow){
+  const em=vrm.expressionManager; if(!em) return;
+  const s=faceLife(vrm);
+  let ew=0;
+  if(s.expr){
+    ew=_exprWeight(s.expr, tNow);
+    if(s.active && s.active!==s.expr.name){ try{ em.setValue(s.active,0); }catch(e){} }
+    s.active=s.expr.name;
+    try{ em.setValue(s.expr.name, ew); }catch(e){}
+    if(ew<=0 && tNow>s.expr.until){ s.expr=null; }
+  } else if(s.active){ try{ em.setValue(s.active,0); }catch(e){} s.active=null; }
+  const bw=_blinkStep(s.blink, tNow, Math.random);
+  try{ em.setValue('blink', bw*(1-0.7*ew)); }catch(e){}     // strong expressions damp the blink
+}
+const FACE_NAMES=['happy','sad','angry','surprised','relaxed','neutral','catface'];
+let _myFace=null;                                // {name,t0,until} — mirrored onto the pose broadcast
+function setMyFace(name, secs){
+  if(!FACE_NAMES.includes(name)) return 'faces: '+FACE_NAMES.join(' · ');
+  _myFace={name, t0:t, until:t+(secs||6)};
+  if(playerVrm) faceLife(playerVrm).expr=_myFace;
+  return 'face: '+name+' ('+(secs||6)+'s)';
+}
+window.__face=setMyFace;                         // headless/live-tune entrypoint
 const _sa=x=>Math.atan2(Math.sin(x),Math.cos(x));
 const _lookS={x:0,y:0,z:0};   // smoothed head target (chest-follow damping — Basis "eases to your gaze")
 function _aimBone(bone, targetWorld, childRestLocal){
@@ -1712,6 +1775,57 @@ function _poseToWorld(poseMat16, parentMatrixWorld, outObj){    // XR ref-space 
   outObj.position.setFromMatrixPosition(pm);
   outObj.quaternion.setFromRotationMatrix(pm);
 }
+// foot IK (2026-07-09, Nix: "nor foot IK"): two-bone leg solve, _solveArm's sibling. Knee pole
+// points FORWARD in the hips frame (sign locked by world-space tests, like the elbow's). Foot
+// stays FLAT via the normalized-space property that every bone's rest world rotation is identity:
+// desired foot world quat = pure body-yaw, so toes follow facing and never pitch with the shin.
+function _solveLeg(vrm, side, targetPos){
+  const h=vrm.humanoid;
+  const U=h.getNormalizedBoneNode(side+'UpperLeg'), L=h.getNormalizedBoneNode(side+'LowerLeg'), F=h.getNormalizedBoneNode(side+'Foot');
+  if(!U||!L||!F) return;
+  U.quaternion.identity(); L.quaternion.identity(); F.quaternion.identity();
+  vrm.scene.updateMatrixWorld(true);
+  const uPos=U.getWorldPosition(new THREE.Vector3());
+  const l1=L.position.length(), l2=F.position.length();
+  const uDir=L.position.clone(), lDir=F.position.clone();
+  const toT=new THREE.Vector3().subVectors(targetPos,uPos);
+  let d=THREE.MathUtils.clamp(toT.length(), Math.abs(l1-l2)+0.02, l1+l2-0.01);
+  const K=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-d*d)/(2*l1*l2),-1,1));   // knee interior angle
+  const Kc=THREE.MathUtils.clamp(K, 25*Math.PI/180, 178*Math.PI/180);           // no hyperextension snap
+  if(Kc!==K) d=Math.sqrt(Math.max(1e-6, l1*l1+l2*l2-2*l1*l2*Math.cos(Kc)));
+  const dir=toT.clone().normalize();
+  const a=Math.acos(THREE.MathUtils.clamp((l1*l1+d*d-l2*l2)/(2*l1*d),-1,1));
+  const hips=h.getNormalizedBoneNode('hips');
+  const hipsQ=hips?hips.getWorldQuaternion(new THREE.Quaternion()):new THREE.Quaternion();
+  const pole=new THREE.Vector3(0,-0.15,1).normalize().applyQuaternion(hipsQ);  // knees forward-and-slightly-down
+  let axis=new THREE.Vector3().crossVectors(dir,pole);
+  if(axis.lengthSq()<1e-6) axis.set(1,0,0); else axis.normalize();
+  const upperDir=dir.clone().applyAxisAngle(axis,a);
+  const knee=uPos.clone().addScaledVector(upperDir,l1);
+  _aimBone(U, knee, uDir); vrm.scene.updateMatrixWorld(true);
+  _aimBone(L, targetPos, lDir); vrm.scene.updateMatrixWorld(true);
+  const fwd=new THREE.Vector3(0,0,1).applyQuaternion(hipsQ); fwd.y=0;
+  if(fwd.lengthSq()>1e-6){ fwd.normalize();
+    const pQi=F.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+    const yawQ=new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.atan2(fwd.x,fwd.z), 0));
+    F.quaternion.copy(pQi.multiply(yawQ)); }                                    // flat foot, toes along facing
+}
+// foot targets: planted under the hips at rest hip-width, on the rig's floor. v0 has no
+// stepping — feet slide when you locomote; they bend/plant correctly for crouch and lean.
+function _footTargets(vrm, rigFloorY){
+  const h=vrm.humanoid, hips=h.getNormalizedBoneNode('hips');
+  if(!hips) return null;
+  const hp=hips.getWorldPosition(new THREE.Vector3());
+  const hq=hips.getWorldQuaternion(new THREE.Quaternion());
+  const fwd=new THREE.Vector3(0,0,1).applyQuaternion(hq); fwd.y=0;
+  if(fwd.lengthSq()<1e-6) fwd.set(0,0,1); else fwd.normalize();
+  const left=new THREE.Vector3(fwd.z,0,-fwd.x);                    // sign locked by test: +x is the model's left at rest
+  const w=(vrm.userData&&vrm.userData.hipHalfW)||0.09;
+  const ay=(vrm.userData&&vrm.userData.ankleH)||0.09;
+  const y=rigFloorY+ay;
+  return { left:  new THREE.Vector3(hp.x+left.x*w, y, hp.z+left.z*w),
+           right: new THREE.Vector3(hp.x-left.x*w, y, hp.z-left.z*w) };
+}
 function updatePlayerIK(dt){
   const vrm=playerVrm; if(!vrm||!vrm.humanoid) return; const h=vrm.humanoid;
   const hq=ikHmd.getWorldQuaternion(new THREE.Quaternion());
@@ -1790,6 +1904,12 @@ function updatePlayerIK(dt){
     _solveArm(vrm, 'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
     _solveArm(vrm, 'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
   }
+  // foot IK: only with real HMD data (desktop keeps the mixer's walk/idle legs); ?nofootik opts out
+  if(!window.__nofootik && ikHmd.position.lengthSq() > 1e-6){
+    const rigFloorY=(typeof player!=='undefined') ? player.position.y : 0;
+    const ft=_footTargets(vrm, rigFloorY);
+    if(ft){ _solveLeg(vrm,'left',ft.left); _solveLeg(vrm,'right',ft.right); }
+  }
 }
 window.__updatePlayerIK=updatePlayerIK;
 { const q=new URLSearchParams(location.search);
@@ -1798,6 +1918,7 @@ window.__updatePlayerIK=updatePlayerIK;
   if(q.has('iktelem')) window.__iktelem=true;     // 1Hz input-pipeline telemetry → room journal (hands mystery; now reports raw poses too)
   if(q.has('rawgrips')) window.__rawgrips=true;   // hands Plan B: frame.getPose(gripSpace) direct, bypassing three's controller slots
   if(q.has('noscale')) window.__noscale=true;     // opt out of DeviceScale (standing-height → avatar mapping)
+  if(q.has('nofootik')) window.__nofootik=true;   // opt out of planted-feet leg IK (VR embodiment)
   if(q.has('noik'))  window.__noik=true;          // disable all IK -> pure idle body (fallback)
   if(q.has('nospineik')) window.__nospineik=true; }  // Phase-A safety: revert to neck+head-only look
 
@@ -2223,7 +2344,8 @@ let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0, myRole = 'visitor'
 setInterval(()=>{
   if(sock && sock.readyState === 1)
     sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
-                              ry:myYaw, name:playerName, color:myColor, model:playerModel}));
+                              ry:myYaw, name:playerName, color:myColor, model:playerModel,
+                              face:(_myFace && t<_myFace.until+0.4) ? _myFace.name : undefined}));
 }, 100);
 const _voice = window.speechSynthesis;
 function speak(text){
@@ -2351,6 +2473,7 @@ function cachedCreds(q){
       const _jump = Math.hypot(m.x - r.tp.x, (m.z) - r.tp.z);
       if(_jump > 8){ teleportFX(r.tp.x, r.tp.z, false); teleportFX(m.x, m.z, true); }  // they teleported
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
+      r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
     }
     else if(m.t === 'senses'){                            // answers to /nearby /look /goto — local only
       if(m.what === 'object'){ const o = m.object;
@@ -2516,6 +2639,7 @@ const CMD_HELP = [
   '/look [fov] — what is in front of you', '/goto <name|sid> — teleport to someone/something',
   '/tp <x> <z> — teleport to coordinates', '/respawn — back to the deck (if stuck)',
   '/follow <name> — walk after someone · /stay — stop', '/spawn <cube|sphere|cone|cylinder>',
+  '/face <happy|sad|angry|surprised|relaxed|catface> [secs] — expression (others see it)',
   'actions announce themselves in chat; queries stay between us',
 ];
 function runCommand(raw){
@@ -2534,6 +2658,7 @@ function runCommand(raw){
       else { _followName = rest.join(' '); sendAct(`is following ${_followName}`); } break;
     case 'stay': _followName = null; cmdNote('staying.'); break;
     case 'spawn': cmdNote(String(typeof spawn==='function' ? spawn(rest[0]||'cube') : 'spawn n/a')); break;
+    case 'face': cmdNote(setMyFace((rest[0]||'').toLowerCase(), parseFloat(rest[1])||6)); break;
     default: cmdNote(`unknown command /${cmd} — try /help`);
   }
   return 'cmd';
@@ -3121,6 +3246,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
+  if(residentVrm) applyFaceLife(residentVrm, t);      // face life: blink + expressions (pre-update, composes in)
   if(residentVrm) residentVrm.update(dt);
   if(playerMixer) playerMixer.update(dt);                     // idle keeps arms/legs alive (even under head-tracking)
   if(window.__playerLoco){                                    // locomotion: ground speed drives walk↔idle
@@ -3209,6 +3335,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
         sc.position.set(0,0,0); sc.rotation.y = Math.PI;
       }
     }
+    applyFaceLife(playerVrm, t);                  // face life: blink + /face expressions
     playerVrm.update(dt);
   }
   if(renderer.xr.isPresenting){
@@ -3254,6 +3381,12 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       if(r.play) r.play(sp > 0.5 ? 'walk' : 'idle');
       if(r.acts && r.acts.walk && r.cur === r.acts.walk)
         r.acts.walk.setEffectiveTimeScale(THREE.MathUtils.clamp(sp/1.6, 0.7, 1.8));
+      if(r.face){                                  // synced expression: pose msgs refresh the hold window
+        const s=faceLife(r.vrm);
+        if(!s.expr || s.expr.name!==r.face) s.expr={name:r.face, t0:t, until:t+0.5};
+        else s.expr.until=t+0.5;                   // 10Hz pose stream keeps it alive; decays when sender stops
+      }
+      applyFaceLife(r.vrm, t);                     // face life: blink for everyone, expressions when synced
       r.mixer.update(dt); r.vrm.update(dt);
     }
   }
