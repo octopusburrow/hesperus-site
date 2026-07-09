@@ -1480,8 +1480,12 @@ if(!new URLSearchParams(location.search).has('noembody')){
       if(pCur===pAct.walk && pAct.walk) pAct.walk.setEffectiveTimeScale(THREE.MathUtils.clamp(speed/1.6, 0.7, 1.8));
     };
     const tag=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.366),
-      new THREE.MeshBasicMaterial({map:drawNameplate(playerName,'visitor',playerModel),transparent:true,depthTest:false,depthWrite:false}));
-    window.__onNameChange && window.__onNameChange(()=>{ tag.material.map = drawNameplate(playerName,'visitor',playerModel); tag.material.needsUpdate = true; });
+      new THREE.MeshBasicMaterial({map:drawNameplate(playerName, myRole||'visitor', playerModel),transparent:true,depthTest:false,depthWrite:false}));
+    window.__onNameChange && window.__onNameChange(()=>{ tag.material.map = drawNameplate(playerName, myRole||'visitor', playerModel); tag.material.needsUpdate = true; });
+    // role arrives via welcome (often AFTER this async embody) — let the handler re-badge us
+    window.__refreshOwnTag = ()=>{ const old=tag.material.map;
+      tag.material.map = drawNameplate(playerName, myRole||'visitor', playerModel);
+      tag.material.needsUpdate = true; if(old) old.dispose(); };
     tag.position.set(0,2.16,0); tag.renderOrder=999; tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam); vrm.scene.add(tag);
     // first-person head hiding (VRChat's shrunken-head trick, Nix's ask): scale the head
     // bone to ~0 for YOUR eyes; mirror + 3rd-person renders restore it around their pass.
@@ -2171,6 +2175,7 @@ function cachedCreds(q){
     if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
       dbg('welcome', `#${m.id} ${m.display} (${myRole}) room=${m.room} proto=${m.proto}`, 'g');
       setAvatarRole(avatar, myRole); showRole(myRole, m.display);
+      if(window.__refreshOwnTag) window.__refreshOwnTag();   // re-badge the VRM nameplate (was stuck VISITOR)
       // prune remote avatars that predate a reconnect (their ids died with the old server)
       const alive = new Set((m.peers||[]).map(p=>p.id));
       for(const [id, r] of [...remotes]){
@@ -3001,6 +3006,12 @@ renderer.setAnimationLoop((now)=>{
       if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld); }
     }
     if(((renderer.xr.isPresenting && !window.__noik) || window.__forceIK) && window.__updatePlayerIK) window.__updatePlayerIK(dt);
+    else{                                             // desktop / post-VR: undo IK residue (yaw-ease left the
+      const sc = playerVrm.scene;                     // body rotated 45° + anchor offset after exiting VR — Nix)
+      if(sc.position.lengthSq() > 1e-10 || Math.abs(Math.atan2(Math.sin(sc.rotation.y-Math.PI), Math.cos(sc.rotation.y-Math.PI))) > 1e-6){
+        sc.position.set(0,0,0); sc.rotation.y = Math.PI;
+      }
+    }
     playerVrm.update(dt);
   }
   if(renderer.xr.isPresenting){
