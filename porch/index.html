@@ -1779,7 +1779,7 @@ function _poseToWorld(poseMat16, parentMatrixWorld, outObj){    // XR ref-space 
 // points FORWARD in the hips frame (sign locked by world-space tests, like the elbow's). Foot
 // stays FLAT via the normalized-space property that every bone's rest world rotation is identity:
 // desired foot world quat = pure body-yaw, so toes follow facing and never pitch with the shin.
-function _solveLeg(vrm, side, targetPos){
+function _solveLeg(vrm, side, targetPos, footYaw){
   const h=vrm.humanoid;
   const U=h.getNormalizedBoneNode(side+'UpperLeg'), L=h.getNormalizedBoneNode(side+'LowerLeg'), F=h.getNormalizedBoneNode(side+'Foot');
   if(!U||!L||!F) return;
@@ -1804,14 +1804,14 @@ function _solveLeg(vrm, side, targetPos){
   const knee=uPos.clone().addScaledVector(upperDir,l1);
   _aimBone(U, knee, uDir); vrm.scene.updateMatrixWorld(true);
   _aimBone(L, targetPos, lDir); vrm.scene.updateMatrixWorld(true);
-  const fwd=new THREE.Vector3(0,0,1).applyQuaternion(hipsQ); fwd.y=0;
+  const fwd=footYaw!==undefined ? new THREE.Vector3(Math.sin(footYaw),0,Math.cos(footYaw))
+                                : new THREE.Vector3(0,0,1).applyQuaternion(hipsQ); fwd.y=0;
   if(fwd.lengthSq()>1e-6){ fwd.normalize();
     const pQi=F.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
     const yawQ=new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.atan2(fwd.x,fwd.z), 0));
-    F.quaternion.copy(pQi.multiply(yawQ)); }                                    // flat foot, toes along facing
+    F.quaternion.copy(pQi.multiply(yawQ)); }                                    // flat foot, toes along the planted yaw
 }
-// foot targets: planted under the hips at rest hip-width, on the rig's floor. v0 has no
-// stepping — feet slide when you locomote; they bend/plant correctly for crouch and lean.
+// foot targets: the DESIRED plant spots — under the hips at rest hip-width, on the rig's floor.
 function _footTargets(vrm, rigFloorY){
   const h=vrm.humanoid, hips=h.getNormalizedBoneNode('hips');
   if(!hips) return null;
@@ -1824,7 +1824,55 @@ function _footTargets(vrm, rigFloorY){
   const ay=(vrm.userData&&vrm.userData.ankleH)||0.09;
   const y=rigFloorY+ay;
   return { left:  new THREE.Vector3(hp.x+left.x*w, y, hp.z+left.z*w),
-           right: new THREE.Vector3(hp.x-left.x*w, y, hp.z-left.z*w) };
+           right: new THREE.Vector3(hp.x-left.x*w, y, hp.z-left.z*w),
+           yaw: Math.atan2(fwd.x, fwd.z) };
+}
+// GAIT v1 (2026-07-09, Nix: "Go for gait!"): feet are PLANTED in the world and STEP when the
+// desired spot drifts too far or the body twists past ~40°. A step lifts the foot on a sine
+// arc over 0.28s toward desired + velocity-lead (so it lands where you're GOING), retargets
+// while still lifting (first half), and a foot won't step while its partner is airborne —
+// which is what makes walking alternate — unless its error passes the emergency bound (both
+// feet airborne = running, which is honest). Deterministic: no randomness, pure state machine.
+const _GAIT={STEP:0.16, EMERG:0.42, YAWT:0.7, DUR:0.28, LIFT:0.055, LEAD:0.15, LEADMAX:0.35, SNAP:1.5};
+function _gaitLead(des, vel){                        // land where you're going — but a hitch/teleport frame
+  const l=vel.clone().multiplyScalar(_GAIT.LEAD);    // makes vel spike, so the lead is capped at LEADMAX
+  if(l.length()>_GAIT.LEADMAX) l.setLength(_GAIT.LEADMAX);
+  l.y=0; return des.clone().add(l);
+}
+function _gaitInit(desL, desR, yaw){
+  return { L:{p:desL.clone(), yaw, step:null}, R:{p:desR.clone(), yaw, step:null},
+           vel:new THREE.Vector3(), lastMid:null };
+}
+function _gaitTick(g, desL, desR, bodyYaw, t, dt){
+  const mid=desL.clone().add(desR).multiplyScalar(0.5);            // hip velocity from desired midpoint
+  if(g.lastMid) g.vel.copy(mid).sub(g.lastMid).divideScalar(Math.max(dt,1e-4));
+  if(!g.lastMid) g.lastMid=new THREE.Vector3();
+  g.lastMid.copy(mid);
+  const D={L:desL, R:desR};
+  for(const s of ['L','R']){
+    const f=g[s], o=g[s==='L'?'R':'L'], des=D[s];
+    if(f.step){
+      const p=(t-f.step.t0)/f.step.dur;
+      if(p>=1){ f.p.copy(f.step.to); f.yaw=f.step.toYaw; f.step=null; }
+      else { if(p<0.5) f.step.to.copy(_gaitLead(des,g.vel)); continue; }
+    }
+    const err=Math.hypot(f.p.x-des.x, f.p.z-des.z);
+    if(err>_GAIT.SNAP){ f.p.copy(des); f.yaw=bodyYaw; continue; }  // teleport: re-plant instantly, no cross-room glide
+    const yerr=Math.abs(Math.atan2(Math.sin(bodyYaw-f.yaw), Math.cos(bodyYaw-f.yaw)));
+    if((err>_GAIT.STEP || yerr>_GAIT.YAWT) && (!o.step || err>_GAIT.EMERG))
+      f.step={from:f.p.clone(), fromYaw:f.yaw, to:_gaitLead(des,g.vel),
+              toYaw:bodyYaw, t0:t, dur:_GAIT.DUR};
+  }
+  const out={};
+  for(const s of ['L','R']){ const f=g[s];
+    if(f.step){
+      const p=Math.min(1,(t-f.step.t0)/f.step.dur), e=p*p*(3-2*p);  // smoothstep along the stride
+      const dy=Math.atan2(Math.sin(f.step.toYaw-f.step.fromYaw), Math.cos(f.step.toYaw-f.step.fromYaw));
+      out[s]={pos:f.step.from.clone().lerp(f.step.to,e), yaw:f.step.fromYaw+dy*e,
+              lift:_GAIT.LIFT*Math.sin(Math.PI*p)};
+    } else out[s]={pos:f.p.clone(), yaw:f.yaw, lift:0};
+  }
+  return out;
 }
 function updatePlayerIK(dt){
   const vrm=playerVrm; if(!vrm||!vrm.humanoid) return; const h=vrm.humanoid;
@@ -1904,11 +1952,18 @@ function updatePlayerIK(dt){
     _solveArm(vrm, 'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
     _solveArm(vrm, 'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
   }
-  // foot IK: only with real HMD data (desktop keeps the mixer's walk/idle legs); ?nofootik opts out
+  // foot IK + gait: only with real HMD data (desktop keeps the mixer's walk/idle legs); ?nofootik opts out
   if(!window.__nofootik && ikHmd.position.lengthSq() > 1e-6){
     const rigFloorY=(typeof player!=='undefined') ? player.position.y : 0;
     const ft=_footTargets(vrm, rigFloorY);
-    if(ft){ _solveLeg(vrm,'left',ft.left); _solveLeg(vrm,'right',ft.right); }
+    if(ft){
+      const ud=vrm.userData;
+      ud._gaitT=(ud._gaitT||0)+dt;                                 // per-vrm clock: extraction-safe, resets with the body
+      if(!ud._gait) ud._gait=_gaitInit(ft.left, ft.right, ft.yaw);
+      const gp=_gaitTick(ud._gait, ft.left, ft.right, ft.yaw, ud._gaitT, dt);
+      gp.L.pos.y+=gp.L.lift; gp.R.pos.y+=gp.R.lift;
+      _solveLeg(vrm,'left',gp.L.pos,gp.L.yaw); _solveLeg(vrm,'right',gp.R.pos,gp.R.yaw);
+    }
   }
 }
 window.__updatePlayerIK=updatePlayerIK;
