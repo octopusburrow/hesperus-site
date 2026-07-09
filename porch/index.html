@@ -672,6 +672,15 @@ function addPortico(dest, x, z, label){
     new THREE.MeshBasicMaterial({color:0x9a7fd0, transparent:true, opacity:0.16,
       side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false}));
   veil.rotation.y = Math.PI/2; veil.position.set(0, 1.19, 0); g.add(veil);
+  if(label){                                             // destination label (Nix 2026-07-09): plain text for now
+    const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96;
+    const lg = lc.getContext('2d'); lg.textAlign='center'; lg.textBaseline='middle';
+    lg.fillStyle='rgba(10,12,16,0.55)'; lg.beginPath(); lg.roundRect(56, 16, 400, 64, 14); lg.fill();
+    lg.font='italic 38px Georgia'; lg.fillStyle='#cdbde8'; lg.fillText(label, 256, 49);
+    const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace; lt.anisotropy = 4;
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:lt, transparent:true, depthWrite:false}));
+    spr.scale.set(1.7, 0.32, 1); spr.position.set(0, 2.85, 0); g.add(spr);
+  }
   g.position.set(x, 0, z); scene.add(g);
   addCollider(pL, 'portico-post'); addCollider(pR, 'portico-post');
   _porticos.push({dest, x, z, veil, label});
@@ -1598,7 +1607,11 @@ const _grips=[];
 try{ for(let i=0;i<4;i++){ const g=renderer.xr.getControllerGrip(i);
   g.addEventListener('connected', e=>{ g.userData.src=e.data; });
   g.addEventListener('disconnected', ()=>{ delete g.userData.src; });
-  scene.add(g); _grips.push(g); } }catch(e){}
+  // ROOT CAUSE of the magnetized hands (telemetry 2026-07-09 08:13: HMD x=3.40, grips x=0.00,
+  // three's slot pos == raw playspace pose byte-for-byte): grips were scene.add'd while the
+  // camera is a CHILD OF THE RIG, so locomotion moved the body but the hands stayed in
+  // playspace coordinates ≈ world origin ≈ above the table. Same parent as the camera fixes it.
+  player.add(g); _grips.push(g); } }catch(e){}
 window.__ikTargets={hmd:ikHmd, handL:ikHandL, handR:ikHandR};
 const _sa=x=>Math.atan2(Math.sin(x),Math.cos(x));
 const _lookS={x:0,y:0,z:0};   // smoothed head target (chest-follow damping — Basis "eases to your gaze")
@@ -2180,7 +2193,7 @@ function _xrInitPointers(){
     const line=new THREE.Line(g, new THREE.LineBasicMaterial({color:0x8fb0d6, transparent:true, opacity:0.8}));
     line.scale.z=1.8; line.visible=false; c.add(line);
     c.addEventListener('selectstart', ()=> xrUISelect(i));
-    xrUI._line[i]=line; xrUI._ctrl[i]=c; scene.add(c);
+    xrUI._line[i]=line; xrUI._ctrl[i]=c; player.add(c);   // same rig-parenting as camera/grips (magnetized-hands fix)
   }
   xrUI._init=true;
 }

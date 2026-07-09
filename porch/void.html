@@ -97,7 +97,14 @@ function makePortico(){
       side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false}));
   veil.position.set(0, 1.19, 0); g.add(veil); g.userData.veil = veil;
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0.6); g.add(lamp);
-  return g;   // the way home must be FINDABLE in a void: warm lamp above the arch (vs the wall's cool glow)
+  const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96;    // destination label
+  const lg = lc.getContext('2d'); lg.textAlign='center'; lg.textBaseline='middle';
+  lg.fillStyle='rgba(10,12,16,0.55)'; lg.beginPath(); lg.roundRect(56, 16, 400, 64, 14); lg.fill();
+  lg.font='italic 38px Georgia'; lg.fillStyle='#e8d8b8'; lg.fillText('the porch', 256, 49);
+  const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace; lt.anisotropy = 4;
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:lt, transparent:true, depthWrite:false}));
+  spr.scale.set(1.7, 0.32, 1); spr.position.set(0, 2.85, 0); g.add(spr);
+  return g;   // the way home must be FINDABLE in a void: warm lamp + name above the arch (vs the wall's cool glow)
 }
 const portico = makePortico(); portico.position.set(0, 0, 10); portico.rotation.y = Math.PI; scene.add(portico);
 
