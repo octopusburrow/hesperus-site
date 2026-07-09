@@ -2356,6 +2356,13 @@ function frame(t){
   if(!window.OFFLINE) requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+// PORCH DISTRICT PAUSE (2026-07-09): the Porch parent postMessages {porch:'active',on} to
+// freeze this world's render loop when nobody's standing in the void district. (Add to
+// canonical girih-engine on next sync.) OFFLINE already gates the self-loop below.
+addEventListener('message', e=>{ try{ if(e.data && e.data.porch==='active'){
+  const paused = !e.data.on; window.OFFLINE = paused;
+  if(!paused && window._goLive) window._goLive(); else if(!paused) requestAnimationFrame(frame);
+} }catch(_){} });
 // Offline deterministic render hook (for frame-perfect video export, headless or in-app). Live behaviour
 // is untouched: OFFLINE defaults false. When on, the rAF self-loop stops and frames are stepped by hand at
 // a fixed dt so motion is wall-clock-independent and identical every run.

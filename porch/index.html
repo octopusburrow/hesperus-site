@@ -228,6 +228,11 @@ setTimeout(()=>{                                          // remotes have arrive
   const stacked = _occupants().some(p=>Math.hypot(p.x-player.position.x, p.z-player.position.z) < 0.7);
   if(untouched && stacked){ const s=window.__respawnSlot(); console.log('spawn: relocated to free slot', s.x, s.z); }
 }, 2500);
+// DEEP LINK: a fresh load at .../porch/#void lands you in that district (share-links to worlds).
+// Deferred so districts/porticos exist first; typeof guard keeps this null-safe pre-boot.
+setTimeout(()=>{ try{ const h=location.hash.slice(1);
+  if(h && typeof DISTRICTS!=='undefined' && DISTRICTS[h] && h!=='porch' && typeof _crossDistrict==='function')
+    _crossDistrict(h, {fromPop:true}); }catch(e){} }, 800);
 
 // ---- physics v0: static AABB colliders + a horizontal push-out resolver so the world is SOLID.
 // Lightweight (no engine): the player is a vertical capsule (radius PLAYER_R, height PLAYER_H);
@@ -848,7 +853,8 @@ function _ensureVoidDistrict(){
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
 }
 const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
-function _crossDistrict(name){
+function _crossDistrict(name, opts){
+  opts = opts || {};
   if(name === 'void') _ensureVoidDistrict();
   const D = DISTRICTS[name]; if(!D) return;
   _district = name;
@@ -856,8 +862,28 @@ function _crossDistrict(name){
   scene.fog = (name === 'void') ? _voidFog : _porchFog;
   scene.background = (name === 'void') ? _voidBg : _porchBg;
   if(typeof sky !== 'undefined') sky.visible = (name === 'porch');
-  if(typeof dbg === 'function') dbg('portico', 'crossed to ' + name + ' (session intact)', 'g');
+  _setDistrictActive(name);                                 // pause the worlds you're NOT standing in
+  // THE HACK-FOR-GOOD (2026-07-09): pushState changes the URL WITHOUT a navigation, so the XR
+  // session lives AND the address bar / share-link now names the world you're in. Same-origin
+  // only — this is exactly why our worlds are districts, not foreign pages. Deep-linkable:
+  // a fresh load reads the hash and crosses on boot. Back-button walks districts (popstate).
+  if(!opts.fromPop){ try{
+    const base = location.pathname + location.search;
+    history.pushState({district:name}, '', base + (name==='porch' ? '' : '#'+name));
+  }catch(e){} }
+  if(typeof dbg === 'function') dbg('portico', 'crossed to ' + name + ' (session intact · /#'+name+')', 'g');
 }
+// expensive-district gating (the girih iframe runs rAF + a texture upload forever): only the
+// ACTIVE district streams; others freeze. Keeps N worlds from N× the GPU cost.
+function _setDistrictActive(name){
+  const f = document.getElementById('girihframe');
+  if(f && f.contentWindow){ try{ f.contentWindow.postMessage({porch:'active', on:(name==='void')}, '*'); }catch(e){} }
+  window.__girihActive = (name === 'void');                 // the loop-tick gate reads this
+}
+addEventListener('popstate', e=>{                           // back/forward walks districts, session intact
+  const to = (e.state && e.state.district) || (location.hash.slice(1) in DISTRICTS ? location.hash.slice(1) : 'porch');
+  if(to !== _district) _crossDistrict(to, {fromPop:true});
+});
 window.__district = ()=>_district; window.__cross = _crossDistrict;   // headless probes
 window.__girihReady = ()=>!!_girihTex;
 
@@ -3788,7 +3814,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   }
   resolveCollisions();                               // solid world: push out of table/mirror/bookcases (XZ)
   checkPorticos();                                   // doorways: crossing the east arch fades to the girih void
-  if(_girihTex && _district==='void') _girihTex.needsUpdate = true;   // stream the wall of light
+  if(_girihTex && _district==='void' && window.__girihActive!==false) _girihTex.needsUpdate = true;   // stream only the active world
   // jump + gravity (shared desktop/VR) — ground is the tabletop if I'm standing on it, else the deck
   const gH = groundHeight(player.position.x, player.position.z);
   if(grounded && player.position.y > gH + 0.02) grounded = false;   // walked off an edge → fall
