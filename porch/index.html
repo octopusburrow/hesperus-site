@@ -3018,9 +3018,14 @@ renderer.setAnimationLoop((now)=>{
       // so she just plays and the answers land in server/logs/room-*.jsonl for offline harvest.
       if(window.__iktelem && sock && sock.readyState===1){
         try{                                          // diagnostics may NEVER break the room — same law
-          const now = performance.now();              // as journal(). 07-09 black-screen suspect: an XR-
-          if(!window.__iktelemLast || now - window.__iktelemLast > 1000){   // loop throw kills frame submit
-            window.__iktelemLast = now;               // ("Chrome 150 · Waiting..."), so telemetry is caged.
+          // ROOT CAUSE of the 07-09 black screens (Nix's bisection: VR dies WITH &iktelem, fine
+          // without): `session` was undeclared in this scope (it lives inside xrLocomotion) →
+          // ReferenceError on the FIRST XR frame → animate loop dead → no frame submit →
+          // "Chrome 150 · Waiting...". Declared properly now; cage stays as second line of defense.
+          const session = renderer.xr.getSession();
+          const now = performance.now();
+          if(!window.__iktelemLast || now - window.__iktelemLast > 1000){
+            window.__iktelemLast = now;
             const srcs = [...(session ? session.inputSources : [])].map(s=>({
               hand: s.handedness, ray: s.targetRayMode, prof: (s.profiles||[]).slice(0,2),
               hasGrip: !!s.gripSpace, hasGamepad: !!s.gamepad }));
