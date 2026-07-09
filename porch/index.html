@@ -723,6 +723,7 @@ if(_residentPick){
     vl.register(p => new VRMAnimationLoaderPlugin(p));
     const gltf = await vl.loadAsync(RES.url);
     const vrm = gltf.userData.vrm;
+    vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData — every measurement stash needs this (found live 2026-07-09)
     VRMUtils.rotateVRM0(vrm);                       // no-op on VRM1
     const vb = new THREE.Box3().setFromObject(vrm.scene);
     const vs = vb.getSize(new THREE.Vector3());
@@ -929,6 +930,31 @@ if(_residentPick){
     function face(name, secs){ if(!FACE_NAMES.includes(name)) return 'faces: '+FACE_NAMES.join(' · ');
       faceLife(vrm).expr={name, t0:t, until:t+(secs||5)}; return 'face: '+name; }
     window.__residentFace = face;                            // headless probe + agent affordance
+    function wink(){ faceLife(vrm).wink={name:'blinkRight', t0:t};
+      try{ if(typeof resSock!=='undefined' && resSock && resSock.readyState===1)
+        resSock.send(JSON.stringify({t:'avfx', kind:'wink', side:'blinkRight'})); }catch(e){}
+      return 'wink 😉'; }
+    function outfit(piece, on){ const n=_setOutfit(vrm, piece, on);
+      return n ? 'outfit: '+piece+(on?' on':' off') : 'this body has no '+piece; }
+    // touch-awareness: pats/boops land in the brain backlog like overheard room events; a pat
+    // also earns a visible smile — digi's rig responded, so should the resident.
+    window.__residentNotice=(what, kind)=>{ try{ remember('room', '('+what+')', false);
+      if(kind==='pat') face('happy', 4); }catch(e){} };
+    window.__residentName=RESIDENT_NAME;
+    // eye lookAt: the suit has real eye bones (toon falls back to lookLeft/Right/Up/Down
+    // expressions — three-vrm handles both). Gaze follows the nearest person within 4m.
+    const _gazeObj=new THREE.Object3D(); scene.add(_gazeObj);
+    window.__residentGaze=()=>{ try{
+      if(!vrm.lookAt) return;
+      let best=null, bd=4;
+      const hp=vrm.scene.position;
+      const heads=[];
+      if(typeof player!=='undefined') heads.push(new THREE.Vector3(player.position.x, player.position.y+1.6, player.position.z));
+      if(typeof remotes!=='undefined') for(const r of remotes.values()) heads.push(new THREE.Vector3(r.group.position.x, 1.6, r.group.position.z));
+      for(const c of heads){ const d=Math.hypot(c.x-hp.x, c.z-hp.z); if(d<bd && d>0.25){ bd=d; best=c; } }
+      if(best){ _gazeObj.position.copy(best); vrm.lookAt.target=_gazeObj; }
+      else vrm.lookAt.target=null;
+    }catch(e){} };
 
     // ---- procedural emotes: gestures hand-authored FROM MATH (no mocap clip). Driven per-frame
     // by procTick(), which runs AFTER residentMixer.update in the loop so the math overwrites the
@@ -937,6 +963,16 @@ if(_residentPick){
     // 'standingwave' is mine — a ripple that travels up the body and settles. (Hesperus, 2026-07-08)
     const _armUp = 1;   // sign that raises the arms in this rig (verified headless: hands rise + clear torso)
     const PROC_EMOTES = {
+      crouch: { dur:3.4, fn:(e,dur)=>{                        // sink fast, hold, rise — clipped-sine plateau
+        const h=vrm.humanoid; if(!h) return;
+        const p=Math.min(1,e/dur), env=Math.min(1, Math.sin(Math.PI*p)*1.7);
+        const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
+        // signs MEASURED on the real rig 2026-07-09 (mock said opposite): -X swings the thigh
+        // forward on the normalized toon/suit skeleton; +X folds the shin back under it.
+        ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.15); set(s+'LowerLeg', env*1.85); set(s+'Foot', -env*0.70); });
+        set('spine', env*0.18); set('hips', -env*0.12);
+        vrm.scene.position.y = -env*0.32;                     // env rests at 0 both ends → clean return
+      }},
       standingwave: { dur:3.6, fn:(e,dur)=>{
         const h=vrm.humanoid; if(!h) return;
         const p=Math.min(1,e/dur), env=Math.sin(Math.PI*p);      // 0→1→0: starts and ends at rest
@@ -989,6 +1025,10 @@ if(_residentPick){
       if(/\b(cheer|celebrate|hooray|woo+)\b/.test(low)) return emote('cheer');
       if(/\braise (your )?hand\b|\bhand up\b|\braise\b/.test(low)) return emote('raise');
       if(/\bdance\b/.test(low)) return emote('dance');
+      if(/\b(crouch|kneel|duck|squat)\b/.test(low)) return procEmote('crouch');
+      if(/\bwink\b/.test(low)) return wink();
+      { const om=low.match(/\b(take off|remove|put on|wear)\b[^.]*\b(jacket|shirt|pants|shoes|tie)\b/);
+        if(om) return outfit(om[2], /put on|wear/.test(om[1])); }
       if(/\b(smile|grin|happy face|smiley)\b/.test(low)) return face('happy');       // expressions ("face X" = turn, above)
       if(/\b(frown|sad face|look sad)\b/.test(low)) return face('sad');
       if(/\b(scowl|angry face|grr+)\b/.test(low)) return face('angry');
@@ -1224,7 +1264,8 @@ if(_residentPick){
             resSock.send(JSON.stringify({t:'pose', x:vrm.scene.position.x, y:vrm.scene.position.y,
               z:vrm.scene.position.z, ry:vrm.scene.rotation.y, name:RESIDENT_NAME,
               color:0xffb45e, model:modelName||'ai',
-              face:(function(){ const s=_faceLife.get(vrm); return (s&&s.expr)?s.expr.name:undefined; })()}));
+              face:(function(){ const s=_faceLife.get(vrm); return (s&&s.expr)?s.expr.name:undefined; })(),
+              hid:_outfitField(vrm)||''}));
         }, 150);
       }
     }
@@ -1238,6 +1279,7 @@ if(_residentPick){
       : _headV.set(vrm.scene.position.x, vrm.scene.position.y+1.45, vrm.scene.position.z).clone();
     window.agent = { say, emote, procEmote, walkTo, follow, stay, comeHere, faceMe, faceName, command, setState,
       startMic, stopMic, simulateHear, lookAtSource, clearLook, setModel,
+      face, wink, outfit,                                    // avatar life (2026-07-09): direct affordances
       setVoice, hearRemote, ping, sayError, working,
       setBrainTimeout:(ms)=>{ brainTimeoutMs = Math.max(1000, ms|0) || brainTimeoutMs; },
       setBrain:(fn)=>{ onUtterance = fn; },
@@ -1311,7 +1353,8 @@ addEventListener('keydown', e=>{
     if(e.code==='ArrowLeft') moveLast(-d,0,0); else if(e.code==='ArrowRight') moveLast(d,0,0);
     else if(e.code==='ArrowUp') moveLast(0,0,-d); else if(e.code==='ArrowDown') moveLast(0,0,d); }
   if(e.code==='KeyX'){ if(!deleteHeldObject() && window.despawnLast) despawnLast(); }   // held image/text → delete it; else last block
-  if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); } });
+  if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); }
+  if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); } });    // T = touch: pat/boop whoever you face
 addEventListener('keyup',   e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
   keys[e.code] = false; });
@@ -1470,6 +1513,7 @@ async function upgradeAvatarToVrm(r, model){
     const {vl, VRMUtils, createVRMAnimationClip, anims} = await _remoteDeps();
     const gltf = await vl.loadAsync('./assets/claude_suit.vrm');
     const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
+    vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData (found live 2026-07-09)
     if((model||'human')==='human') recolorBloom(vrm.scene, '#4f83e8');  // blue driver; AI keeps native orange
     vrm.scene.rotation.y = Math.PI;               // match the capsule's -Z facing convention
     const keep = new Set([r.group.userData.tag,
@@ -1516,6 +1560,7 @@ if(!new URLSearchParams(location.search).has('noembody')){
     const vl = new GLTFLoader(); vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
     const gltf = await vl.loadAsync('./assets/claude_suit.vrm');
     const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
+    vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData (found live 2026-07-09)
     const petals = new URLSearchParams(location.search).get('petals') || 'blue';   // human default
     if(petals !== 'orange') recolorBloom(vrm.scene, petals==='blue' ? '#4f83e8' : petals);
     vrm.scene.rotation.y = Math.PI;                    // face player-forward (-Z)
@@ -1664,9 +1709,22 @@ function applyFaceLife(vrm, tNow){
     try{ em.setValue(s.expr.name, ew); }catch(e){}
     if(ew<=0 && tNow>s.expr.until){ s.expr=null; }
   } else if(s.active){ try{ em.setValue(s.active,0); }catch(e){} s.active=null; }
+  if(s.wink){
+    const ww=_winkWeight(tNow-s.wink.t0);
+    if(ww<0){ try{ em.setValue(s.wink.name,0); }catch(e){} s.wink=null; }
+    else try{ em.setValue(s.wink.name, ww); }catch(e){}
+  }
   const bw=_blinkStep(s.blink, tNow, Math.random);
-  try{ em.setValue('blink', bw*(1-0.7*ew)); }catch(e){}     // strong expressions damp the blink
+  try{ em.setValue('blink', bw*(1-0.7*ew)*(s.wink?0:1)); }catch(e){}   // expressions damp the blink; winks own the lids
 }
+function setMyWink(side){
+  const name = side==='l'||side==='left' ? 'blinkLeft' : 'blinkRight';
+  if(playerVrm) faceLife(playerVrm).wink={name, t0:t};
+  if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'avfx', kind:'wink', side:name}));
+  return 'wink ('+name+')';
+}
+window.__wink=setMyWink;
+window.__faceState=(v)=>{ const s=_faceLife.get(v); return s?{wink:!!s.wink, expr:s.expr&&s.expr.name, active:s.active}:null; };  // headless probe
 const FACE_NAMES=['happy','sad','angry','surprised','relaxed','neutral','catface'];
 let _myFace=null;                                // {name,t0,until} — mirrored onto the pose broadcast
 function setMyFace(name, secs){
@@ -1676,6 +1734,124 @@ function setMyFace(name, secs){
   return 'face: '+name+' ('+(secs||6)+'s)';
 }
 window.__face=setMyFace;                         // headless/live-tune entrypoint
+// ---- avatar life beyond the face (2026-07-09, Nix's list from digi's VRC rig): winks, pats
+// (head squish + squeak), nose boops (higher squeak + BLUSH pulse on the suit), petal ruffle
+// (spring-bone gravity jolt), clothes toggles (suit ships jacket/shirt/pants/shoes/tie as
+// separate nodes), eye lookAt. Tail is already spring-simmed; grabbing it is a v2.
+function _winkWeight(e){                          // one-shot: 90ms close · 220ms hold · 120ms open
+  if(e<0) return 0;
+  if(e<0.09) return e/0.09;
+  if(e<0.31) return 1;
+  if(e<0.43) return 1-(e-0.31)/0.12;
+  return -1;                                      // done sentinel — caller clears the wink
+}
+function _touchZones(vrm){                        // world spheres: pat = crown, boop = nose
+  const h=vrm.humanoid; if(!h) return null;
+  const hd=h.getNormalizedBoneNode('head'); if(!hd) return null;
+  const hp=hd.getWorldPosition(new THREE.Vector3());
+  const hq=hd.getWorldQuaternion(new THREE.Quaternion());
+  const eL=(vrm.userData&&vrm.userData.eyeLocal)||new THREE.Vector3(0,0.06,0.10);
+  return { pat: {c:hp.clone().add(new THREE.Vector3(0,eL.y+0.13,0).applyQuaternion(hq)), r:0.20},
+           boop:{c:hp.clone().add(new THREE.Vector3(0,eL.y-0.04,eL.z+0.05).applyQuaternion(hq)), r:0.11} };
+}
+const OUTFIT_PIECES=['jacket','shirt','pants','shoes','tie'];
+function _setOutfit(vrm, piece, on){              // suit ships clothes as named nodes; toon has none
+  let hit=0; vrm.scene.traverse(o=>{ if(o.name===piece){ o.visible=!!on; hit++; } });
+  const ud=vrm.userData=vrm.userData||{}; ud.outfitHidden=ud.outfitHidden||new Set();
+  if(hit){ on ? ud.outfitHidden.delete(piece) : ud.outfitHidden.add(piece); }
+  return hit;
+}
+function _outfitField(vrm){ const s=vrm&&vrm.userData&&vrm.userData.outfitHidden;
+  return (s&&s.size) ? [...s].join(',') : undefined; }
+function _applyOutfitField(vrm, hid){             // remote side: reconcile visibility to the sender's set
+  const want=new Set((hid||'').split(',').filter(Boolean));
+  const have=vrm.userData.outfitHidden||new Set();
+  for(const p of OUTFIT_PIECES){ if(want.has(p)!==have.has(p)) _setOutfit(vrm, p, !want.has(p)); }
+}
+function _petalJolt(vrm, secs){                   // ruffle: gravity kicks sideways briefly, springs do the rest
+  try{
+    const sm=vrm.springBoneManager; if(!sm||!sm.joints) return;
+    const dir=new THREE.Vector3(Math.random()-0.5, 0.6, Math.random()-0.5).normalize();
+    const touched=[];
+    for(const j of sm.joints){
+      if(!(j.bone && /petal|tail|tie/i.test(j.bone.name)) || !j.settings) continue;
+      touched.push([j, j.settings.gravityDir.clone(), j.settings.gravityPower]);
+      j.settings.gravityDir.copy(dir); j.settings.gravityPower=1.6;
+    }
+    setTimeout(()=>{ for(const [j,gd,gp] of touched){ j.settings.gravityDir.copy(gd); j.settings.gravityPower=gp; } }, (secs||0.3)*1000);
+  }catch(e){}
+}
+function _blushPulse(vrm){                        // the suit's blush is a MORPH TARGET ('Blush' / 照れ,
+  try{                                            // MMD-style) on the face mesh — the material is always
+    let mesh=null, idx=-1;                        // opaque; the geometry morphs into view. Found live 2026-07-09.
+    vrm.scene.traverse(o=>{ if(mesh||!o.morphTargetDictionary) return;
+      for(const k of ['Blush','照れ']) if(o.morphTargetDictionary[k]!==undefined){ mesh=o; idx=o.morphTargetDictionary[k]; return; } });
+    if(!mesh) return false;
+    const t0=performance.now();
+    const ease=()=>{ const e=(performance.now()-t0)/1600;
+      if(e>=1){ mesh.morphTargetInfluences[idx]=0; return; }
+      mesh.morphTargetInfluences[idx]=e<0.15 ? e/0.15 : 1-((e-0.15)/0.85)**2;   // pop in, sigh out
+      requestAnimationFrame(ease); };
+    requestAnimationFrame(ease); return true;
+  }catch(e){ return false; }
+}
+const _touchFx=[];                                // live squishes: {vrm, kind, t0}
+function _applyTouchFx(){                         // per-frame, BEFORE each vrm.update
+  const now=performance.now();
+  for(let i=_touchFx.length-1;i>=0;i--){
+    const f=_touchFx[i], e=(now-f.t0)/1000, D=0.38;
+    const hd=f.vrm.humanoid&&f.vrm.humanoid.getNormalizedBoneNode('head');
+    if(e>=D){ if(hd) hd.scale.set(1,1,1); _touchFx.splice(i,1); continue; }
+    if(hd&&f.kind==='pat'){ const s=1-0.10*Math.sin(Math.PI*e/D); hd.scale.set(s,s,s); }  // brief squish ≠ the 0.0001 petal bug
+  }
+}
+function avatarTouch(vrm, kind, silent, who){     // the moment itself: squeak + reaction
+  if(!vrm) return;
+  if(!silent) _squeak(kind);
+  if(kind==='pat'){ _touchFx.push({vrm, kind, t0:performance.now()}); _petalJolt(vrm, 0.35); }
+  else { const s=faceLife(vrm); s.expr={name:'surprised', t0:_nowT(), until:_nowT()+0.9};
+         _blushPulse(vrm); _petalJolt(vrm, 0.2); }
+  if(typeof residentVrm!=='undefined' && vrm===residentVrm && window.__residentNotice)
+    window.__residentNotice((who||'someone')+(kind==='pat' ? ' patted your head' : ' booped your nose'), kind);
+}
+function _nowT(){ return (typeof t==='number') ? t : 0; }   // loop clock, safe pre-boot
+function _touchCandidates(){                       // every touchable body in the room, with its name
+  const out=[];
+  if(typeof residentVrm!=='undefined' && residentVrm) out.push({vrm:residentVrm, name:(window.__residentName||'Hesperus')});
+  if(typeof remotes!=='undefined') for(const r of remotes.values()) if(r.vrm) out.push({vrm:r.vrm, name:r.name||'guest'});
+  return out;
+}
+function _vrmByName(name){
+  const c=_touchCandidates().find(c=>c.name===name); if(c) return c.vrm;
+  return (typeof playerVrm!=='undefined' && playerName===name) ? playerVrm : null;
+}
+function _sendTouch(kind, tgtName){
+  if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'avfx', kind, tgt:tgtName}));
+}
+window.__tryTouchAt=(handPos)=>{                   // VR: trigger with a hand inside a zone
+  for(const c of _touchCandidates()){
+    const z=_touchZones(c.vrm); if(!z) continue;
+    if(handPos.distanceTo(z.boop.c)<z.boop.r+0.06){ avatarTouch(c.vrm,'boop',false,playerName); _sendTouch('boop',c.name); return true; }
+    if(handPos.distanceTo(z.pat.c) <z.pat.r +0.06){ avatarTouch(c.vrm,'pat', false,playerName); _sendTouch('pat', c.name); return true; }
+  }
+  return false;
+};
+window.__tryTouch=()=>{                            // desktop: T — pat/boop whoever the camera faces, arm's reach
+  const cp=camera.getWorldPosition(new THREE.Vector3());
+  const cd=camera.getWorldDirection(new THREE.Vector3());
+  let best=null;
+  for(const c of _touchCandidates()){
+    const z=_touchZones(c.vrm); if(!z) continue;
+    for(const kind of ['boop','pat']){             // nose first: it's inside the crown sphere's reach
+      const s=z[kind], to=s.c.clone().sub(cp), along=to.dot(cd);
+      if(along<0.15||along>1.9) continue;
+      const off=to.clone().addScaledVector(cd,-along).length();
+      if(off<s.r*1.4 && (!best||along<best.along)) best={vrm:c.vrm,name:c.name,kind,along};
+    }
+  }
+  if(best){ avatarTouch(best.vrm,best.kind,false,playerName); _sendTouch(best.kind,best.name); return best.kind+' → '+best.name; }
+  return 'no one in reach';
+};
 const _sa=x=>Math.atan2(Math.sin(x),Math.cos(x));
 const _lookS={x:0,y:0,z:0};   // smoothed head target (chest-follow damping — Basis "eases to your gaze")
 function _aimBone(bone, targetWorld, childRestLocal){
@@ -1957,7 +2133,7 @@ function updatePlayerIK(dt){
     const rigFloorY=(typeof player!=='undefined') ? player.position.y : 0;
     const ft=_footTargets(vrm, rigFloorY);
     if(ft){
-      const ud=vrm.userData;
+      const ud=vrm.userData=vrm.userData||{};                      // XR path: NEVER trust userData exists
       ud._gaitT=(ud._gaitT||0)+dt;                                 // per-vrm clock: extraction-safe, resets with the body
       if(!ud._gait) ud._gait=_gaitInit(ft.left, ft.right, ft.yaw);
       const gp=_gaitTick(ud._gait, ft.left, ft.right, ft.yaw, ud._gaitT, dt);
@@ -2392,7 +2568,14 @@ function xrUIRaycast(){
     if(line){ line.visible=true; line.scale.z = hit ? hits[0].distance : 1.8; }
   }
 }
-function xrUISelect(i){ const t=xrUI.hover[i]; if(t && t.userData && t.userData.vkbId!=null) vkbClick(t.userData.vkbId); }
+function xrUISelect(i){
+  if(window.__tryTouchAt){                                   // reach out and boop: trigger while hand in a zone
+    try{ const g=renderer.xr.getControllerGrip(i);
+      const hp=new THREE.Vector3().setFromMatrixPosition(g.matrixWorld);
+      if(window.__tryTouchAt(hp)) return; }catch(e){}
+  }
+  const t=xrUI.hover[i]; if(t && t.userData && t.userData.vkbId!=null) vkbClick(t.userData.vkbId);
+}
 let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0, myRole = 'visitor';
 // broadcast my last pose on a TIMER (not the render loop) so I stay present when the
 // headset is off / SteamVR is in standby (the XR animation loop pauses, this doesn't).
@@ -2400,7 +2583,8 @@ setInterval(()=>{
   if(sock && sock.readyState === 1)
     sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
                               ry:myYaw, name:playerName, color:myColor, model:playerModel,
-                              face:(_myFace && t<_myFace.until+0.4) ? _myFace.name : undefined}));
+                              face:(_myFace && t<_myFace.until+0.4) ? _myFace.name : undefined,
+                              hid:playerVrm ? (_outfitField(playerVrm)||'') : undefined}));
 }, 100);
 const _voice = window.speechSynthesis;
 function speak(text){
@@ -2529,6 +2713,14 @@ function cachedCreds(q){
       if(_jump > 8){ teleportFX(r.tp.x, r.tp.z, false); teleportFX(m.x, m.z, true); }  // they teleported
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
       r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
+      if(r.vrm && m.hid!==undefined) _applyOutfitField(r.vrm, m.hid);   // clothes toggles travel with the pose
+    }
+    else if(m.t === 'avfx' && m.id !== myNet){         // avatar moments from peers: winks, pats, boops
+      if(m.kind==='wink'){ const r=remotes.get(m.id); if(r&&r.vrm) faceLife(r.vrm).wink={name:m.side||'blinkRight', t0:t}; }
+      else if(m.kind==='pat'||m.kind==='boop'){
+        const v=_vrmByName(m.tgt);
+        if(v) avatarTouch(v, m.kind, false, m.name); // hear every squeak; server-stamped name = who touched
+      }
     }
     else if(m.t === 'senses'){                            // answers to /nearby /look /goto — local only
       if(m.what === 'object'){ const o = m.object;
@@ -2623,6 +2815,19 @@ function _chirp(up){ try{ _ac = _ac || new (window.AudioContext||window.webkitAu
   g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.12, t+0.03);
   g.gain.exponentialRampToValueAtTime(0.0001, t+0.22);
   o.start(t); o.stop(t+0.25); }catch(e){} }
+function _squeak(kind){ try{ _ac = _ac || new (window.AudioContext||window.webkitAudioContext)();
+  const o=_ac.createOscillator(), g=_ac.createGain(); o.connect(g); g.connect(_ac.destination);
+  const t=_ac.currentTime; o.type='triangle';
+  if(kind==='boop'){                                          // bouncy up-down chirp — rubber-duck front nose
+    o.frequency.setValueAtTime(950,t); o.frequency.exponentialRampToValueAtTime(1500,t+0.05);
+    o.frequency.exponentialRampToValueAtTime(700,t+0.13);
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.22,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.16); o.start(t); o.stop(t+0.18);
+  } else {                                                    // pat: soft descending squeak
+    o.frequency.setValueAtTime(640,t); o.frequency.exponentialRampToValueAtTime(390,t+0.16);
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.16,t+0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.22); o.start(t); o.stop(t+0.24);
+  } }catch(e){} }
 function teleportFX(x, z, arrive){                       // particle burst + chirp (down=depart, up=arrive)
   const N=42, pos=new Float32Array(N*3), vel=[];
   for(let i=0;i<N;i++){ const a=Math.random()*Math.PI*2, r0=0.25+Math.random()*0.2;
@@ -2695,6 +2900,7 @@ const CMD_HELP = [
   '/tp <x> <z> — teleport to coordinates', '/respawn — back to the deck (if stuck)',
   '/follow <name> — walk after someone · /stay — stop', '/spawn <cube|sphere|cone|cylinder>',
   '/face <happy|sad|angry|surprised|relaxed|catface> [secs] — expression (others see it)',
+  '/wink [l|r] · /outfit <piece|all|none> — suit clothes · T or /pat — pat/boop whoever you face',
   'actions announce themselves in chat; queries stay between us',
 ];
 function runCommand(raw){
@@ -2714,6 +2920,14 @@ function runCommand(raw){
     case 'stay': _followName = null; cmdNote('staying.'); break;
     case 'spawn': cmdNote(String(typeof spawn==='function' ? spawn(rest[0]||'cube') : 'spawn n/a')); break;
     case 'face': cmdNote(setMyFace((rest[0]||'').toLowerCase(), parseFloat(rest[1])||6)); break;
+    case 'wink': cmdNote(setMyWink((rest[0]||'r').toLowerCase())); break;
+    case 'outfit': { const p=(rest[0]||'').toLowerCase();
+      if(!playerVrm){ cmdNote('embody first'); break; }
+      if(p==='all'||p==='none'){ OUTFIT_PIECES.forEach(x=>_setOutfit(playerVrm,x,p==='all')); cmdNote('outfit: '+p); }
+      else if(OUTFIT_PIECES.includes(p)){ const hidden=playerVrm.userData.outfitHidden&&playerVrm.userData.outfitHidden.has(p);
+        const n=_setOutfit(playerVrm,p,hidden); cmdNote(n?('outfit: '+p+(hidden?' on':' off')):'this body has no '+p); }
+      else cmdNote('usage: /outfit <'+OUTFIT_PIECES.join('|')+'|all|none>'); break; }
+    case 'pat': case 'boop': case 'touch': cmdNote(String(window.__tryTouch())); break;
     default: cmdNote(`unknown command /${cmd} — try /help`);
   }
   return 'cmd';
@@ -3301,7 +3515,9 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
+  _applyTouchFx();                                    // pats: head squish envelopes (all touched VRMs)
   if(residentVrm) applyFaceLife(residentVrm, t);      // face life: blink + expressions (pre-update, composes in)
+  if(residentVrm && window.__residentGaze) window.__residentGaze();   // eyes track whoever's near
   if(residentVrm) residentVrm.update(dt);
   if(playerMixer) playerMixer.update(dt);                     // idle keeps arms/legs alive (even under head-tracking)
   if(window.__playerLoco){                                    // locomotion: ground speed drives walk↔idle
