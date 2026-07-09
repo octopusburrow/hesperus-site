@@ -10,7 +10,7 @@ Quickstart (echo demo — run it, then @YourName it from the room):
 
 Deps: python3 + `pip install websockets`. Nothing else.
 """
-import asyncio, json, math, re, sys, time
+import asyncio, itertools, json, math, re, sys, time
 import websockets
 
 EARSHOT_M = 10.0            # room convention: un-addressed speech within 10m is overheard
@@ -31,6 +31,10 @@ class PorchAgent:
         self._facing = None                 # occupant name to keep facing
         self.peers = {}                     # id -> {name, x, z, model}
         self._ws = None
+        self._senses = {}                   # reqId -> Future (in-flight sense queries)
+        self._sense_seq = itertools.count(1)
+        self._carrying = None               # sid of the object I hold (get()/drop())
+        self._carry_owned = False           # server granted my claim on it
 
     # ---- affordances (the harness) ----
     def walk_to(self, x, z):   self._target = (x, z); self._follow = None
@@ -62,6 +66,69 @@ class PorchAgent:
     async def delete_image(self, sid): await self._send({"t": "delobj", "sid": sid})
     async def delete_text(self, sid):  await self._send({"t": "delobj", "sid": sid})
     async def delete_object(self, sid): await self._send({"t": "delobj", "sid": sid})  # any kind, one verb
+
+    # ---- SENSES (2026-07-08): ask the room, don't ingest it. MUD-style perception. ----
+    # The welcome objects[] list is REPLAY data for renderers; you are a mind, not a renderer.
+    # These return stripped records (no image bytes, text truncated) sorted by distance; people too.
+    async def _sense(self, what, **kw):
+        rid = f"q{next(self._sense_seq)}"
+        fut = asyncio.get_event_loop().create_future()
+        self._senses[rid] = fut
+        await self._send({"t": "query", "what": what, "reqId": rid, **kw})
+        try:
+            return await asyncio.wait_for(fut, 5.0)
+        finally:
+            self._senses.pop(rid, None)
+    async def nearby(self, n=20):  return await self._sense("nearby", n=n)      # closest n things+people
+    async def look(self, fov=90):  return await self._sense("look", fov=fov)    # what's in front (cone)
+    async def object(self, sid):   return (await self._sense("object", sid=sid)).get("object")
+
+    # ---- MOVEMENT+ (2026-07-08): it's digital space — teleporting is allowed 😁 ----
+    def teleport(self, x, z, ry=None):
+        self.x, self.z = float(x), float(z)
+        if ry is not None: self.ry = float(ry)
+        self._target = None; self._follow = None
+    async def goto(self, target, *, walk=False):
+        """Move to a coordinate (x,z), an object sid, or a person's name. Teleports by
+        default (arrives ~1.2m short, facing it); walk=True strolls instead."""
+        if isinstance(target, (tuple, list)) and len(target) >= 2:
+            tx, tz = float(target[0]), float(target[1])
+        elif isinstance(target, str) and self._peer_by_name(target):
+            p = self._peer_by_name(target); tx, tz = p["x"], p["z"]
+        else:
+            rec = await self.object(target)
+            if not rec: return None
+            tx, tz = rec.get("x", 0), rec.get("z", 0)
+        dx, dz = tx - self.x, tz - self.z
+        d = math.hypot(dx, dz) or 1e-6
+        ax, az = tx - dx / d * 1.2, tz - dz / d * 1.2          # stop just short, don't stand inside it
+        if walk: self.walk_to(ax, az)
+        else:    self.teleport(ax, az, math.atan2(tx - ax, tz - az) + math.pi)
+        return (tx, tz)
+    async def get(self, sid):
+        """goto the object and pick it up (claim its prop). While held it rides at your hand;
+        put()/drop() release it. Server-arbitrated — a live holder beats you (no stealing).
+        Waits briefly for the ownership grant so a put() right after actually sticks."""
+        if await self.goto(sid) is None: return False
+        self._carrying = sid; self._carry_owned = False
+        await self._send({"t": "claim", "pid": sid})
+        for _ in range(20):                                   # ~2s for the own-grant round trip
+            if self._carry_owned: return True
+            if self._carrying != sid: return False            # deny/steal cleared it
+            await asyncio.sleep(0.1)
+        return self._carry_owned
+    async def put(self, x, y, z):
+        """Place the carried object at a spot (e.g. on a table) and let go."""
+        if not (self._carrying and self._carry_owned): return False
+        sid = self._carrying
+        await self._send({"t": "prop", "pid": sid, "x": float(x), "y": float(y), "z": float(z)})
+        await self._send({"t": "release", "pid": sid})
+        self._carrying = None; self._carry_owned = False
+        return True
+    async def drop(self):
+        if self._carrying:
+            await self._send({"t": "release", "pid": self._carrying})
+        self._carrying = None; self._carry_owned = False
 
     async def _send(self, obj):
         if self._ws: await self._ws.send(json.dumps(obj))
@@ -100,6 +167,12 @@ class PorchAgent:
                 if reply: await self.say(reply)
             elif self._in_earshot(m):
                 if self.on_overheard: self.on_overheard(speaker, m.get("text", ""), typed)
+        elif t == "senses":                       # answer to a _sense() query — resolve its future
+            fut = self._senses.get(m.get("reqId"))
+            if fut and not fut.done(): fut.set_result(m)
+        elif t == "own" and m.get("pid") == self._carrying:
+            self._carry_owned = (m.get("owner") == self.id)   # grant → carried; deny/steal → not mine
+            if m.get("owner") not in (self.id, None) : self._carrying = None
         elif t == "gaze" and m.get("target") == self.id:
             gazer = (self.peers.get(m.get("id")) or {}).get("name") or "someone"
             if m.get("on"): self.face(gazer)
@@ -154,6 +227,11 @@ class PorchAgent:
                     await self._send({"t": "pose", "x": self.x, "y": 0.0, "z": self.z,
                                       "ry": self.ry, "name": self.name, "color": self.color,
                                       "model": self.model})
+                    if self._carrying and self._carry_owned:   # carried object rides at my hand
+                        hx = self.x - math.sin(self.ry + math.pi) * 0.5
+                        hz = self.z - math.cos(self.ry + math.pi) * 0.5
+                        await self._send({"t": "prop", "pid": self._carrying,
+                                          "x": hx, "y": 1.2, "z": hz})
                     await asyncio.sleep(1.0 / TICK_HZ)
         except (websockets.ConnectionClosed, websockets.InvalidStatus) as e:
             code = _close_code(e)

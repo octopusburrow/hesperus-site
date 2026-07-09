@@ -2069,7 +2069,8 @@ function cachedCreds(q){
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
     else if(m.t === 'prop' && m.id !== myNet){       // a grabbable the OWNER is moving — apply as kinematic
-      const g = grabbablesById[m.pid]; if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z); } }
+      const g = grabbablesById[m.pid]; if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z); }
+      const sp = spawnedObjs.get(m.pid); if(sp) sp.position.set(m.x, m.y||1, m.z); }   // agents carry primitives too (gym)
     else if(m.t === 'own'){                          // authoritative ownership change (grant/deny/free/steal)
       if(window.__grab) window.__grab.applyOwn(m.pid, (m.owner==null?null:m.owner)); }
     else if(m.t === 'pose' && m.id !== myNet){
