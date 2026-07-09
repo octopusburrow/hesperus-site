@@ -493,14 +493,10 @@ loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{
     addCollider(c, 'bookcase');                    // solid: don't walk through the shelves
   }
   window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
-  document.getElementById('plaque').innerHTML +=
-    `<br><span style="color:#6d7a6d">bookcase: ×${s.toFixed(3)} = 2.2 m tall ✓ · textures re-cleaned to convention</span>`;
+  // (scale-audit + UA plaque breadcrumbs removed 2026-07-08 — Nix: dev noise on the HUD; UA
+  // lives in dbg feed territory if ever needed again: dbg('ua', navigator.userAgent))
 }, undefined, (e)=>{ console.error('GLTF load failed', e);
   document.getElementById('plaque').innerHTML += '<br>⚠️ bookcase failed to load'; });
-
-// browser self-report (answers "what Chromium is the Frame running?")
-document.getElementById('plaque').innerHTML +=
-  `<br><span style="color:#4c5568;font-size:11px">UA: ${navigator.userAgent}</span>`;
 
 // ---- the rug (Fable's RD rug, 3×2 m) ----
 new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
@@ -2051,7 +2047,11 @@ function cachedCreds(q){
   const base = await resolveSyncUrl(q);
   if(!base){ dbg('sync','no server endpoint yet (no ?sync, no sync.json)','e'); return; }
   let room = (q.get('room')||'').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'');
-  if(!room){ room = coinRoom(); q.set('room', room);          // coin one + make it shareable on refresh
+  if(!room){ room = 'porch';                                  // bare URL = the COMMONS (2026-07-08, Nix's
+    // instance-split find: coining a room per visitor scattered guests who all opened the same
+    // session URL into separate worlds. Private rooms are still one ?room=word-word-word away —
+    // coinRoom() remains for a future "new room" affordance.)
+    q.set('room', room);
     history.replaceState(null,'', location.pathname+'?'+q.toString()); }
   showRoom(room);
   let creds = cachedCreds(q) || await signIn();               // URL/cached login, else the overlay
