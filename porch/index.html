@@ -1570,6 +1570,17 @@ if(!new URLSearchParams(location.search).has('noembody')){
       }
     }catch(e){ console.warn('eye measurement failed (fallback offset stays)', e); }
     window.__eyeOffset=(x,y,z)=>{ vrm.userData.eyeLocal=new THREE.Vector3(x,y,z); return vrm.userData.eyeLocal.toArray(); };  // live headset tuning
+    // avatar REST eye height above its feet — DeviceScale's target (same estimate chain as the anchor)
+    try{
+      const h2=vrm.humanoid, hd2=h2.getNormalizedBoneNode('head');
+      const le2=h2.getNormalizedBoneNode('leftEye'), re2=h2.getNormalizedBoneNode('rightEye');
+      let ey=null;
+      if(vrm.userData.eyeLocal && hd2) ey=hd2.localToWorld(vrm.userData.eyeLocal.clone()).y - vrm.scene.position.y;
+      else if(le2&&re2) ey=(le2.getWorldPosition(new THREE.Vector3()).y+re2.getWorldPosition(new THREE.Vector3()).y)/2 - vrm.scene.position.y;
+      else if(hd2) ey=hd2.getWorldPosition(new THREE.Vector3()).y+0.06 - vrm.scene.position.y;
+      if(ey) window.__avatarEyeY=ey;
+      console.log('avatar rest eye height: '+(ey?ey.toFixed(3):'unknown'));
+    }catch(e){ console.warn('avatarEyeY failed', e); }
     playerVrm=vrm; window.__playerVrm=vrm;
     console.log('embodied: claude_suit petals='+petals);
   })().catch(e=>console.error('embody failed', e));
@@ -1664,6 +1675,24 @@ function _solveArm(vrm, side, targetPos, targetQuat){
     const pQi=H.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
     H.quaternion.copy(pQi.multiply(targetQuat).multiply(cal)); }
 }
+// DeviceScale (Basis port step 2 — ik-verdicts lead (c), 2026-07-09): map the human's standing
+// eye height onto the avatar's, scaling tracked TARGET positions about the rig origin, so a
+// tall person in a short body doesn't float above it (nor a short person sink into it). The
+// human's view stays 1:1 — only the puppet's targets scale. Pure functions, extraction-tested
+// in ik_test (the telemetry ReferenceError taught us: NO untested code in the XR path).
+let _devScale=1; const _hmdYSamples=[];
+function _computeDevScale(samples, avatarEyeY){
+  if(!samples || samples.length<30 || !avatarEyeY) return 1;
+  const s=[...samples].sort((a,b)=>a-b);
+  const med=s[Math.floor(s.length/2)];
+  if(med < 0.5) return 1;                                   // seated start / tracking garbage → don't scale
+  return Math.min(1.6, Math.max(0.6, avatarEyeY/med));      // clamped: beyond ±60% something's wrong
+}
+function _scaleTracked(obj, rig, k){                        // p' = rig + k·(p − rig); rotation untouched
+  if(k===1 || !rig) return;
+  obj.position.sub(rig.position).multiplyScalar(k).add(rig.position);
+}
+window.__devScale = ()=>({scale:_devScale, samples:_hmdYSamples.length, avatarEyeY:window.__avatarEyeY||null});
 function updatePlayerIK(dt){
   const vrm=playerVrm; if(!vrm||!vrm.humanoid) return; const h=vrm.humanoid;
   const hq=ikHmd.getWorldQuaternion(new THREE.Quaternion());
@@ -3081,6 +3110,15 @@ renderer.setAnimationLoop((now)=>{
   if(playerVrm){
     if(renderer.xr.isPresenting && !window.__noik){          // copy real HMD + controller poses into the IK targets
       const xc=renderer.xr.getCamera(); ikHmd.position.setFromMatrixPosition(xc.matrixWorld); ikHmd.quaternion.setFromRotationMatrix(xc.matrixWorld);
+      // DeviceScale: sample standing eye height over the first ~2s of presence, then lock the
+      // scale; ?noscale opts out. Applied to targets AFTER the raw copy (view itself stays 1:1).
+      if(!window.__noscale){
+        if(_hmdYSamples.length<120){ const hy=ikHmd.position.y-player.position.y;
+          if(hy>0.5) _hmdYSamples.push(hy);
+          if(_hmdYSamples.length===120){ _devScale=_computeDevScale(_hmdYSamples, window.__avatarEyeY);
+            dbg('status','DeviceScale locked: '+_devScale.toFixed(3),'k'); } }
+        _scaleTracked(ikHmd, player, _devScale);
+      }
       // HANDEDNESS via each grip's OWN inputSource (connected event) — slot index is meaningless.
       let gL=null, gR=null;
       for(const g of _grips){
@@ -3091,8 +3129,10 @@ renderer.setAnimationLoop((now)=>{
         if(gp && (src.handedness==='left'||src.handedness==='right'))
           window.__fingerCurl[src.handedness] = {index:(gp.buttons[0]?.value)||0, grip:(gp.buttons[1]?.value)||0};
       }
-      if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld); }
-      if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld); }
+      if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld);
+              if(!window.__noscale) _scaleTracked(ikHandL, player, _devScale); }
+      if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld);
+              if(!window.__noscale) _scaleTracked(ikHandR, player, _devScale); }
       // IK TELEMETRY (&iktelem, 2026-07-09 — Nix: "are you even getting translation data?"):
       // 1 Hz ground-truth dump of the whole input pipeline; the relay journals it automatically,
       // so she just plays and the answers land in server/logs/room-*.jsonl for offline harvest.
