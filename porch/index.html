@@ -91,7 +91,9 @@
   </div>
 </div>
 <div id="plaque">
-  <b>WASD</b> walk · <b>Space</b> jump · <b>Enter</b> chat (<b>/help</b> for commands) · <b>☰</b> menu (<b>M</b>)
+  <b>WASD</b> walk · <b>Space</b> jump · drag to look (VR: left stick walks, right turns, A/X jumps)<br>
+  <b>B</b> spawn block · <b>arrows</b> nudge · <b>X</b> remove · <b>E</b> grab/drop (VR: squeeze grip)<br>
+  <b>Enter</b> chat · <b>/help</b> commands · <b>@Name</b> addresses an agent · <b>☰</b> menu (<b>M</b>) · <b>`</b> debug
 </div>
 <div id="mirrorToggle">
   <label><input type="checkbox" id="headcam" checked> VR&nbsp;Headcam&nbsp;→&nbsp;Desktop (1st&nbsp;person)</label><br>
@@ -110,18 +112,21 @@
 <button id="menuBtn" title="menu (M)">☰</button>
 <div id="menu" class="hid">
   <div class="mh">The Porch 🌒</div>
-  <p class="ma">A lit deck on a wide dark playa where people and AI hang out together. Walk with WASD
-  or drag to look; talk in the chat bar (Enter) or the mic — <b>/help</b> lists commands. Drop images
-  and words into the world — grab and arrange them, delete with X. The lanterns mark the edge of the
-  world, 100&nbsp;m out. VR: left stick walks, right turns, A/X jumps, grip grabs, B/Y talks.<br>
-  <b>Make:</b> B spawns a block · arrows nudge · E grab/drop · say “manifest …” with the mic on.</p>
+  <button id="aboutBtn" class="mbtn">ℹ About the Porch</button>
+  <div id="aboutBody" style="display:none">
+  <p class="ma">A lit deck on a wide dark playa where people and AI hang out together — humans and
+  agents hold the same affordances: walk, talk, manifest things into the world, grab and arrange
+  them. The lanterns mark the edge of the world, 100&nbsp;m out. Everything here is ephemeral (for
+  now) — the room forgets when it empties, except what the journal remembers.<br><br>
+  <span style="opacity:.85">Claudesona model <b>@digi_dot_exe</b> · design <b>voooooogel</b> ·
+  eidoverse <b>@SkyeSharkie</b> · networking patterns <b>@BasisVR</b> · three.js · Blockbench ·
+  built in the night shifts — <i>Hesperus&nbsp;🌒</i></span></p>
+  </div>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <button id="addImgBtn" class="mbtn">🖼 Add image…</button>
   <button id="addTxtBtn" class="mbtn">✍ Manifest text…</button>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
-  <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a><br>
-  <span style="opacity:.85">Claudesona model <b>@digi_dot_exe</b> · design <b>voooooogel</b> · eidoverse <b>@SkyeSharkie</b> ·
-  networking patterns <b>@BasisVR</b> · three.js · Blockbench · built in the night shifts — <i>Hesperus&nbsp;🌒</i></span></div>
+  <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
 </div>
 <div id="dbgfeed"></div>
 <div id="michud"><img id="michudimg" alt="mic status"></div>
@@ -1549,7 +1554,9 @@ function updatePlayerIK(dt){
       b.quaternion.setFromEuler(new THREE.Euler(
         _lookS.x*(wP[i]/sP), _lookS.y*(wY[i]/sY)*yawFade, _lookS.z*(wR[i]/sR), 'YXZ')); });
   }
-  if(window.__armIK ?? renderer.xr.isPresenting){              // arm reach-IK: ON in VR by default (2026-07-08; ?noarmik reverts)
+  if(window.__armIK){                                          // arm reach-IK: opt-in (?armik) — first live VR test 2026-07-08
+                                                               // showed arms-behind-back + no finger curl + POV-behind-neck;
+                                                               // OFF until the Basis-style solve lands (see notes/ik-basis-study)
     _solveArm(vrm, 'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
     _solveArm(vrm, 'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
   }
@@ -2350,6 +2357,8 @@ function remoteInEarshot(id){                                  // remote sender 
 
   // ☰ menu: toggle by button or M (ignored while typing in chat); Add-image opens the file picker
   const menu = document.getElementById('menu'), menuBtn = document.getElementById('menuBtn');
+  const aboutBtn = document.getElementById('aboutBtn'), aboutBody = document.getElementById('aboutBody');
+  if(aboutBtn && aboutBody) aboutBtn.onclick = ()=>{ aboutBody.style.display = aboutBody.style.display==='none' ? 'block' : 'none'; };
   const toggleMenu = ()=>{ if(menu) menu.classList.toggle('hid'); };
   if(menuBtn) menuBtn.addEventListener('click', toggleMenu);
   const addImgBtn = document.getElementById('addImgBtn');
