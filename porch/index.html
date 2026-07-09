@@ -1667,6 +1667,7 @@ window.__updatePlayerIK=updatePlayerIK;
 { const q=new URLSearchParams(location.search);
   if(q.has('armik'))   window.__armIK=true;       // force arm IK even on desktop (testing)
   if(q.has('noarmik')) window.__armIK=false;      // opt OUT of the VR default (fallback if wrists misbehave)
+  if(q.has('iktelem')) window.__iktelem=true;     // 1Hz input-pipeline telemetry → room journal (hands mystery)
   if(q.has('noik'))  window.__noik=true;          // disable all IK -> pure idle body (fallback)
   if(q.has('nospineik')) window.__nospineik=true; }  // Phase-A safety: revert to neck+head-only look
 
@@ -3012,6 +3013,24 @@ renderer.setAnimationLoop((now)=>{
       }
       if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld); }
       if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld); }
+      // IK TELEMETRY (&iktelem, 2026-07-09 — Nix: "are you even getting translation data?"):
+      // 1 Hz ground-truth dump of the whole input pipeline; the relay journals it automatically,
+      // so she just plays and the answers land in server/logs/room-*.jsonl for offline harvest.
+      if(window.__iktelem && sock && sock.readyState===1){
+        const now = performance.now();
+        if(!window.__iktelemLast || now - window.__iktelemLast > 1000){
+          window.__iktelemLast = now;
+          const srcs = [...(session ? session.inputSources : [])].map(s=>({
+            hand: s.handedness, ray: s.targetRayMode, prof: (s.profiles||[]).slice(0,2),
+            hasGrip: !!s.gripSpace, hasGamepad: !!s.gamepad }));
+          const gdump = _grips.map((g,i)=>({ slot: i,
+            bound: !!(g.userData && g.userData.src),
+            hand: g.userData && g.userData.src ? g.userData.src.handedness : null,
+            pos: g.getWorldPosition(new THREE.Vector3()).toArray().map(v=>+v.toFixed(3)) }));
+          sock.send(JSON.stringify({ t:'iktelem', srcs, grips: gdump,
+            hmd: ikHmd.position.toArray().map(v=>+v.toFixed(3)) }));
+        }
+      }
     }
     if(((renderer.xr.isPresenting && !window.__noik) || window.__forceIK) && window.__updatePlayerIK) window.__updatePlayerIK(dt);
     else{                                             // desktop / post-VR: undo IK residue (yaw-ease left the
