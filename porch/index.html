@@ -3017,19 +3017,21 @@ renderer.setAnimationLoop((now)=>{
       // 1 Hz ground-truth dump of the whole input pipeline; the relay journals it automatically,
       // so she just plays and the answers land in server/logs/room-*.jsonl for offline harvest.
       if(window.__iktelem && sock && sock.readyState===1){
-        const now = performance.now();
-        if(!window.__iktelemLast || now - window.__iktelemLast > 1000){
-          window.__iktelemLast = now;
-          const srcs = [...(session ? session.inputSources : [])].map(s=>({
-            hand: s.handedness, ray: s.targetRayMode, prof: (s.profiles||[]).slice(0,2),
-            hasGrip: !!s.gripSpace, hasGamepad: !!s.gamepad }));
-          const gdump = _grips.map((g,i)=>({ slot: i,
-            bound: !!(g.userData && g.userData.src),
-            hand: g.userData && g.userData.src ? g.userData.src.handedness : null,
-            pos: g.getWorldPosition(new THREE.Vector3()).toArray().map(v=>+v.toFixed(3)) }));
-          sock.send(JSON.stringify({ t:'iktelem', srcs, grips: gdump,
-            hmd: ikHmd.position.toArray().map(v=>+v.toFixed(3)) }));
-        }
+        try{                                          // diagnostics may NEVER break the room — same law
+          const now = performance.now();              // as journal(). 07-09 black-screen suspect: an XR-
+          if(!window.__iktelemLast || now - window.__iktelemLast > 1000){   // loop throw kills frame submit
+            window.__iktelemLast = now;               // ("Chrome 150 · Waiting..."), so telemetry is caged.
+            const srcs = [...(session ? session.inputSources : [])].map(s=>({
+              hand: s.handedness, ray: s.targetRayMode, prof: (s.profiles||[]).slice(0,2),
+              hasGrip: !!s.gripSpace, hasGamepad: !!s.gamepad }));
+            const gdump = _grips.map((g,i)=>({ slot: i,
+              bound: !!(g.userData && g.userData.src),
+              hand: g.userData && g.userData.src ? g.userData.src.handedness : null,
+              pos: g.getWorldPosition(new THREE.Vector3()).toArray().map(v=>+v.toFixed(3)) }));
+            sock.send(JSON.stringify({ t:'iktelem', srcs, grips: gdump,
+              hmd: ikHmd.position.toArray().map(v=>+v.toFixed(3)) }));
+          }
+        }catch(e){ window.__iktelemErr = String(e); } // stash for the 🔧 probe, keep rendering
       }
     }
     if(((renderer.xr.isPresenting && !window.__noik) || window.__forceIK) && window.__updatePlayerIK) window.__updatePlayerIK(dt);
