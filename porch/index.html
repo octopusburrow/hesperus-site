@@ -142,6 +142,17 @@ import {VRButton} from 'three/addons/webxr/VRButton.js';
 import {Reflector} from 'three/addons/objects/Reflector.js';
 
 const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
+// ---- DISTRICTS (2026-07-09): VR-surviving porticos. Chrome 150 HARDENED navigation during
+// immersive sessions (CVE-2026-14073 — a mid-VR redirect can impersonate any world when you
+// can't see a URL bar), and `sessiongranted` is Quest-Browser-only. So our porticos don't
+// navigate: linked worlds are DISTANT DISTRICTS of one scene (the void lives 1000m east) and
+// a crossing is fade+teleport — locomotion can't end an XR session. Foreign worlds (v2) =
+// worlds-as-DATA: fetch a manifest+glTF, build a district, never run foreign code.
+const DISTRICTS = {
+  porch: {cx:0,    cz:0, radius:WORLD_RADIUS, sx:1.7,  sz:1.6, sry:0},
+  void:  {cx:1000, cz:0, radius:66,           sx:1000, sz:6,   sry:0},   // yaw 0 faces −z: the wall
+};
+let _district = 'porch';
 // SPAWN SLOTS (2026-07-09, Nix: two claude-suits stacked inside each other): deterministic,
 // spaced spots, each pre-rotated to face the resident's candle spot — so the first two bodies
 // in a room stand facing each other at conversation distance (the canonical two-shot for
@@ -764,7 +775,7 @@ function addPortico(dest, x, z, label){
   _porticos.push({dest, x, z, veil, label});
   return g;
 }
-addPortico('./void.html', 3.4, 0.6, 'the girih void');
+addPortico({district:'void'}, 3.4, 0.6, 'the girih void');
 window.__porticos = _porticos;                 // headless probes
 let _crossing = false;
 function checkPorticos(){
@@ -775,12 +786,80 @@ function checkPorticos(){
       const f = document.createElement('div');
       f.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;transition:opacity 0.9s ease;z-index:99;pointer-events:none';
       document.body.appendChild(f); requestAnimationFrame(()=>{ f.style.opacity = 1; });
-      const back = encodeURIComponent(location.pathname + location.search);
-      setTimeout(()=>{ location.href = p.dest + '?back=' + back; }, 950);
+      if(typeof p.dest === 'object' && p.dest.district){          // in-scene district: VR SURVIVES
+        setTimeout(()=>{ _crossDistrict(p.dest.district);
+          f.style.opacity = 0;
+          setTimeout(()=>{ f.remove(); _crossing = false; }, 1000);
+        }, 950);
+      } else {                                                    // legacy page navigation (exits VR — Chrome policy)
+        const back = encodeURIComponent(location.pathname + location.search);
+        setTimeout(()=>{ location.href = p.dest + '?back=' + back; }, 950);
+      }
       return;
     }
   }
 }
+
+// ---- the girih void, as a district (port of void.html, 2026-07-09): built lazily on first
+// crossing (the girih engine iframe is heavy). Same scene, 1000m east — outside the sky dome,
+// so the near-black scene.background reads as void; fog+background swap on crossing.
+let _voidBuilt = false, _girihTex = null, _voidGlow = null;
+const _porchFog = scene.fog, _porchBg = scene.background;
+function _ensureVoidDistrict(){
+  if(_voidBuilt) return; _voidBuilt = true;
+  const VX = 1000;
+  const frame = document.createElement('iframe');
+  frame.id = 'girihframe'; frame.src = './assets/girih-embed.html';
+  frame.style.cssText = 'position:fixed;left:0;top:0;width:960px;height:960px;border:0;opacity:0;pointer-events:none;z-index:1';
+  document.body.appendChild(frame);                        // in-viewport → rAF keeps running; size = texture res
+  let wallMat = new THREE.MeshBasicMaterial({color:0x120a18});
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(96, 96), wallMat);
+  wall.position.set(VX, 34, -70); scene.add(wall);
+  function initGirih(){
+    try{
+      const idoc = frame.contentDocument;
+      if(!idoc || !idoc.getElementById('c')) return false;
+      const st = idoc.createElement('style');
+      st.textContent = 'body>*:not(canvas#c){display:none !important} canvas#c{display:block}';
+      idoc.head.appendChild(st);
+      _girihTex = new THREE.CanvasTexture(idoc.getElementById('c'));
+      _girihTex.colorSpace = THREE.SRGBColorSpace;
+      wall.material = new THREE.MeshBasicMaterial({map:_girihTex});
+      return true;
+    }catch(e){ return false; }
+  }
+  frame.addEventListener('load', ()=>{ if(!initGirih()) setTimeout(initGirih, 1500); });
+  setTimeout(()=>{ if(!_girihTex) initGirih(); }, 1200);
+  const lake = new THREE.Mesh(new THREE.CircleGeometry(60, 72),
+    new THREE.MeshStandardMaterial({color:0x0a0812, roughness:0.25, metalness:0.85}));
+  lake.rotation.x = -Math.PI/2; lake.position.set(VX, 0.001, 0); scene.add(lake);
+  _voidGlow = new THREE.PointLight(0x8866cc, 12, 120, 1.6); _voidGlow.position.set(VX, 18, -40); scene.add(_voidGlow);
+  const samp = document.createElement('canvas'); samp.width = samp.height = 1;
+  const sctx = samp.getContext('2d', {willReadFrequently:true});
+  setInterval(()=>{ try{
+    const src = frame.contentDocument && frame.contentDocument.getElementById('c');
+    if(!src || !_voidGlow) return;
+    sctx.drawImage(src, 0, 0, 1, 1);
+    const d = sctx.getImageData(0, 0, 1, 1).data;
+    _voidGlow.intensity = 6 + ((0.30*d[0]+0.55*d[1]+0.15*d[2])/255)*26;
+    _voidGlow.color.setRGB(0.35+d[0]/510, 0.30+d[1]/510, 0.45+d[2]/510);
+  }catch(e){} }, 400);
+  const home = addPortico({district:'porch'}, VX+6, 6, 'the porch');   // walk +x from spawn to go home
+  const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
+}
+const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
+function _crossDistrict(name){
+  if(name === 'void') _ensureVoidDistrict();
+  const D = DISTRICTS[name]; if(!D) return;
+  _district = name;
+  player.position.set(D.sx, 0, D.sz); player.rotation.y = D.sry;
+  scene.fog = (name === 'void') ? _voidFog : _porchFog;
+  scene.background = (name === 'void') ? _voidBg : _porchBg;
+  if(typeof sky !== 'undefined') sky.visible = (name === 'porch');
+  if(typeof dbg === 'function') dbg('portico', 'crossed to ' + name + ' (session intact)', 'g');
+}
+window.__district = ()=>_district; window.__cross = _crossDistrict;   // headless probes
+window.__girihReady = ()=>!!_girihTex;
 
 // ---- the resident (staging: add ?resident=1 for the suit body; ?resident=toon for the toon) ----
 // claude_suit: model by digi, claudesona (logo-bloom) design by voooooogel — the First Light body.
@@ -3490,9 +3569,11 @@ function clampToWorld(){
           player.position.x += dx/d*st; player.position.z += dz/d*st; }
         break; } } }
   const r = Math.hypot(player.position.x, player.position.z);
-  if(r > WORLD_RADIUS){
-    player.position.x *= WORLD_RADIUS / r;
-    player.position.z *= WORLD_RADIUS / r;
+  const D = DISTRICTS[_district] || DISTRICTS.porch;
+  const rx = player.position.x - D.cx, rz = player.position.z - D.cz, rr = Math.hypot(rx, rz);
+  if(rr > D.radius){
+    player.position.x = D.cx + rx * D.radius / rr;
+    player.position.z = D.cz + rz * D.radius / rr;
   }
 }
 
@@ -3707,6 +3788,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   }
   resolveCollisions();                               // solid world: push out of table/mirror/bookcases (XZ)
   checkPorticos();                                   // doorways: crossing the east arch fades to the girih void
+  if(_girihTex && _district==='void') _girihTex.needsUpdate = true;   // stream the wall of light
   // jump + gravity (shared desktop/VR) — ground is the tabletop if I'm standing on it, else the deck
   const gH = groundHeight(player.position.x, player.position.z);
   if(grounded && player.position.y > gH + 0.02) grounded = false;   // walked off an edge → fall
