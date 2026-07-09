@@ -652,6 +652,49 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   addCollider(mir, 'mirror');
 }
 
+// ---- THE PORTICO (2026-07-09, first linked doorway — Nix's "session-instance linked portals";
+// name proposal: a porch's columned entrance is literally a PORTICO, porticus, same root as
+// porch, and it contains "port". East edge of the deck; walking through fades you into
+// void.html — the girih void — carrying ?back so its own portico returns you HERE (same room,
+// same key: the link is the session instance). VR NOTE: WebXR sessions don't survive page
+// navigation, so crossing in VR drops to the browser on the far side — reenter there. v1
+// candidates: same-page scene-swap (keeps the session), portal-camera render-to-texture veil.
+const _porticos = [];
+function addPortico(dest, x, z, label){
+  const g = new THREE.Group();
+  const stone = new THREE.MeshStandardMaterial({color:0x2b2438, roughness:0.6, metalness:0.2});
+  const postG = new THREE.CylinderGeometry(0.10, 0.13, 2.4, 10);
+  const pL = new THREE.Mesh(postG, stone); pL.position.set(0, 1.2, -0.7); pL.castShadow=true; g.add(pL);
+  const pR = new THREE.Mesh(postG, stone); pR.position.set(0, 1.2,  0.7); pR.castShadow=true; g.add(pR);
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 1.9), stone);
+  lintel.position.set(0, 2.5, 0); lintel.castShadow=true; g.add(lintel);
+  const veil = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 2.36),
+    new THREE.MeshBasicMaterial({color:0x9a7fd0, transparent:true, opacity:0.16,
+      side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false}));
+  veil.rotation.y = Math.PI/2; veil.position.set(0, 1.19, 0); g.add(veil);
+  g.position.set(x, 0, z); scene.add(g);
+  addCollider(pL, 'portico-post'); addCollider(pR, 'portico-post');
+  _porticos.push({dest, x, z, veil, label});
+  return g;
+}
+addPortico('./void.html', 3.4, 0.6, 'the girih void');
+window.__porticos = _porticos;                 // headless probes
+let _crossing = false;
+function checkPorticos(){
+  if(_crossing || !player) return;
+  for(const p of _porticos){
+    if(Math.abs(player.position.x - p.x) < 0.45 && Math.abs(player.position.z - p.z) < 0.72){
+      _crossing = true;
+      const f = document.createElement('div');
+      f.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;transition:opacity 0.9s ease;z-index:99;pointer-events:none';
+      document.body.appendChild(f); requestAnimationFrame(()=>{ f.style.opacity = 1; });
+      const back = encodeURIComponent(location.pathname + location.search);
+      setTimeout(()=>{ location.href = p.dest + '?back=' + back; }, 950);
+      return;
+    }
+  }
+}
+
 // ---- the resident (staging: add ?resident=1 for the suit body; ?resident=toon for the toon) ----
 // claude_suit: model by digi, claudesona (logo-bloom) design by voooooogel — the First Light body.
 // claude-toon: SkyeShark (claudes-body, MIT), design by vgel.
@@ -3099,6 +3142,7 @@ renderer.setAnimationLoop((now)=>{
     if(keys.KeyD) player.position.addScaledVector(right,  spd);
   }
   resolveCollisions();                               // solid world: push out of table/mirror/bookcases (XZ)
+  checkPorticos();                                   // doorways: crossing the east arch fades to the girih void
   // jump + gravity (shared desktop/VR) — ground is the tabletop if I'm standing on it, else the deck
   const gH = groundHeight(player.position.x, player.position.z);
   if(grounded && player.position.y > gH + 0.02) grounded = false;   // walked off an edge → fall

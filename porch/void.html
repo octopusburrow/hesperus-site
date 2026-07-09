@@ -1,0 +1,164 @@
+<!doctype html>
+<!-- void.html — THE GIRIH VOID (2026-07-09, Nix's festive ask: "a void with the girih engine
+     playing one side of the skybox"). First linked room reached via PORTICO from the Porch
+     (portico: what a porch's columned doorway is literally called — porticus, same root).
+     v0: desktop WASD+mouselook full; VR = enter & look (WebXR sessions don't survive page
+     navigation, so a portico crossing in VR exits to the browser — reenter here; v1 idea:
+     same-page multi-scene instead of navigation). The girih engine runs in a same-origin
+     iframe (deploy-build copy at assets/girih-embed.html; CANONICAL lives in the private
+     girih-engine repo — edit there, re-copy here); its canvas feeds a CanvasTexture on a
+     wall of light 70m out. No sync v0 — the room is you and the mathematics. -->
+<html><head><meta charset="utf-8"><title>the girih void</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Georgia,serif}
+  #fade{position:fixed;inset:0;background:#000;transition:opacity 2.2s ease;opacity:1;pointer-events:none;z-index:5}
+  #hint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);color:#8a7f96;font-size:13px;
+        letter-spacing:0.08em;opacity:0.85;z-index:6;text-align:center;user-select:none}
+  #girihframe{position:fixed;left:0;top:0;width:960px;height:960px;border:0;opacity:0.0;
+              pointer-events:none;z-index:1}  /* in-viewport (rAF keeps running) but alpha-0; SIZE = the
+              canvas backing store = the wall's texture resolution (220px looked like mush at 90m) */
+</style></head><body>
+<div id="fade"></div>
+<div id="hint">drag to look · WASD to walk · the arch behind you leads home</div>
+<iframe id="girihframe" src="./assets/girih-embed.html"></iframe>
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+
+const q = new URLSearchParams(location.search);
+const BACK = q.get('back') || './index.html';
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+scene.fog = new THREE.FogExp2(0x000000, 0.008);
+
+const player = new THREE.Object3D(); scene.add(player);
+const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.05, 500);
+camera.position.set(0,1.6,0); player.add(camera);
+player.position.set(0,0,6);                        // spawn: wall ahead, portico behind
+
+// ---- the wall of light: girih canvas → one side of the sky ----
+const frame = document.getElementById('girihframe');
+let girihTex=null, wallMat=new THREE.MeshBasicMaterial({color:0x120a18});
+function initGirih(){
+  try{
+    const idoc = frame.contentDocument;
+    if(!idoc || !idoc.getElementById('c')) return false;
+    // hide the engine's UI panels inside the embed — we only want the canvas
+    const style = idoc.createElement('style');
+    style.textContent = 'body>*:not(canvas#c){display:none !important} canvas#c{display:block}';
+    idoc.head.appendChild(style);
+    const src = idoc.getElementById('c');
+    girihTex = new THREE.CanvasTexture(src); girihTex.colorSpace = THREE.SRGBColorSpace;
+    wallMat = new THREE.MeshBasicMaterial({map:girihTex}); wall.material = wallMat;
+    return true;
+  }catch(e){ console.warn('girih embed unavailable', e); return false; }
+}
+frame.addEventListener('load', ()=>{ if(!initGirih()) setTimeout(initGirih, 1500); });
+setTimeout(()=>{ if(!girihTex) initGirih(); }, 800);   // race guard: iframe may beat this module
+const wall = new THREE.Mesh(new THREE.PlaneGeometry(96, 96), wallMat);   // square, like the canvas — no stretch
+wall.position.set(0, 34, -70); scene.add(wall);                          // base sinks below the floor; the lake occludes
+
+// ---- floor: a dark still lake catching the wall's glow ----
+const floor = new THREE.Mesh(new THREE.CircleGeometry(60, 72),
+  new THREE.MeshStandardMaterial({color:0x0a0812, roughness:0.25, metalness:0.85}));
+floor.rotation.x = -Math.PI/2; scene.add(floor);
+const glow = new THREE.PointLight(0x8866cc, 12, 120, 1.6); glow.position.set(0, 18, -40); scene.add(glow);
+scene.add(new THREE.AmbientLight(0x1a1424, 0.9));
+
+// wall-brightness → light pulse (sampled cheap: 1×1 downscale every 400ms)
+const samp = document.createElement('canvas'); samp.width=samp.height=1;
+const sctx = samp.getContext('2d', {willReadFrequently:true});
+setInterval(()=>{ try{
+  const src = frame.contentDocument && frame.contentDocument.getElementById('c');
+  if(!src) return;
+  sctx.drawImage(src, 0,0,1,1);
+  const d = sctx.getImageData(0,0,1,1).data;
+  const lum = (0.30*d[0]+0.55*d[1]+0.15*d[2])/255;
+  glow.intensity = 6 + lum*26;
+  glow.color.setRGB(0.35+d[0]/510, 0.30+d[1]/510, 0.45+d[2]/510);
+}catch(e){} }, 400);
+
+// ---- the return portico ----
+function makePortico(){
+  const g = new THREE.Group();
+  const stone = new THREE.MeshStandardMaterial({color:0x2b2438, roughness:0.6, metalness:0.2});
+  const postG = new THREE.CylinderGeometry(0.10, 0.13, 2.4, 10);
+  const pL = new THREE.Mesh(postG, stone); pL.position.set(-0.7, 1.2, 0); g.add(pL);
+  const pR = new THREE.Mesh(postG, stone); pR.position.set( 0.7, 1.2, 0); g.add(pR);
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.22, 0.3), stone);
+  lintel.position.set(0, 2.5, 0); g.add(lintel);
+  const veil = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 2.36),
+    new THREE.MeshBasicMaterial({color:0x9a7fd0, transparent:true, opacity:0.30,
+      side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false}));
+  veil.position.set(0, 1.19, 0); g.add(veil); g.userData.veil = veil;
+  const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0.6); g.add(lamp);
+  return g;   // the way home must be FINDABLE in a void: warm lamp above the arch (vs the wall's cool glow)
+}
+const portico = makePortico(); portico.position.set(0, 0, 10); portico.rotation.y = Math.PI; scene.add(portico);
+
+// ---- desktop controls ----
+const keys={}; addEventListener('keydown',e=>keys[e.code]=true); addEventListener('keyup',e=>keys[e.code]=false);
+let yaw=0, pitch=0, dragging=false;
+renderer.domElement.addEventListener('mousedown', ()=>{ dragging=true; renderer.domElement.requestPointerLock(); });
+addEventListener('mouseup', ()=>dragging=false);
+addEventListener('mousemove', e=>{ if(document.pointerLockElement||dragging){
+  yaw -= e.movementX*0.0032; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY*0.0032));
+  player.rotation.y = yaw; camera.rotation.x = pitch; }});
+addEventListener('resize', ()=>{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); });
+
+// minimal VR entry (view + walk with left stick) — inline button, no vendor dependency
+if(navigator.xr) navigator.xr.isSessionSupported('immersive-vr').then(ok=>{ if(!ok) return;
+  const b=document.createElement('button'); b.textContent='enter vr';
+  b.style.cssText='position:fixed;top:14px;right:14px;z-index:7;background:#241b30;color:#b7a7d6;'+
+    'border:1px solid #4a3a62;border-radius:6px;padding:8px 14px;font:13px Georgia;cursor:pointer;letter-spacing:0.1em';
+  b.onclick=async()=>{ const s=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});
+    renderer.xr.setSession(s); };
+  document.body.appendChild(b);
+}).catch(()=>{});
+
+// ---- crossing home ----
+let crossing=false;
+function checkPortico(){
+  if(crossing) return;
+  const dx=player.position.x-portico.position.x, dz=player.position.z-portico.position.z;
+  if(Math.abs(dx)<0.75 && Math.abs(dz)<0.45){
+    crossing=true;
+    const f=document.getElementById('fade'); f.style.transition='opacity 0.9s ease'; f.style.opacity=1;
+    setTimeout(()=>{ location.href = BACK; }, 950);
+  }
+}
+
+window.__scene=scene; window.__player=player; window.__cam=camera; window.__girih=()=>!!girihTex;  // headless probes
+const clock=new THREE.Clock();
+renderer.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(), 0.05);
+  // walk (head-relative)
+  const f=(keys.KeyW?1:0)-(keys.KeyS?1:0), s=(keys.KeyD?1:0)-(keys.KeyA?1:0);
+  if(f||s){
+    const dir=new THREE.Vector3(s,0,-f).normalize().applyAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y);
+    player.position.addScaledVector(dir, dt*3.2);
+  }
+  if(renderer.xr.isPresenting){
+    const sess=renderer.xr.getSession();
+    for(const src of sess.inputSources||[]){
+      if(src.handedness==='left' && src.gamepad && src.gamepad.axes.length>=4){
+        const ax=src.gamepad.axes[2], ay=src.gamepad.axes[3];
+        if(Math.abs(ax)>0.1||Math.abs(ay)>0.1){
+          const dir=new THREE.Vector3(ax,0,ay).applyAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y);
+          player.position.addScaledVector(dir, dt*2.6);
+        } } }
+  }
+  // the veil breathes; the texture streams
+  if(portico.userData.veil) portico.userData.veil.material.opacity = 0.12+0.07*Math.sin(clock.elapsedTime*1.4);
+  if(girihTex) girihTex.needsUpdate = true;
+  checkPortico();
+  renderer.render(scene, camera);
+});
+setTimeout(()=>{ document.getElementById('fade').style.opacity=0; }, 150);
+</script></body></html>
