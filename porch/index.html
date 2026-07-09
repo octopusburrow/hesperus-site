@@ -142,7 +142,19 @@ import {VRButton} from 'three/addons/webxr/VRButton.js';
 import {Reflector} from 'three/addons/objects/Reflector.js';
 
 const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
-const SPAWN = new THREE.Vector3(0, 0, 2.6);
+// SPAWN SLOTS (2026-07-09, Nix: two claude-suits stacked inside each other): deterministic,
+// spaced spots, each pre-rotated to face the resident's candle spot — so the first two bodies
+// in a room stand facing each other at conversation distance (the canonical two-shot for
+// image verification). Joiners take the first slot with nobody within 0.8m; if occupancy
+// wasn't known yet at load (remotes arrive async), a one-shot re-check at +2.5s relocates
+// anyone still standing untouched on a stacked slot.
+const _CANDLE = {x: 1.7, z: -1.15};                       // the resident's host spot
+const _yawToward = (from, to) => Math.atan2(-(to.x-from.x), -(to.z-from.z));   // forward = (−sin ry, −cos ry)
+const SPAWN_SLOTS = [
+  {x: 1.7, z: 1.60}, {x: 0.0, z: 2.60}, {x: 3.0, z: 0.90},
+  {x: -1.2, z: 1.90}, {x: 0.6, z: 3.40}, {x: 2.6, z: 2.60},
+].map(s => ({...s, ry: _yawToward(s, _CANDLE)}));
+const SPAWN = new THREE.Vector3(SPAWN_SLOTS[0].x, 0, SPAWN_SLOTS[0].z);   // legacy alias (respawn etc.)
 
 const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(devicePixelRatio);
@@ -163,8 +175,24 @@ camera.position.set(0, 1.6, 0);
 // player rig: locomotion moves this; headset/mouse aims the camera inside it
 const player = new THREE.Group(); window.__player = player;
 player.position.copy(SPAWN);
+player.rotation.y = SPAWN_SLOTS[0].ry;                    // face the candle spot from the start
 player.add(camera);
 scene.add(player);
+let _mySlot = SPAWN_SLOTS[0];
+function _occupants(){ const o=[];
+  if(typeof residentVrm!=='undefined' && residentVrm) o.push(residentVrm.scene.position);
+  if(typeof remotes!=='undefined') for(const r of remotes.values()) o.push(r.group.position);
+  return o; }
+function _freeSlot(){ const occ=_occupants();
+  for(const s of SPAWN_SLOTS) if(!occ.some(p=>Math.hypot(p.x-s.x, p.z-s.z)<0.8)) return s;
+  return SPAWN_SLOTS[0]; }
+window.__respawnSlot = ()=>{ const s=_freeSlot();
+  player.position.set(s.x, 0, s.z); player.rotation.y=s.ry; _mySlot=s; return s; };
+setTimeout(()=>{                                          // remotes have arrived by now: fix a stacked spawn
+  const untouched = Math.hypot(player.position.x-_mySlot.x, player.position.z-_mySlot.z) < 0.4;
+  const stacked = _occupants().some(p=>Math.hypot(p.x-player.position.x, p.z-player.position.z) < 0.7);
+  if(untouched && stacked){ const s=window.__respawnSlot(); console.log('spawn: relocated to free slot', s.x, s.z); }
+}, 2500);
 
 // ---- physics v0: static AABB colliders + a horizontal push-out resolver so the world is SOLID.
 // Lightweight (no engine): the player is a vertical capsule (radius PLAYER_R, height PLAYER_H);
@@ -2911,7 +2939,7 @@ function runCommand(raw){
     case 'tp': { const x=parseFloat(rest[0]), z=parseFloat(rest[1]);
       if(isNaN(x)||isNaN(z)) cmdNote('usage: /tp <x> <z>');
       else doTeleport(x, z, `teleported to (${x}, ${z})`); break; }
-    case 'respawn': doTeleport(SPAWN.x, SPAWN.z, 'respawned at the deck'); break;
+    case 'respawn': { const s=_freeSlot(); doTeleport(s.x, s.z, 'respawned at the deck'); player.rotation.y=s.ry; break; }
     case 'nearby': sendQuery({what:'nearby', n:parseInt(rest[0])||20}); break;
     case 'look': sendQuery({what:'look', fov:parseFloat(rest[0])||90}); break;
     case 'goto': doGoto(rest.join(' ')); break;
