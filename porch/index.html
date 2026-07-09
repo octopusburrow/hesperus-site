@@ -1506,6 +1506,27 @@ if(!new URLSearchParams(location.search).has('noembody')){
       // back STRAIGHT UP in the mirror pass. Mesh visibility above already hides everything.
     };
     window.__setHeadScale(0);
+    // MEASURED eye anchor (ik-verdicts #2, 2026-07-09): the anchor's (0,0.06,0.10) head-local
+    // fallback is a human-skull guess. The toon VRM has NO eye bones and its visual eyes
+    // MEASURE at head-local (0,+0.16,+0.20) — the guess parks the camera 10cm low and 10cm
+    // back, inside the skull at chin height, which is exactly Nix's "seeing the top of the
+    // neck when looking down." Measure eye-NAMED meshes at load (rest pose) instead of tuning.
+    try{
+      const hd=vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('head');
+      const hasEyeBones=!!(vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('leftEye') && vrm.humanoid.getNormalizedBoneNode('rightEye'));
+      if(hd && !hasEyeBones){
+        vrm.scene.updateMatrixWorld(true);
+        const pts=[]; vrm.scene.traverse(o=>{ if(o.isMesh && /eye/i.test(o.name)){
+          if(!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+          pts.push(o.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(o.matrixWorld)); }});
+        if(pts.length){
+          const c=pts.reduce((a,p)=>a.add(p), new THREE.Vector3()).multiplyScalar(1/pts.length);
+          vrm.userData.eyeLocal=hd.worldToLocal(c.clone());
+          console.log('measured eye offset (head-local): '+vrm.userData.eyeLocal.toArray().map(v=>+v.toFixed(3)));
+        }
+      }
+    }catch(e){ console.warn('eye measurement failed (fallback offset stays)', e); }
+    window.__eyeOffset=(x,y,z)=>{ vrm.userData.eyeLocal=new THREE.Vector3(x,y,z); return vrm.userData.eyeLocal.toArray(); };  // live headset tuning
     playerVrm=vrm; window.__playerVrm=vrm;
     console.log('embodied: claude_suit petals='+petals);
   })().catch(e=>console.error('embody failed', e));
@@ -1612,13 +1633,25 @@ function updatePlayerIK(dt){
   // Whole-body yaw eases SLOWLY toward where you look; the part it hasn't caught up to becomes
   // visible spine TWIST distributed down the chain (Basis 'pelvic twist'), settling as the body turns.
   const catchup=Math.min(1,dt*2.5);
-  const residualYaw=_sa(tgtYaw - vrm.scene.rotation.y)*(1-catchup);
   vrm.scene.rotation.y += _sa(tgtYaw - vrm.scene.rotation.y)*catchup;
   vrm.scene.updateMatrixWorld(true);
+  // BODY-FRAME HMD (inversion fix, 2026-07-09 — Nix's verdict #4: nod up = avatar nods DOWN,
+  // tilt left = rolls RIGHT; yaw fine). Cause: pitch/roll were WORLD eulers applied to bones
+  // living in a π-flipped, independently-yawed body — conjugating a rotation through a π yaw
+  // NEGATES its X and Z terms (R_y(π)⁻¹·R_x(θ)·R_y(π) = R_x(−θ)), which is exactly the mirror
+  // she saw. Fix: express the HMD in the frame the bones actually live in, face-flip included:
+  //   qRel = R_y(rigY + sceneY)⁻¹ · hq · R_y(π)
+  // Bonus rigor: qRel's OWN yaw term = w+π−rigY−sceneY = the residual twist, exactly — so the
+  // (1−catchup) approximation goes away and all three axes share one frame (derived on paper,
+  // locked by world-space sign assertions in ik_test).
+  const qRel=new THREE.Quaternion().setFromEuler(new THREE.Euler(0,rigY+vrm.scene.rotation.y,0)).invert()
+    .multiply(hq).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0,Math.PI,0)));
+  const heR=new THREE.Euler().setFromQuaternion(qRel,'YXZ');
+  const residualYaw=_sa(heR.y);
   if(window.__nospineik){                                      // safety fallback: old neck+head-only look
     const neck=h.getNormalizedBoneNode('neck'), head=h.getNormalizedBoneNode('head');
-    if(neck) neck.quaternion.setFromEuler(new THREE.Euler(he.x*0.35,0,he.z*0.35,'YXZ'));
-    if(head) head.quaternion.setFromEuler(new THREE.Euler(he.x*0.6,0,he.z*0.6,'YXZ'));
+    if(neck) neck.quaternion.setFromEuler(new THREE.Euler(heR.x*0.35,0,heR.z*0.35,'YXZ'));
+    if(head) head.quaternion.setFromEuler(new THREE.Euler(heR.x*0.6,0,heR.z*0.6,'YXZ'));
   } else {
     // Distributed look-at: spread nod(pitch)+tilt(roll)+residual-twist(yaw) across the spine chain
     // so no single joint snaps — spine takes least, head most. Weights sum ~1 over EXISTING bones
@@ -1626,7 +1659,7 @@ function updatePlayerIK(dt){
     const chain=['spine','chest','upperChest','neck','head'].map(n=>h.getNormalizedBoneNode(n));
     const wY=[.12,.12,.16,.25,.35], wP=[.10,.12,.16,.26,.36], wR=[.08,.10,.14,.28,.40];
     let sY=0,sP=0,sR=0; chain.forEach((b,i)=>{ if(b){ sY+=wY[i]; sP+=wP[i]; sR+=wR[i]; } });
-    const pitch=THREE.MathUtils.clamp(he.x,-0.7,0.7), roll=THREE.MathUtils.clamp(he.z,-0.5,0.5);
+    const pitch=THREE.MathUtils.clamp(heR.x,-0.7,0.7), roll=THREE.MathUtils.clamp(heR.z,-0.5,0.5);
     const yawFade=Math.max(0,Math.cos(pitch));                 // near-vertical gaze → fade twist (avoid pole singularity)
     const s=Math.min(1,dt*9);                                  // chest-follow damping: torso EASES to your gaze
     _lookS.x+=(pitch-_lookS.x)*s; _lookS.y+=(residualYaw-_lookS.y)*s; _lookS.z+=(roll-_lookS.z)*s;
@@ -1642,9 +1675,13 @@ function updatePlayerIK(dt){
   if(ikHmd.position.lengthSq() > 1e-6){                        // no HMD data (headless default) → no anchor
     vrm.scene.position.set(0,0,0); vrm.scene.updateMatrixWorld(true);
     let eyeW=null;
+    const _eyeLocal=(vrm.userData && vrm.userData.eyeLocal) || null;   // measured-at-load or __eyeOffset override — beats bones
     const le=h.getNormalizedBoneNode('leftEye'), re=h.getNormalizedBoneNode('rightEye');
-    if(le&&re) eyeW=le.getWorldPosition(new THREE.Vector3()).add(re.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
-    else{ const hd=h.getNormalizedBoneNode('head');
+    if(_eyeLocal){ const hd=h.getNormalizedBoneNode('head');
+      if(hd) eyeW=hd.getWorldPosition(new THREE.Vector3())
+        .add(_eyeLocal.clone().applyQuaternion(hd.getWorldQuaternion(new THREE.Quaternion()))); }
+    if(!eyeW && le&&re) eyeW=le.getWorldPosition(new THREE.Vector3()).add(re.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+    if(!eyeW){ const hd=h.getNormalizedBoneNode('head');
       if(hd){ eyeW=hd.getWorldPosition(new THREE.Vector3())
         .add(new THREE.Vector3(0,0.06,0.10).applyQuaternion(hd.getWorldQuaternion(new THREE.Quaternion()))); } }
     if(eyeW){
