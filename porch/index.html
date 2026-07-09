@@ -277,10 +277,14 @@ const _snap = x => Math.round(x*PPM)/PPM;                // MODEL ON THE GRID: d
 const _oakPaint = (name, ctx, w, h) => {                 // shared house-style oak grain (table + bookcase)
   const top = (name==='py'||name==='ny');
   for(let yy=0; yy<h; yy++) for(let xx=0; xx<w; xx++){
-    const grain = ((xx*7 + yy*3) % 5) - 2;
-    const plank = top && (yy%6===0) ? -16 : 0;           // plank seams across the grain on flat faces
-    const v = grain + plank;
-    ctx.fillStyle = `rgb(${91+v},${64+v},${35+Math.floor(v*0.7)})`; ctx.fillRect(xx,yy,1,1);
+    // HIGH-FREQ decorrelated per-pixel speckle → every pixel is a distinct shade, so square-ness
+    // and equal pixel size are readable at a glance (Nix 2026-07-09). Deterministic hash (no RNG).
+    let hsh = (xx*92837111) ^ (yy*689287499); hsh = (hsh ^ (hsh>>>13)) >>> 0;
+    const speck = (hsh % 21) - 10;                       // ±10 per pixel — clearly visible grid
+    const grain = Math.round(4*Math.sin(yy*0.9 + (xx>>2)*0.7));   // low-freq wood streaks for character
+    const plank = top && (yy%6===0) ? -22 : 0;           // plank seams across the grain on flat faces
+    const v = speck + grain + plank;
+    ctx.fillStyle = `rgb(${104+v},${72+v},${40+Math.floor(v*0.7)})`; ctx.fillRect(xx,yy,1,1);
   }
 };
 // three.js BoxGeometry face order + the 6 world-face dims for (W=x,H=y,D=z):
