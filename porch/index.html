@@ -273,6 +273,7 @@ window.__physics = { colliders, resolveCollisions, groundHeight };
 // which we guarantee BY CONSTRUCTION — each face's atlas cell is sized round(worldDim*PPM), so a
 // 0.14 m face gets exactly round(0.14*32)=4 px. One texture, one material, one draw call per box.
 const PPM = 32;                                          // pixels per metre — the house density (deck = 64px/2m = this)
+const _snap = x => Math.round(x*PPM)/PPM;                // MODEL ON THE GRID: dims must be k/PPM or pixels can't be square
 // three.js BoxGeometry face order + the 6 world-face dims for (W=x,H=y,D=z):
 const _BOX_FACES = [ ['px','D','H'], ['nx','D','H'], ['py','W','D'], ['ny','W','D'], ['pz','W','H'], ['nz','W','H'] ];
 function _makePixelBox(W, H, D, drawFace, matOpts){
@@ -315,7 +316,7 @@ const _BOOK_PALETTES = [
 ];
 function _bookMesh(seed){
   const P = _BOOK_PALETTES[seed % _BOOK_PALETTES.length];
-  const W=0.055, H=0.20, D=0.145;                        // thickness × height × cover-depth (spine out)
+  const W=_snap(0.055), H=_snap(0.20), D=_snap(0.145);   // SNAPPED to the 1/32 m pixel grid → exactly square
   const paint = (name, ctx, w, h) => {
     if(name==='pz' || name==='nz'){                       // SPINE (visible on shelf)
       ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);
@@ -332,6 +333,22 @@ function _bookMesh(seed){
   r.mesh.userData.bookDims = [W,H,D];
   return r;
 }
+window.__checkerBox = (W,H,D)=>{                       // square-pixel proof for _makePixelBox surfaces
+  const paint=(name,ctx,w,h)=>{ for(let y=0;y<h;y++)for(let x=0;x<w;x++){ ctx.fillStyle=((x+y)&1)?'#fff':'#111'; ctx.fillRect(x,y,1,1);} };
+  const cw=camera.getWorldPosition(new THREE.Vector3());
+  const r=_makePixelBox(W||0.5,H||0.7,D||0.3, paint, {roughness:1});
+  r.mesh.position.set(cw.x, 1.4, cw.z-1.3); scene.add(r.mesh); return 'checker box atlas '+r.atlas.join('x'); };
+window.__checkerScene = (rep)=>{                       // stamp a world checker on EVERY mesh — bad UVs = rectangles
+  rep = rep||24;
+  const c=document.createElement('canvas'); c.width=c.height=2; const g=c.getContext('2d');
+  g.fillStyle='#111'; g.fillRect(0,0,2,2); g.fillStyle='#fff'; g.fillRect(0,0,1,1); g.fillRect(1,1,1,1);
+  scene.traverse(o=>{ if(!o.isMesh || !o.material) return;
+    if(o.material.uniforms) return;                     // skip ShaderMaterials (sky/candle) — they need their uniforms
+    o.userData._omat = o.material;
+    const t=new THREE.CanvasTexture(c); t.magFilter=t.minFilter=THREE.NearestFilter;
+    t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rep,rep); t.generateMipmaps=false;
+    o.material = new THREE.MeshBasicMaterial({map:t}); });
+  return 'checker on scene, repeat '+rep; };
 window.__testPixelBox = ()=>{                            // verification: a big cube, 6 distinct faces + arrow
   const cols = {px:'#c0392b',nx:'#8e44ad',py:'#27ae60',ny:'#2980b9',pz:'#d4a017',nz:'#16a085'};
   const paint = (name, ctx, w, h) => { ctx.fillStyle=cols[name]; ctx.fillRect(0,0,w,h);
@@ -610,39 +627,60 @@ const SMOOTH_MAP = `
 // SHELF BOOKS (2026-07-09, Nix): replace the bookcase's BAKED books with house-style pixel books
 // that are individually grabbable + throwable (prop system) — and a live instance perf readout.
 // Templates share geo+material; each placed book is a clone (shared geo/mat, own transform).
-let _bookN = 0; const _bookTemplates = [];
+let _bookN = 0; const _bookTemplates = []; const _shelfBooks = [];
+// Duplicate books are drawn ONCE: one InstancedMesh per palette (shared geo+material, per-instance
+// matrix). 97 books → ~8 draw calls instead of 97. Grab MATERIALISES a book (hide the instance,
+// spawn a real prop sharing the same geo+mat) so grab/throw is unchanged; drop leaves it standalone.
 function _populateShelves(cases){
-  for(let t=0;t<_BOOK_PALETTES.length;t++) _bookTemplates.push(_bookMesh(t));   // 8 shared geo/mat templates
+  for(let t=0;t<_BOOK_PALETTES.length;t++) _bookTemplates.push(_bookMesh(t));
+  const byPal = _bookTemplates.map(()=>[]);
+  const H = _bookTemplates[0].mesh.userData.bookDims[1];
   for(const cx of cases){
-    // hide the baked-in books (keep the shelves/frame), then stand our own on the real shelves
     const shelves = [];
     cx.traverse(o=>{ const n=o.name||'';
       if(/^bookcase_(run|hero)/.test(n)) o.visible = false;
-      if(/^bookcase_shelf/.test(n)) shelves.push(o);
-    });
-    // also use the case bottom as a third shelf if only two named shelves exist
+      if(/^bookcase_shelf/.test(n)) shelves.push(o); });
     for(const sh of shelves){
       const box = new THREE.Box3().setFromObject(sh);
-      const topY = box.max.y + 0.002, z = box.max.z - 0.085;      // front edge, standing on top
-      const x0 = box.min.x + 0.05, x1 = box.max.x - 0.05;
-      let x = x0, lean = 0;
+      const topY = box.max.y + 0.002, z = box.max.z - 0.085, x0 = box.min.x + 0.05, x1 = box.max.x - 0.05;
+      let x = x0;
       while(x < x1){
-        const tpl = _bookTemplates[(_bookN*3+7) % _bookTemplates.length];
-        const m = tpl.mesh.clone();                                // shares geometry + material
-        const H = tpl.mesh.userData.bookDims[1];
-        m.position.set(x + 0.03, topY + H/2, z);
-        m.rotation.y = (Math.abs((x*53)%1) < 0.14) ? 0.12 : 0;     // an occasional leaner (deterministic)
-        const g = _addProp('book_'+(_bookN++), m, H/2);
-        g.home.copy(m.position);
-        x += 0.055 + 0.006;
+        const pal = (_bookN*3+7) % _bookTemplates.length;
+        const lean = (Math.abs((x*53)%1) < 0.14) ? 0.12 : 0;
+        byPal[pal].push({ pos:new THREE.Vector3(x+0.03, topY+H/2, z),
+                          quat:new THREE.Quaternion().setFromEuler(new THREE.Euler(0,lean,0)) });
+        _bookN++; x += 0.0625 + 0.006;
       }
     }
   }
-  if(typeof dbg==='function') dbg('books', _bookN+' shelf books (grabbable)', 'k');
+  let imeshes = 0;
+  const m4 = new THREE.Matrix4(), sc = new THREE.Vector3(1,1,1);
+  for(let pcol=0; pcol<_bookTemplates.length; pcol++){
+    const pls = byPal[pcol]; if(!pls.length) continue;
+    const tpl = _bookTemplates[pcol];
+    const im = new THREE.InstancedMesh(tpl.geo, tpl.mat, pls.length);
+    im.castShadow = im.receiveShadow = true; im.name = 'books_'+pcol; imeshes++;
+    pls.forEach((pl,i)=>{ m4.compose(pl.pos, pl.quat, sc); im.setMatrixAt(i, m4);
+      _shelfBooks.push({ imesh:im, idx:i, pos:pl.pos.clone(), quat:pl.quat.clone(), palette:pcol,
+                         pid:'book_'+_shelfBooks.length, taken:false }); });
+    im.instanceMatrix.needsUpdate = true; scene.add(im);
+  }
+  window.__booksInstanced = imeshes;
+  if(typeof dbg==='function') dbg('books', _shelfBooks.length+' books in '+imeshes+' instanced meshes (duplicates drawn once)', 'k');
+}
+function _materializeShelfBook(sb){                        // grab: pop an instance into a real grabbable prop
+  sb.taken = true;
+  const m4 = new THREE.Matrix4().compose(sb.pos, sb.quat, new THREE.Vector3(1e-5,1e-5,1e-5));
+  sb.imesh.setMatrixAt(sb.idx, m4); sb.imesh.instanceMatrix.needsUpdate = true;   // hide the instance
+  const tpl = _bookTemplates[sb.palette];
+  const mesh = new THREE.Mesh(tpl.geo, tpl.mat);           // shares geo+material — still cheap
+  mesh.position.copy(sb.pos); mesh.quaternion.copy(sb.quat); mesh.castShadow = true;
+  const g = _addProp(sb.pid, mesh, tpl.mesh.userData.bookDims[1]/2); g.home.copy(sb.pos);
+  return g;
 }
 window.__perf = ()=>({ drawCalls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
-  books: grabbables.filter(g=>String(g.pid).startsWith('book')).length,
-  templates: _bookTemplates.length });
+  books: _shelfBooks.length, instancedMeshes: window.__booksInstanced||0,
+  grabbed: _shelfBooks.filter(s=>s.taken).length });
 
 const loader = new GLTFLoader();
 loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{
@@ -732,8 +770,10 @@ function _addProp(pid, mesh, hh){ mesh.castShadow=true;
   const g={mesh, pid, hh, vel:new THREE.Vector3(), owner:null, carrying:false, offset:null, home:mesh.position.clone(), mat:mesh.material, _cool:0};
   grabbables.push(g); grabbablesById[pid]=g; scene.add(mesh); return g; }
 // nearest FREE (unowned, off-cooldown) grabbable to a point — you can't grab what someone holds
-function grabNearest(point, maxDist){ let best=null, bd=maxDist*maxDist;
-  for(const g of grabbables){ if(g.owner!=null || g._cool>0) continue; const d2=g.mesh.position.distanceToSquared(point); if(d2<bd){ bd=d2; best=g; } }
+function grabNearest(point, maxDist){ let best=null, bd=maxDist*maxDist, shelf=null;
+  for(const g of grabbables){ if(g.owner!=null || g._cool>0 || !g.mesh) continue; const d2=g.mesh.position.distanceToSquared(point); if(d2<bd){ bd=d2; best=g; shelf=null; } }
+  if(typeof _shelfBooks!=='undefined') for(const sb of _shelfBooks){ if(sb.taken) continue; const d2=sb.pos.distanceToSquared(point); if(d2<bd){ bd=d2; shelf=sb; best=null; } }
+  if(shelf) return _materializeShelfBook(shelf);          // instanced book grabbed → become a real prop
   return best; }
 let heldProp = null;                                 // desktop carry
 const _heldHand = {left:null, right:null};           // VR grip carry
