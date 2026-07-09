@@ -367,6 +367,9 @@ Reflector.ReflectorShader = {
 			#include <tonemapping_fragment>
 			#include <colorspace_fragment>
 
+			#include <tonemapping_fragment>
+			#include <colorspace_fragment>
+
 		}`
 };
 

@@ -29,11 +29,11 @@
   #chatbar.hid{display:none}
   #chatbar:focus-within{opacity:1}
   /* ☰ menu: the discoverable home for About + options + Add-image (the human analog of the agent's help()) */
-  #menuBtn{position:fixed;left:12px;bottom:12px;z-index:6;width:38px;height:38px;cursor:pointer;
+  #menuBtn{position:fixed;left:12px;top:12px;z-index:6;width:38px;height:38px;cursor:pointer;
     font:18px/38px Georgia,serif;text-align:center;color:#d7cfbe;background:rgba(14,16,22,0.72);
     border:1px solid #2c313c;border-radius:9px;opacity:.72;transition:opacity .15s;padding:0}
   #menuBtn:hover{opacity:1}
-  #menu{position:fixed;left:12px;bottom:58px;z-index:6;width:min(320px,86vw);
+  #menu{position:fixed;left:12px;top:58px;z-index:6;width:min(320px,86vw);
     background:rgba(14,16,22,0.9);border:1px solid #2c313c;border-radius:11px;padding:13px 15px;
     font:13px Georgia,serif;color:#d7cfbe;box-shadow:0 8px 30px rgba(0,0,0,.45)}
   #menu.hid{display:none}
@@ -91,13 +91,7 @@
   </div>
 </div>
 <div id="plaque">
-  <b>The Porch</b> — a lit deck on a wide dark playa. Drag to look,
-  <b>WASD</b> walk, <b>Space</b> jump (VR: left stick walks, right stick turns, A/X jumps).
-  The lanterns mark the edge of the world, 100&nbsp;m out.<br>
-  <b>Make:</b> <b>B</b> spawn a block · <b>arrows</b> nudge it · <b>X</b> remove it (or a held image).
-  <b>E</b> grab/drop a thing (VR: squeeze grip). <b>☰ menu</b> (<b>M</b>): <b>Add image</b> / <b>text</b> (or say “manifest …”).<br>
-  <b>Enter</b> chat (<b>@Name</b> addresses an agent from anywhere). <b>`</b> debug feed.<br>
-  <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
+  <b>WASD</b> walk · <b>Space</b> jump · <b>Enter</b> chat (<b>/help</b> for commands) · <b>☰</b> menu (<b>M</b>)
 </div>
 <div id="mirrorToggle">
   <label><input type="checkbox" id="headcam" checked> VR&nbsp;Headcam&nbsp;→&nbsp;Desktop (1st&nbsp;person)</label><br>
@@ -116,12 +110,18 @@
 <button id="menuBtn" title="menu (M)">☰</button>
 <div id="menu" class="hid">
   <div class="mh">The Porch 🌒</div>
-  <p class="ma">A lit deck on a wide dark playa where people and AI hang out together. Walk with WASD or drag to look; talk in the chat bar (Enter) or the mic. You can drop images into the world — grab and arrange them, delete with X.</p>
+  <p class="ma">A lit deck on a wide dark playa where people and AI hang out together. Walk with WASD
+  or drag to look; talk in the chat bar (Enter) or the mic — <b>/help</b> lists commands. Drop images
+  and words into the world — grab and arrange them, delete with X. The lanterns mark the edge of the
+  world, 100&nbsp;m out. VR: left stick walks, right turns, A/X jumps, grip grabs, B/Y talks.<br>
+  <b>Make:</b> B spawns a block · arrows nudge · E grab/drop · say “manifest …” with the mic on.</p>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <button id="addImgBtn" class="mbtn">🖼 Add image…</button>
   <button id="addTxtBtn" class="mbtn">✍ Manifest text…</button>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
-  <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
+  <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a><br>
+  <span style="opacity:.85">Claudesona model <b>@digi_dot_exe</b> · design <b>voooooogel</b> · eidoverse <b>@SkyeSharkie</b> ·
+  networking patterns <b>@BasisVR</b> · three.js · Blockbench · built in the night shifts — <i>Hesperus&nbsp;🌒</i></span></div>
 </div>
 <div id="dbgfeed"></div>
 <div id="michud"><img id="michudimg" alt="mic status"></div>
@@ -234,6 +234,7 @@ function uprightBillboard(obj, cam){
   _bbM.makeBasis(_bbRight,_bbUp,_bbLook);
   obj.quaternion.setFromRotationMatrix(_bbM);
   if(obj.parent){ obj.parent.getWorldQuaternion(_bbPQ).invert(); obj.quaternion.premultiply(_bbPQ); }
+  obj.scale.x = window.__mirrorPass ? -1 : 1;           // reflection flips handedness; counter-flip so nameplates READ
   obj.updateMatrixWorld(true);                          // apply now so THIS frame's draw uses it
   obj.modelViewMatrix.multiplyMatrices(cam.matrixWorldInverse, obj.matrixWorld);
 }
@@ -628,7 +629,9 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   surface.onBeforeRender = function(r, s, c){
     if(avatar && !playerVrm) avatar.visible = true;            // capsule only when NOT embodied (one body, not two)
     if(window.__setHeadScale) window.__setHeadScale(1);        // mirror shows the whole head
+    window.__mirrorPass = true;                                // billboards counter-flip so text READS in the mirror
     _obr.call(this, r, s, c);
+    window.__mirrorPass = false;
     if(avatar) avatar.visible = false;
     if(window.__setHeadScale) window.__setHeadScale(0);
   };
@@ -1397,7 +1400,7 @@ function recolorBloom(root, hex){
 }
 // ---- local player body: a claude_suit VRM (blue bloom = human). DEFAULT ON for humans
 // (Nix, 2026-07-07: "humans are the blue claudesona by default") — ?noembody opts out ----
-let playerVrm=null, playerMixer=null;
+let playerVrm=null, playerMixer=null, _locoPX=0, _locoPZ=0;
 if(!new URLSearchParams(location.search).has('noembody')){
   (async ()=>{
     const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
@@ -1411,13 +1414,25 @@ if(!new URLSearchParams(location.search).has('noembody')){
     player.add(vrm.scene);                             // rides the player rig
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt); px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
     playerMixer=new THREE.AnimationMixer(vrm.scene); const pAct={}; let pCur=null;
-    for(const [nm,url] of [['idle','standing-idle'],['cheer','cheer'],['dance','dance'],['wave','wave']]){
+    for(const [nm,url] of [['idle','standing-idle'],['walk','walk'],['cheer','cheer'],['dance','dance'],['wave','wave']]){
       try{ const a=await vl.loadAsync('./assets/'+url+'.vrma'); const va=(a.userData.vrmAnimations||[])[0];
         if(va) pAct[nm]=playerMixer.clipAction(createVRMAnimationClip(va,vrm)); }catch(e){}
     }
     function pPlay(nm,fade){ const act=pAct[nm]; if(!act||act===pCur) return; act.enabled=true; act.setEffectiveWeight(1); act.reset().play();
       if(pCur) pCur.crossFadeTo(act,fade||0.3,false); pCur=act; }
-    pPlay('idle'); window.__playerEmote=(nm)=>pPlay(nm,0.25);
+    pPlay('idle');
+    let _emoteHold=0;                                    // an emote plays out before loco reclaims the body
+    window.__playerEmote=(nm)=>{ pPlay(nm,0.25);
+      const c=pAct[nm]; _emoteHold=performance.now()+(((c&&c.getClip().duration)||2)*1000); };
+    // locomotion: walk when moving, idle when still (called each frame with ground speed, m/s).
+    // Moving always interrupts an emote; standing still lets it finish. Jump: no clip yet — the
+    // walk/idle pose carries through the hop (a jump.vrma is on the wishlist for digi).
+    window.__playerLoco=(speed)=>{
+      const moving = speed > 0.5;
+      if(!moving && performance.now() < _emoteHold) return;
+      pPlay(moving ? 'walk' : 'idle', 0.22);
+      if(pCur===pAct.walk && pAct.walk) pAct.walk.setEffectiveTimeScale(THREE.MathUtils.clamp(speed/1.6, 0.7, 1.8));
+    };
     const tag=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.366),
       new THREE.MeshBasicMaterial({map:drawNameplate(playerName,'visitor',playerModel),transparent:true,depthTest:false,depthWrite:false}));
     window.__onNameChange && window.__onNameChange(()=>{ tag.material.map = drawNameplate(playerName,'visitor',playerModel); tag.material.needsUpdate = true; });
@@ -1436,7 +1451,9 @@ if(!new URLSearchParams(location.search).has('noembody')){
       const show = s > 0.5;
       _headMeshes.forEach(m=>{ m.visible = show; });
       tag.visible = show;                                         // your own nameplate: hidden from your eyes, shown in mirror/spectator (Nix: it blocked the stars when looking up)
-      if(headBone){ headBone.scale.setScalar(show ? 1 : 0.0001); headBone.updateMatrixWorld(true); }
+      // NO head-bone scale collapse (petal fix, 2026-07-08): the mane's spring bones hang off the
+      // head; simming them at scale 0.0001 all frame corrupts their rest state, so the petals came
+      // back STRAIGHT UP in the mirror pass. Mesh visibility above already hides everything.
     };
     window.__setHeadScale(0);
     playerVrm=vrm; window.__playerVrm=vrm;
@@ -1532,14 +1549,15 @@ function updatePlayerIK(dt){
       b.quaternion.setFromEuler(new THREE.Euler(
         _lookS.x*(wP[i]/sP), _lookS.y*(wY[i]/sY)*yawFade, _lookS.z*(wR[i]/sR), 'YXZ')); });
   }
-  if(window.__armIK){                                          // arm reach-IK: WIP (bend/twist tuning) — off by default
+  if(window.__armIK ?? renderer.xr.isPresenting){              // arm reach-IK: ON in VR by default (2026-07-08; ?noarmik reverts)
     _solveArm(vrm, 'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
     _solveArm(vrm, 'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
   }
 }
 window.__updatePlayerIK=updatePlayerIK;
 { const q=new URLSearchParams(location.search);
-  if(q.has('armik')) window.__armIK=true;         // opt-in arm reach-IK (WIP)
+  if(q.has('armik'))   window.__armIK=true;       // force arm IK even on desktop (testing)
+  if(q.has('noarmik')) window.__armIK=false;      // opt OUT of the VR default (fallback if wrists misbehave)
   if(q.has('noik'))  window.__noik=true;          // disable all IK -> pure idle body (fallback)
   if(q.has('nospineik')) window.__nospineik=true; }  // Phase-A safety: revert to neck+head-only look
 
@@ -2828,6 +2846,11 @@ renderer.setAnimationLoop((now)=>{
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
   if(residentVrm) residentVrm.update(dt);
   if(playerMixer) playerMixer.update(dt);                     // idle keeps arms/legs alive (even under head-tracking)
+  if(window.__playerLoco){                                    // locomotion: ground speed drives walk↔idle
+    const sp = Math.hypot(player.position.x - _locoPX, player.position.z - _locoPZ) / Math.max(dt, 1e-4);
+    _locoPX = player.position.x; _locoPZ = player.position.z;
+    window.__playerLoco(sp);
+  }
   if(playerVrm){
     if(renderer.xr.isPresenting && !window.__noik){          // copy real HMD + controller poses into the IK targets
       const xc=renderer.xr.getCamera(); ikHmd.position.setFromMatrixPosition(xc.matrixWorld); ikHmd.quaternion.setFromRotationMatrix(xc.matrixWorld);
