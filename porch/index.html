@@ -1380,6 +1380,51 @@ function megaphoneFor(group, text){
   group.userData._megaTimer = setTimeout(()=> setMegaphone(group, false), est*1000+250);
 }
 window.makeAvatar = makeAvatar;   // exposed for headless billboard testing
+
+// ---- remote claudesona bodies (2026-07-08, Nix: "you're just a capsule") ----
+// Everyone gets the bloom: remotes render as the claudesona VRM — blue petals for human drivers,
+// the asset's native orange for AI — with idle/walk driven by their movement. The capsule is now
+// only the instant placeholder while the VRM streams in (and the eternal fallback on load failure).
+THREE.Cache.enabled = true;                       // one .vrm/.vrma fetch serves every remote
+let _remoteDepsP = null;
+function _remoteDeps(){
+  _remoteDepsP = _remoteDepsP || (async ()=>{
+    const [{VRMLoaderPlugin, VRMUtils}, {VRMAnimationLoaderPlugin, createVRMAnimationClip}] =
+      await Promise.all([import('@pixiv/three-vrm'), import('@pixiv/three-vrm-animation')]);
+    const vl = new GLTFLoader();
+    vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
+    const anims = {};
+    for(const [nm,url] of [['idle','standing-idle'],['walk','walk']]){
+      try{ const a = await vl.loadAsync('./assets/'+url+'.vrma');
+        anims[nm] = (a.userData.vrmAnimations||[])[0]; }catch(e){}
+    }
+    return {vl, VRMUtils, createVRMAnimationClip, anims};
+  })();
+  return _remoteDepsP;
+}
+async function upgradeAvatarToVrm(r, model){
+  if(r.vrm || r._vrmLoading) return; r._vrmLoading = true;
+  try{
+    const {vl, VRMUtils, createVRMAnimationClip, anims} = await _remoteDeps();
+    const gltf = await vl.loadAsync('./assets/claude_suit.vrm');
+    const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
+    if((model||'human')==='human') recolorBloom(vrm.scene, '#4f83e8');  // blue driver; AI keeps native orange
+    vrm.scene.rotation.y = Math.PI;               // match the capsule's -Z facing convention
+    const keep = new Set([r.group.userData.tag,
+      r.group.userData._bubble && r.group.userData._bubble.mesh,
+      r.group.userData._mega].filter(Boolean));
+    [...r.group.children].forEach(c=>{ if(!keep.has(c)) r.group.remove(c); });  // capsule out, bloom in
+    r.group.add(vrm.scene);
+    r.mixer = new THREE.AnimationMixer(vrm.scene); r.acts = {}; r.cur = null;
+    for(const nm of ['idle','walk']) if(anims[nm]) r.acts[nm] = r.mixer.clipAction(createVRMAnimationClip(anims[nm], vrm));
+    r.play = (nm)=>{ const a=r.acts[nm]; if(!a || a===r.cur) return;
+      a.enabled=true; a.setEffectiveWeight(1); a.reset().play();
+      if(r.cur) r.cur.crossFadeTo(a, 0.22, false); r.cur=a; };
+    r.play('idle');
+    r.vrm = vrm;
+  }catch(e){ console.error('remote vrm failed (capsule stays)', e); }
+  finally{ r._vrmLoading = false; }
+}
 // my own body — hidden from my eyes, shown to the mirror/spectator
 avatar = makeAvatar(0x2b8a8a, playerName, undefined, playerModel);
 avatar.visible = false; player.add(avatar);
@@ -2106,6 +2151,7 @@ function cachedCreds(q){
         scene.add(grp);
         r = { group: grp, tp: new THREE.Vector3(m.x, m.y||0, m.z), try_: m.ry||0 };
         remotes.set(m.id, r);
+        upgradeAvatarToVrm(r, m.model || 'human');                      // capsule → claudesona (async)
         if(window.__rtcMeetPeer) window.__rtcMeetPeer(m.id, m.model);   // voice: offer to late joiners
       } else if(m.role || m.model){ setAvatarRole(r.group, m.role, m.model); }
       r.name = m.name || r.name;                          // for /goto and /follow by name
@@ -2903,9 +2949,17 @@ renderer.setAnimationLoop((now)=>{
     const e = h.matrixWorld.elements; myYaw = Math.atan2(e[8], e[10]);
   }
   for(const r of remotes.values()){
+    const px = r.group.position.x, pz = r.group.position.z;
     r.group.position.lerp(r.tp, 0.25);
     let d = r.try_ - r.group.rotation.y;
     r.group.rotation.y += Math.atan2(Math.sin(d), Math.cos(d)) * 0.25;   // shortest-arc ease
+    if(r.vrm){                                        // claudesona remotes: walk when moving + spring bones
+      const sp = Math.hypot(r.group.position.x - px, r.group.position.z - pz) / Math.max(dt, 1e-4);
+      if(r.play) r.play(sp > 0.5 ? 'walk' : 'idle');
+      if(r.acts && r.acts.walk && r.cur === r.acts.walk)
+        r.acts.walk.setEffectiveTimeScale(THREE.MathUtils.clamp(sp/1.6, 0.7, 1.8));
+      r.mixer.update(dt); r.vrm.update(dt);
+    }
   }
   avatar.visible = false;                         // the driver never sees their own capsule
   renderer.render(scene, camera);
