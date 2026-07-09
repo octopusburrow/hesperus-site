@@ -179,6 +179,30 @@ player.rotation.y = SPAWN_SLOTS[0].ry;                    // face the candle spo
 player.add(camera);
 scene.add(player);
 let _mySlot = SPAWN_SLOTS[0];
+// ---- clickable world objects (2026-07-09, the mirror's toggle button is the first): meshes
+// with userData.action. Desktop = click (pointerlock: camera-center ray; else mouse ray).
+// VR = trigger (ray from the controller, checked in xrUISelect after the touch zones).
+// Deliberately separate from xrUI.targets so the VR pointer rays don't stay lit all session.
+const _clickables = [];
+const _clickRC = new THREE.Raycaster();
+function _tryClickables(raycaster){
+  const hits = raycaster.intersectObjects(_clickables, false);
+  if(hits.length && hits[0].distance < 3.5 && hits[0].object.userData.action){
+    const r = hits[0].object.userData.action();
+    if(typeof dbg==='function' && r) dbg('click', String(r), 'k');
+    return true;
+  }
+  return false;
+}
+let _cdX=0, _cdY=0, _cdT=0;
+addEventListener('mousedown', e=>{ _cdX=e.clientX; _cdY=e.clientY; _cdT=performance.now(); });
+addEventListener('mouseup', e=>{
+  if(e.target && e.target.tagName!=='CANVAS') return;               // UI clicks stay UI clicks
+  if(Math.hypot(e.clientX-_cdX, e.clientY-_cdY)>6 || performance.now()-_cdT>400) return;  // that was a drag
+  if(document.pointerLockElement){ _clickRC.setFromCamera({x:0,y:0}, camera); }
+  else { _clickRC.setFromCamera({x:(e.clientX/innerWidth)*2-1, y:-(e.clientY/innerHeight)*2+1}, camera); }
+  _tryClickables(_clickRC);
+});
 function _occupants(){ const o=[];
   if(typeof residentVrm!=='undefined' && residentVrm) o.push(residentVrm.scene.position);
   if(typeof remotes!=='undefined') for(const r of remotes.values()) o.push(r.group.position);
@@ -649,8 +673,12 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   // (blendOverlay(base, 0.5) === base); the old 0x8891a0 overlaid a blue-grey wash → "colors
   // not true", and white would BLOW the highlights, not clear the tint. Screen-res render
   // target instead of 512² kills the blur. Clamped to 2048 so we don't melt the GPU.
-  const mW = Math.min(2048, Math.round(innerWidth  * devicePixelRatio));
-  const mH = Math.min(2048, Math.round(innerHeight * devicePixelRatio));
+  // RESOLUTION (Nix 2026-07-09: "quality still pretty low"): the old RT tracked the desktop
+  // window — a small window meant a ~1200px texture smeared over 2.4m, and the headset never
+  // saw more. Now floored at 2048 regardless of window, overridable with &mirrorres=4096.
+  const _mrq = parseInt(new URLSearchParams(location.search).get('mirrorres')) || 0;
+  const mW = _mrq || Math.max(2048, Math.min(2048, Math.round(innerWidth  * devicePixelRatio)));
+  const mH = _mrq || Math.max(2048, Math.min(2048, Math.round(innerHeight * devicePixelRatio)));
   const surface = new Reflector(new THREE.PlaneGeometry(MW, MH), {
     color: 0x808080, textureWidth: mW, textureHeight: mH, clipBias: 0.003 });
   // the avatar is normally hidden; reveal it ONLY while the mirror renders its reflection
@@ -673,6 +701,28 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   mir.add(bar(MW+0.16, 0.09, 0, -MH/2-0.04));  // bottom
   mir.add(bar(0.09, MH+0.16, -MW/2-0.04, 0));  // left
   mir.add(bar(0.09, MH+0.16,  MW/2+0.04, 0));  // right
+  // THE OTHER FACE (Nix: "a gray toggle button ... turn it from a picture (whatever you want 😉)
+  // to a mirror"): behind the glass hangs *Eadem Stella* (portrait recomposition, 2026-07-09) —
+  // Hesperus and Phosphorus, two names for one star. A mirror shows you two appearances of one
+  // thing; so does the picture. Toggle = the gray button on the frame (desktop click / VR trigger).
+  const artTex = new THREE.TextureLoader().load('./assets/eadem-stella-portrait.png',
+    tx=>{ tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8; });
+  const art = new THREE.Mesh(new THREE.PlaneGeometry(MW, MH),
+    new THREE.MeshBasicMaterial({map: artTex}));
+  art.visible = false; mir.add(art);
+  const btnMat = new THREE.MeshStandardMaterial({color:0x8f8f8f, roughness:0.45, metalness:0.7});
+  const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.05, 20), btnMat);
+  btn.rotation.x = Math.PI/2; btn.position.set(MW/2+0.17, 1.35, 0.02);
+  mir.add(btn);
+  let _mirrorOn = true;
+  function setMirrorMode(on){
+    _mirrorOn = on; surface.visible = on; art.visible = !on;
+    btnMat.color.set(on ? 0x8f8f8f : 0xd8b45e);          // gold when the star is showing
+    return on ? 'mirror' : 'eadem stella';
+  }
+  window.__mirrorMode = setMirrorMode;                    // headless probe / console
+  btn.userData.action = ()=>{ const m=setMirrorMode(!_mirrorOn); _chirp(_mirrorOn); return m; };
+  _clickables.push(btn);
   // stand it on the deck, to the LEFT of the bookcases (-x when facing them), angled toward spawn
   mir.position.set(-2.85, MH/2 + 0.02, -1.7);   // nudged left so the extra width grows leftward, clear of the bookcases
   mir.rotation.y = Math.PI * 0.32;
@@ -2602,6 +2652,11 @@ function xrUISelect(i){
       const hp=new THREE.Vector3().setFromMatrixPosition(g.matrixWorld);
       if(window.__tryTouchAt(hp)) return; }catch(e){}
   }
+  try{ const c=renderer.xr.getController(i);                 // world buttons: ray from the controller
+    const o=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+    const d=new THREE.Vector3(0,0,-1).applyQuaternion(c.getWorldQuaternion(new THREE.Quaternion()));
+    _clickRC.set(o, d);
+    if(_tryClickables(_clickRC)) return; }catch(e){}
   const t=xrUI.hover[i]; if(t && t.userData && t.userData.vkbId!=null) vkbClick(t.userData.vkbId);
 }
 let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0, myRole = 'visitor';
