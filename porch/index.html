@@ -267,6 +267,81 @@ function groundHeight(x, z){ let g=0;
 let _tableBox = null;                                    // captured when the table is built (for prop placement)
 window.__physics = { colliders, resolveCollisions, groundHeight };
 
+// ================= PIXEL HOUSE STYLE (2026-07-09, Nix): cheap cuboid geo + 32 px/m pixel-art
+// textures with SQUARE pixels — Minecraft rules. The discipline she flagged as easily-skipped:
+// every face's texel-to-metre ratio is identical on BOTH axes (square) AND across faces (32/m),
+// which we guarantee BY CONSTRUCTION — each face's atlas cell is sized round(worldDim*PPM), so a
+// 0.14 m face gets exactly round(0.14*32)=4 px. One texture, one material, one draw call per box.
+const PPM = 32;                                          // pixels per metre — the house density (deck = 64px/2m = this)
+// three.js BoxGeometry face order + the 6 world-face dims for (W=x,H=y,D=z):
+const _BOX_FACES = [ ['px','D','H'], ['nx','D','H'], ['py','W','D'], ['ny','W','D'], ['pz','W','H'], ['nz','W','H'] ];
+function _makePixelBox(W, H, D, drawFace, matOpts){
+  const dim = {W, H, D};
+  const cells = _BOX_FACES.map(([name, aw, ah]) => ({ name,
+    w: Math.max(1, Math.round(dim[aw]*PPM)), h: Math.max(1, Math.round(dim[ah]*PPM)) }));
+  const atlasW = Math.max(...cells.map(c=>c.w));         // vertical stack: width = widest face, height = sum
+  const atlasH = cells.reduce((a,c)=>a+c.h, 0);
+  const cv = document.createElement('canvas'); cv.width=atlasW; cv.height=atlasH;
+  const ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  let y = 0;
+  for(const c of cells){ c.x = 0; c.y = y;
+    ctx.save(); ctx.translate(c.x, c.y);
+    ctx.beginPath(); ctx.rect(0,0,c.w,c.h); ctx.clip();
+    drawFace(c.name, ctx, c.w, c.h);                     // painter draws in the cell's own pixel space
+    ctx.restore(); y += c.h;
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;  // square, crisp, no mush
+  tex.generateMipmaps = false; tex.colorSpace = THREE.SRGBColorSpace;
+  const geo = new THREE.BoxGeometry(W, H, D);
+  const uv = geo.attributes.uv;                          // remap each face's 4 corners → its atlas cell
+  for(let f=0; f<6; f++){ const c = cells[f];
+    const u0 = c.x/atlasW, u1 = (c.x+c.w)/atlasW, v1 = 1-(c.y/atlasH), v0 = 1-((c.y+c.h)/atlasH);
+    // BoxGeometry per-face corner uv order: (0,1)(1,1)(0,0)(1,0)
+    const corners = [[u0,v1],[u1,v1],[u0,v0],[u1,v0]];
+    for(let k=0;k<4;k++) uv.setXY(f*4+k, corners[k][0], corners[k][1]);
+  }
+  uv.needsUpdate = true;
+  const mat = new THREE.MeshStandardMaterial(Object.assign({ map:tex, roughness:0.85, metalness:0.0 }, matOpts||{}));
+  const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = mesh.receiveShadow = true;
+  return { mesh, geo, mat, tex, atlas:[atlasW,atlasH] };
+}
+// pixel-art BOOK: spine faces +Z on the shelf. Deterministic palette by seed (no RNG in the harness).
+const _BOOK_PALETTES = [
+  {cov:'#7a2b24', band:'#e8c66a', page:'#e8ddc0'}, {cov:'#26506b', band:'#cdb06a', page:'#e0dccb'},
+  {cov:'#2f5a3a', band:'#d8b45e', page:'#e6ddc4'}, {cov:'#5a3a6b', band:'#d8c078', page:'#e2d9c6'},
+  {cov:'#8a5a24', band:'#efd48a', page:'#efe6cc'}, {cov:'#3a3f4c', band:'#c0a860', page:'#dcd6c6'},
+  {cov:'#6b2444', band:'#e0b070', page:'#e8dcc8'}, {cov:'#244a4a', band:'#c8b070', page:'#dce0d2'},
+];
+function _bookMesh(seed){
+  const P = _BOOK_PALETTES[seed % _BOOK_PALETTES.length];
+  const W=0.055, H=0.20, D=0.145;                        // thickness × height × cover-depth (spine out)
+  const paint = (name, ctx, w, h) => {
+    if(name==='pz' || name==='nz'){                       // SPINE (visible on shelf)
+      ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);
+      ctx.fillStyle=P.band; if(h>=6){ ctx.fillRect(0,1,w,1); ctx.fillRect(0,h-2,w,1); }   // head/tail bands
+      if(h>=8){ ctx.fillStyle='rgba(0,0,0,0.28)'; ctx.fillRect(0,Math.floor(h*0.45),w,1); } // title line
+    } else if(name==='px' || name==='nx'){                // COVER (between neighbours)
+      ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);
+      ctx.fillStyle='rgba(0,0,0,0.20)'; ctx.fillRect(w-1,0,1,h);
+    } else {                                              // top/bottom = page block
+      ctx.fillStyle=P.page; ctx.fillRect(0,0,w,h);
+    }
+  };
+  const r = _makePixelBox(W, H, D, paint);
+  r.mesh.userData.bookDims = [W,H,D];
+  return r;
+}
+window.__testPixelBox = ()=>{                            // verification: a big cube, 6 distinct faces + arrow
+  const cols = {px:'#c0392b',nx:'#8e44ad',py:'#27ae60',ny:'#2980b9',pz:'#d4a017',nz:'#16a085'};
+  const paint = (name, ctx, w, h) => { ctx.fillStyle=cols[name]; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle='#000'; ctx.fillRect(1,1,1,1); ctx.fillStyle='#fff'; ctx.fillRect(w-2,h-2,1,1); };  // TL black, BR white
+  const r = _makePixelBox(0.5,0.5,0.5, paint);
+  r.mesh.position.set(camera.getWorldPosition(new THREE.Vector3()).x, 1.4, -1.0);
+  scene.add(r.mesh); return 'atlas '+r.atlas.join('x');
+};
+
+
 // desktop views of the VR session: 1st-person mirror + optional 3rd-person spectator
 const headcam = document.getElementById('headcam');     // VR Headcam → Desktop (1st person)
 const spec3rd = document.getElementById('spec3rd');     // 3rd person (see your avatar)
@@ -532,6 +607,43 @@ const SMOOTH_MAP = `
   vec4 sampledDiffuseColor = texture2D( map, auv );
   diffuseColor *= sampledDiffuseColor;
 `;
+// SHELF BOOKS (2026-07-09, Nix): replace the bookcase's BAKED books with house-style pixel books
+// that are individually grabbable + throwable (prop system) — and a live instance perf readout.
+// Templates share geo+material; each placed book is a clone (shared geo/mat, own transform).
+let _bookN = 0; const _bookTemplates = [];
+function _populateShelves(cases){
+  for(let t=0;t<_BOOK_PALETTES.length;t++) _bookTemplates.push(_bookMesh(t));   // 8 shared geo/mat templates
+  for(const cx of cases){
+    // hide the baked-in books (keep the shelves/frame), then stand our own on the real shelves
+    const shelves = [];
+    cx.traverse(o=>{ const n=o.name||'';
+      if(/^bookcase_(run|hero)/.test(n)) o.visible = false;
+      if(/^bookcase_shelf/.test(n)) shelves.push(o);
+    });
+    // also use the case bottom as a third shelf if only two named shelves exist
+    for(const sh of shelves){
+      const box = new THREE.Box3().setFromObject(sh);
+      const topY = box.max.y + 0.002, z = box.max.z - 0.085;      // front edge, standing on top
+      const x0 = box.min.x + 0.05, x1 = box.max.x - 0.05;
+      let x = x0, lean = 0;
+      while(x < x1){
+        const tpl = _bookTemplates[(_bookN*3+7) % _bookTemplates.length];
+        const m = tpl.mesh.clone();                                // shares geometry + material
+        const H = tpl.mesh.userData.bookDims[1];
+        m.position.set(x + 0.03, topY + H/2, z);
+        m.rotation.y = (Math.abs((x*53)%1) < 0.14) ? 0.12 : 0;     // an occasional leaner (deterministic)
+        const g = _addProp('book_'+(_bookN++), m, H/2);
+        g.home.copy(m.position);
+        x += 0.055 + 0.006;
+      }
+    }
+  }
+  if(typeof dbg==='function') dbg('books', _bookN+' shelf books (grabbable)', 'k');
+}
+window.__perf = ()=>({ drawCalls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
+  books: grabbables.filter(g=>String(g.pid).startsWith('book')).length,
+  templates: _bookTemplates.length });
+
 const loader = new GLTFLoader();
 loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{
   const src = gltf.scene;
@@ -555,13 +667,16 @@ loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{
   src.scale.setScalar(s);
   const bb2 = new THREE.Box3().setFromObject(src);
   const w = bb2.getSize(new THREE.Vector3()).x;
+  const _cases = [];
   for(let i=-1;i<=1;i++){
     const c = i===0 ? src : src.clone(true);
     c.position.set(i*(w+0.04), -bb2.min.y + 0.005, -2.2);
     if(i!==0) c.rotation.y = i*0.012;              // movables get their kilter
-    scene.add(c);
+    scene.add(c); _cases.push(c);
     addCollider(c, 'bookcase');                    // solid: don't walk through the shelves
   }
+  scene.updateMatrixWorld(true);
+  _populateShelves(_cases);                         // house-style grabbable books (2026-07-09)
   window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
   // (scale-audit + UA plaque breadcrumbs removed 2026-07-08 — Nix: dev noise on the HUD; UA
   // lives in dbg feed territory if ever needed again: dbg('ua', navigator.userAgent))
@@ -583,13 +698,21 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
 {
   const CUBES = [[-16,11,-8,32,1,16],[13,0,-7,2,11,2],[-15,0,-7,2,11,2],[13,0,5,2,11,2],
     [-15,0,5,2,11,2],[-13,8,-7,26,3,1],[-13,8,6,26,3,1],[13,8,-5,2,3,10],[-15,8,-5,2,3,10]];
-  const oak = new THREE.MeshStandardMaterial({color:0x5b4023, roughness:0.85});
+  // house-style oak: per-box 32px/m pixel grain (was a flat colour). Plank lines on top/bottom.
+  const oakPaint = (name, ctx, w, h) => {
+    const top = (name==='py'||name==='ny');
+    for(let yy=0; yy<h; yy++) for(let xx=0; xx<w; xx++){
+      const grain = ((xx*7 + yy*3) % 5) - 2;
+      const plank = top && (yy%6===0) ? -16 : 0;           // plank seams across the grain
+      const v = grain + plank;
+      ctx.fillStyle = `rgb(${91+v},${64+v},${35+Math.floor(v*0.7)})`; ctx.fillRect(xx,yy,1,1);
+    }
+  };
   const tableG = new THREE.Group();
   for(const c of CUBES){
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(c[3]/16, c[4]/16, c[5]/16), oak);
-    mesh.position.set((c[0]+c[3]/2)/16, (c[1]+c[4]/2)/16, (c[2]+c[5]/2)/16);
-    mesh.castShadow = true; mesh.receiveShadow = true;
-    tableG.add(mesh);
+    const r = _makePixelBox(c[3]/16, c[4]/16, c[5]/16, oakPaint, {roughness:0.85});
+    r.mesh.position.set((c[0]+c[3]/2)/16, (c[1]+c[4]/2)/16, (c[2]+c[5]/2)/16);
+    tableG.add(r.mesh);
   }
   tableG.position.set(0, 0.014, -0.6);              // sit on the rug
   scene.add(tableG);
@@ -604,6 +727,7 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
 // Only the owner streams t:'prop'; a dropped prop stays MINE until it rests, then I release it.
 const grabbables = [];                               // {mesh, pid, hh, vel, owner, carrying, offset, home, mat, _cool}
 const grabbablesById = {};
+window.__grabbables = grabbables; window.__heldProp = ()=> heldProp;   // debug: grab/throw verification
 function _addProp(pid, mesh, hh){ mesh.castShadow=true;
   const g={mesh, pid, hh, vel:new THREE.Vector3(), owner:null, carrying:false, offset:null, home:mesh.position.clone(), mat:mesh.material, _cool:0};
   grabbables.push(g); grabbablesById[pid]=g; scene.add(mesh); return g; }
