@@ -777,16 +777,81 @@ function addPortico(dest, x, z, label){
   }
   g.position.set(x, 0, z); scene.add(g);
   addCollider(pL, 'portico-post'); addCollider(pR, 'portico-post');
-  _porticos.push({dest, x, z, veil, label});
+  const foreign = (typeof dest === 'string') || (typeof dest === 'object' && dest.url);
+  const rec = {dest, x, z, veil, label, foreign};
+  if(foreign){
+    const url = (typeof dest === 'string') ? dest : dest.url;
+    const panel = _makeForeignPanel(url); g.add(panel); rec.panel = panel;
+    panel.userData.confirmBtn.userData.action = ()=>{ _commitForeign(url); return 'crossing → '+url; };
+    _clickables.push(panel.userData.confirmBtn);
+  }
+  _porticos.push(rec);
   return g;
 }
+let _foreignArmed = null;
+function _commitForeign(url){
+  if(_crossing) return; _crossing = true;
+  const f=document.createElement('div');
+  f.style.cssText='position:fixed;inset:0;background:#000;opacity:0;transition:opacity 0.9s ease;z-index:99;pointer-events:none';
+  document.body.appendChild(f); requestAnimationFrame(()=>{ f.style.opacity=1; });
+  const back=encodeURIComponent(location.pathname+location.search);
+  setTimeout(()=>{ location.href = url + (url.includes('?')?'&':'?') + 'back=' + back; }, 950);
+}
 addPortico({district:'void'}, 3.4, 0.6, 'the girih void');
+if(new URLSearchParams(location.search).has('foreigndemo'))
+  addPortico('https://example.org/some-vr-world', -3.4, 0.6, 'a world beyond');   // threshold demo
 window.__porticos = _porticos;                 // headless probes
+// FOREIGN THRESHOLD (Nix 2026-07-09): a portico whose dest is a URL string / {url} leaves
+// Exultation. We CAN'T keep VR across origins (Chrome policy) — so instead of silently dropping
+// the headset, we raise an in-WORLD panel: the destination URL + "outside Exultation, you'll
+// re-enter VR, trust the address." Passive proximity NEVER navigates; a deliberate click on the
+// CROSS button (via _clickables) does. This is us drawing the trusted chrome the platform won't.
+function _wrapText(ctx, text, maxW){
+  const words=text.split(''); let line='', out=[];
+  for(const ch of words){ if(ctx.measureText(line+ch).width>maxW){ out.push(line); line=ch; } else line+=ch; }
+  if(line) out.push(line); return out;
+}
+function _makeForeignPanel(url){
+  const g=new THREE.Group();
+  const c=document.createElement('canvas'); c.width=1024; c.height=560; const x=c.getContext('2d');
+  x.fillStyle='rgba(20,14,10,0.93)'; x.beginPath(); x.roundRect(8,8,1008,544,26); x.fill();
+  x.strokeStyle='#d8a868'; x.lineWidth=4; x.stroke();
+  x.textAlign='center'; x.textBaseline='middle';
+  x.fillStyle='#e8b060'; x.font='bold 52px Georgia'; x.fillText('⚠  Leaving Exultation', 512, 92);
+  x.fillStyle='#d8cdbf'; x.font='30px Georgia';
+  const msg=['This doorway leads to a site outside our walls.',
+             'Your VR session will end — you\'ll re-enter on the far side.',
+             'Only continue if you trust this address:'];
+  msg.forEach((l,i)=> x.fillText(l, 512, 172+i*44));
+  x.fillStyle='#8fd0e0'; x.font='bold 30px monospace';
+  _wrapText(x, url, 940).slice(0,2).forEach((l,i)=> x.fillText(l, 512, 340+i*40));
+  const tex=new THREE.CanvasTexture(c); tex.colorSpace=THREE.SRGBColorSpace; tex.anisotropy=8;
+  const panel=new THREE.Mesh(new THREE.PlaneGeometry(2.2,1.20),
+    new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false}));
+  panel.position.set(0,2.35,0); panel.renderOrder=999; g.add(panel);
+  // CROSS button (green = go), pushed to the shared clickables channel
+  const bc=document.createElement('canvas'); bc.width=256; bc.height=96; const bx=bc.getContext('2d');
+  bx.fillStyle='#2f7d43'; bx.beginPath(); bx.roundRect(4,4,248,88,16); bx.fill();
+  bx.fillStyle='#eaffea'; bx.font='bold 40px Georgia'; bx.textAlign='center'; bx.textBaseline='middle';
+  bx.fillText('cross →', 128, 50);
+  const bt=new THREE.CanvasTexture(bc); bt.colorSpace=THREE.SRGBColorSpace;
+  const btn=new THREE.Mesh(new THREE.PlaneGeometry(0.7,0.26),
+    new THREE.MeshBasicMaterial({map:bt, transparent:true, depthTest:false}));
+  btn.position.set(0,1.55,0.02); btn.renderOrder=999; g.add(btn); g.userData.confirmBtn=btn;
+  g.visible=false; return g;
+}
+
 let _crossing = false;
 function checkPorticos(){
   if(_crossing || !player) return;
+  let inForeign = null;
   for(const p of _porticos){
-    if(Math.abs(player.position.x - p.x) < 0.45 && Math.abs(player.position.z - p.z) < 0.72){
+    const inZone = Math.abs(player.position.x - p.x) < 0.45 && Math.abs(player.position.z - p.z) < 0.72;
+    if(p.foreign){                                               // foreign: ARM the warning, never auto-navigate
+      if(inZone) inForeign = p;
+      continue;
+    }
+    if(inZone){                                                  // our worlds: cross immediately
       _crossing = true;
       const f = document.createElement('div');
       f.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;transition:opacity 0.9s ease;z-index:99;pointer-events:none';
@@ -796,14 +861,17 @@ function checkPorticos(){
           f.style.opacity = 0;
           setTimeout(()=>{ f.remove(); _crossing = false; }, 1000);
         }, 950);
-      } else {                                                    // legacy page navigation (exits VR — Chrome policy)
-        const back = encodeURIComponent(location.pathname + location.search);
-        setTimeout(()=>{ location.href = p.dest + '?back=' + back; }, 950);
       }
       return;
     }
   }
+  if(inForeign !== _foreignArmed){                                // show the panel on approach, hide on leave
+    if(_foreignArmed && _foreignArmed.panel) _foreignArmed.panel.visible = false;
+    if(inForeign && inForeign.panel) inForeign.panel.visible = true;
+    _foreignArmed = inForeign;
+  }
 }
+window.__foreignArmed = ()=> _foreignArmed ? (typeof _foreignArmed.dest==='string'?_foreignArmed.dest:_foreignArmed.dest.url) : null;
 
 // ---- the girih void, as a district (port of void.html, 2026-07-09): built lazily on first
 // crossing (the girih engine iframe is heavy). Same scene, 1000m east — outside the sky dome,
