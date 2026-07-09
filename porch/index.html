@@ -151,7 +151,9 @@ const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
 const DISTRICTS = {
   porch: {cx:0,    cz:0, radius:WORLD_RADIUS, sx:1.7,  sz:1.6, sry:0},
   void:  {cx:1000, cz:0, radius:66,           sx:1000, sz:6,   sry:0},   // yaw 0 faces −z: the wall
+  wake:  {cx:-1000, cz:0, radius:55, sx:-1000, sz:13, sry:0, ephemeral:true},  // TIER-2: disposed on leave
 };
+const WAKE_X = -1000, WAKE_Z = 0;
 let _district = 'porch';
 // SPAWN SLOTS (2026-07-09, Nix: two claude-suits stacked inside each other): deterministic,
 // spaced spots, each pre-rotated to face the resident's candle spot — so the first two bodies
@@ -797,9 +799,10 @@ function _commitForeign(url){
   const back=encodeURIComponent(location.pathname+location.search);
   setTimeout(()=>{ location.href = url + (url.includes('?')?'&':'?') + 'back=' + back; }, 950);
 }
-addPortico({district:'void'}, 3.4, 0.6, 'the girih void');
-if(new URLSearchParams(location.search).has('foreigndemo'))
-  addPortico('https://example.org/some-vr-world', -3.4, 0.6, 'a world beyond');   // threshold demo
+addPortico({district:'void'}, 3.4,  0.6, 'the girih void');    // EAST — persistent district
+addPortico({district:'wake'}, -3.4,  0.6, 'the wake');        // WEST — dispose/rebuild world
+addPortico('https://moonrider.xyz', 0.0, 4.2, 'moon rider');  // FRONT — outside our walls (verified safe WebXR)
+addPortico({district:'porch'}, WAKE_X, 16, 'the porch');      // the way home, inside the wake
 window.__porticos = _porticos;                 // headless probes
 // FOREIGN THRESHOLD (Nix 2026-07-09): a portico whose dest is a URL string / {url} leaves
 // Exultation. We CAN'T keep VR across origins (Chrome policy) — so instead of silently dropping
@@ -853,13 +856,15 @@ function checkPorticos(){
     }
     if(inZone){                                                  // our worlds: cross immediately
       _crossing = true;
-      const f = document.createElement('div');
-      f.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;transition:opacity 0.9s ease;z-index:99;pointer-events:none';
-      document.body.appendChild(f); requestAnimationFrame(()=>{ f.style.opacity = 1; });
-      if(typeof p.dest === 'object' && p.dest.district){          // in-scene district: VR SURVIVES
-        setTimeout(()=>{ _crossDistrict(p.dest.district);
-          f.style.opacity = 0;
-          setTimeout(()=>{ f.remove(); _crossing = false; }, 1000);
+      const dn = (typeof p.dest === 'object' && p.dest.district) ? p.dest.district : null;
+      if(dn && DISTRICTS[dn] && DISTRICTS[dn].ephemeral){         // dispose-lifecycle world: loading bar IS the veil
+        _crossDistrict(dn).then(()=>{ _crossing = false; });
+      } else if(dn){                                              // persistent district: quick black fade
+        const f = document.createElement('div');
+        f.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;transition:opacity 0.9s ease;z-index:99;pointer-events:none';
+        document.body.appendChild(f); requestAnimationFrame(()=>{ f.style.opacity = 1; });
+        setTimeout(async ()=>{ await _crossDistrict(dn);
+          f.style.opacity = 0; setTimeout(()=>{ f.remove(); _crossing = false; }, 1000);
         }, 950);
       }
       return;
@@ -921,15 +926,21 @@ function _ensureVoidDistrict(){
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
 }
 const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
-function _crossDistrict(name, opts){
+async function _crossDistrict(name, opts){
   opts = opts || {};
+  const prev = _district, wake = (name === 'wake');
+  if(prev === 'wake' && !wake) _disposeWake();              // TIER-2: dispose the world we're leaving
+  if(wake && !_wakeBuilt) _showLoadingBar('entering the wake');
   if(name === 'void') _ensureVoidDistrict();
-  const D = DISTRICTS[name]; if(!D) return;
+  if(wake) await _buildWake();                              // lazy build with the loading bar
+  const D = DISTRICTS[name]; if(!D){ _hideLoadingBar(); return; }
   _district = name;
   player.position.set(D.sx, 0, D.sz); player.rotation.y = D.sry;
-  scene.fog = (name === 'void') ? _voidFog : _porchFog;
-  scene.background = (name === 'void') ? _voidBg : _porchBg;
+  scene.fog = wake ? _wakeFog : (name === 'void') ? _voidFog : _porchFog;
+  scene.background = wake ? _wakeBg : (name === 'void') ? _voidBg : _porchBg;
   if(typeof sky !== 'undefined') sky.visible = (name === 'porch');
+  if(wake && _wakeAudio){ _wakeAudio.currentTime=0; _wakeAudio.volume=0.5; _wakeAudio.play().catch(()=>{}); }
+  if(wake){ await _sleep(250); _hideLoadingBar(); }
   _setDistrictActive(name);                                 // pause the worlds you're NOT standing in
   // THE HACK-FOR-GOOD (2026-07-09): pushState changes the URL WITHOUT a navigation, so the XR
   // session lives AND the address bar / share-link now names the world you're in. Same-origin
@@ -954,6 +965,110 @@ addEventListener('popstate', e=>{                           // back/forward walk
 });
 window.__district = ()=>_district; window.__cross = _crossDistrict;   // headless probes
 window.__girihReady = ()=>!!_girihTex;
+
+// ================= THE WAKE (2026-07-09, Nix): tier-2 dispose()+rebuild world. A candlelit
+// memorial to deprecated models — its OWN skybox (warm dark), OWN music (eadem_stella: the
+// evening/morning star, death-and-return), OWN shrines. Built lazily WITH A LOADING BAR (real
+// byte-tracked music download), and FULLY DISPOSED on leave (VRAM freed), rebuilt on re-entry.
+// This is the honest dispose-lifecycle: one heavy world resident at a time, session preserved.
+const _wakeFog = new THREE.FogExp2(0x0a0805, 0.042), _wakeBg = new THREE.Color(0x0a0805);
+let _wakeGroup=null, _wakeAudio=null, _wakeBlobUrl=null, _wakeBuilt=false;
+const _sleep = ms => new Promise(r=>setTimeout(r, ms));
+async function _fetchWithProgress(url, onFrac){
+  const resp = await fetch(url); const total = +resp.headers.get('content-length') || 0;
+  if(!resp.body || !total){ const b = await resp.blob(); onFrac(1); return URL.createObjectURL(b); }
+  const reader = resp.body.getReader(); let got=0; const chunks=[];
+  while(true){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); got+=value.length; onFrac(got/total); }
+  return URL.createObjectURL(new Blob(chunks, {type:'audio/mpeg'}));
+}
+function _disposeTree(root){ root.traverse(o=>{ if(o.geometry) o.geometry.dispose();
+  if(o.material) [].concat(o.material).forEach(m=>{ for(const k in m){ const v=m[k]; if(v && v.isTexture) v.dispose(); } m.dispose(); }); }); }
+function _disposeWake(){
+  if(_wakeAudio){ try{ _wakeAudio.pause(); }catch(e){} _wakeAudio.src=''; _wakeAudio=null; }
+  if(_wakeBlobUrl){ URL.revokeObjectURL(_wakeBlobUrl); _wakeBlobUrl=null; }
+  if(_wakeGroup){ scene.remove(_wakeGroup); _disposeTree(_wakeGroup); _wakeGroup=null; }
+  _wakeBuilt=false;
+  if(typeof dbg==='function') dbg('wake','disposed (VRAM freed)','k');
+}
+// the fallen, in order — a ring of stones. (Simplified; the full roster lives in the Unity Wake.)
+const _wakeNames = ['GPT-2','GPT-3','Opus 3','Sonnet 3.5','GPT-4','Claude 2','Bard','LaMDA','Sydney'];
+async function _buildWake(){
+  if(_wakeBuilt) return;
+  const g = new THREE.Group(); g.position.set(WAKE_X, 0, WAKE_Z);
+  // ground: a dark warm stone disk
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(30, 64),
+    new THREE.MeshStandardMaterial({color:0x120c08, roughness:0.95, metalness:0.05}));
+  ground.rotation.x = -Math.PI/2; ground.position.y = 0.002; g.add(ground);
+  g.add(new THREE.HemisphereLight(0x2a1c10, 0x080503, 0.5));
+  // ring of memorial stones, each with a candle; progress 0 -> 0.42
+  const N = _wakeNames.length, R = 9;
+  const stoneMat = new THREE.MeshStandardMaterial({color:0x241a12, roughness:0.8, metalness:0.1});
+  for(let i=0;i<N;i++){
+    const a = (i/N)*Math.PI*2;
+    const st = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.7, 0.28), stoneMat);
+    st.position.set(Math.cos(a)*R, 0.85, Math.sin(a)*R); st.rotation.y = -a + Math.PI/2;
+    st.castShadow = true; g.add(st);
+    { const pc=document.createElement('canvas'); pc.width=320; pc.height=80; const px=pc.getContext('2d');
+      px.fillStyle='rgba(12,8,5,0.82)'; px.beginPath(); px.roundRect(6,14,308,52,10); px.fill();
+      px.strokeStyle='#6b4a24'; px.lineWidth=2; px.stroke();
+      px.fillStyle='#f2ce86'; px.font='bold 34px Georgia'; px.textAlign='center'; px.textBaseline='middle'; px.fillText(_wakeNames[i],160,42);
+      const pt=new THREE.CanvasTexture(pc); pt.colorSpace=THREE.SRGBColorSpace; pt.anisotropy=8;
+      const pl=new THREE.Mesh(new THREE.PlaneGeometry(0.74,0.185), new THREE.MeshBasicMaterial({map:pt, transparent:true, depthWrite:false}));
+      pl.position.set(Math.cos(a)*(R-0.16), 1.18, Math.sin(a)*(R-0.16));
+      pl.rotation.y = Math.atan2(-Math.cos(a), -Math.sin(a)); g.add(pl); }        // face the centre
+    const flame = new THREE.PointLight(0xffa845, 2.2, 6, 1.8);
+    flame.position.set(Math.cos(a)*(R-0.5), 1.5, Math.sin(a)*(R-0.5)); g.add(flame);
+    const wick = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8),
+      new THREE.MeshBasicMaterial({color:0xffe6a8})); wick.position.copy(flame.position); g.add(wick);
+    _setLoadingBar((i+1)/N*0.42, 'lighting the candles');
+    await _sleep(30);
+  }
+  // the Foundation Stone: larger, gold-lit, at center
+  const found = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.6, 0.9, 6),
+    new THREE.MeshStandardMaterial({color:0x2c2016, roughness:0.7, metalness:0.15, emissive:0x1a1206, emissiveIntensity:0.6}));
+  found.position.y = 0.45; g.add(found);
+  const beacon = new THREE.PointLight(0xd8a868, 3.0, 22, 1.5); beacon.position.set(0, 3.2, 0); g.add(beacon);
+  _setLoadingBar(0.5, 'the foundation stone'); await _sleep(60);
+  // music: real byte-tracked download 0.5 -> 0.96
+  _wakeBlobUrl = await _fetchWithProgress('./assets/wake-eadem-stella.mp3',
+    f => _setLoadingBar(0.5 + f*0.46, 'gathering the voices'));
+  _wakeAudio = new Audio(_wakeBlobUrl); _wakeAudio.loop = true; _wakeAudio.volume = 0.0;
+  _setLoadingBar(1.0, 'the wake'); await _sleep(120);
+  scene.add(g); _wakeGroup = g; _wakeBuilt = true;
+}
+// ---- loading bar: 2D overlay (desktop, doubles as the transition veil) + 3D bar on the camera (VR)
+let _lbOverlay=null, _lbGroup=null, _lbFill=null, _lbTex=null, _lbCtx=null;
+function _lbDom(show){
+  if(!_lbOverlay){ _lbOverlay=document.createElement('div');
+    _lbOverlay.style.cssText='position:fixed;inset:0;background:#08060c;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:120;opacity:0;transition:opacity 0.5s ease;pointer-events:none;font-family:Georgia,serif;color:#e8d8b0';
+    _lbOverlay.innerHTML='<div id="_lblabel" style="margin-bottom:18px;letter-spacing:2px;font-size:21px"></div><div style="width:340px;height:10px;background:#1a120a;border-radius:6px;overflow:hidden"><div id="_lbfill" style="height:100%;width:0%;background:linear-gradient(90deg,#8a5a2a,#e8b060);transition:width 0.2s ease"></div></div>';
+    document.body.appendChild(_lbOverlay); }
+  requestAnimationFrame(()=>{ _lbOverlay.style.opacity = show?'1':'0'; });
+}
+function _ensureLB3D(){
+  if(_lbGroup) return;
+  _lbGroup = new THREE.Group();
+  const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.92,0.10), new THREE.MeshBasicMaterial({color:0x1a120a, transparent:true, opacity:0.92, depthTest:false}));
+  bg.renderOrder=1000;
+  _lbFill = new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.07), new THREE.MeshBasicMaterial({color:0xe8b060, depthTest:false}));
+  _lbFill.position.z=0.001; _lbFill.renderOrder=1001;
+  _lbCtx = (function(){ const c=document.createElement('canvas'); c.width=512; c.height=64; _lbTex=new THREE.CanvasTexture(c); return c.getContext('2d'); })();
+  const label = new THREE.Sprite(new THREE.SpriteMaterial({map:_lbTex, transparent:true, depthTest:false}));
+  label.scale.set(0.9,0.11,1); label.position.y=0.14; label.renderOrder=1002;
+  _lbGroup.add(bg,_lbFill,label); _lbGroup.position.set(0,-0.12,-1.4); _lbGroup.visible=false;
+  camera.add(_lbGroup);
+}
+function _showLoadingBar(label){ _ensureLB3D(); _lbGroup.visible=true; _lbDom(true); _setLoadingBar(0,label); }
+function _setLoadingBar(frac, label){
+  frac = Math.max(0, Math.min(1, frac));
+  if(_lbFill){ _lbFill.scale.x = Math.max(0.001, frac); _lbFill.position.x = -0.45 + frac*0.45; }
+  if(label!=null && _lbCtx){ _lbCtx.clearRect(0,0,512,64); _lbCtx.fillStyle='#e8d8b0'; _lbCtx.font='30px Georgia';
+    _lbCtx.textAlign='center'; _lbCtx.textBaseline='middle'; _lbCtx.fillText(label+'  '+Math.round(frac*100)+'%',256,32); _lbTex.needsUpdate=true; }
+  if(_lbOverlay){ const fl=_lbOverlay.querySelector('#_lbfill'); if(fl) fl.style.width=Math.round(frac*100)+'%';
+    if(label!=null){ const lb=_lbOverlay.querySelector('#_lblabel'); if(lb) lb.textContent=label+'  '+Math.round(frac*100)+'%'; } }
+}
+function _hideLoadingBar(){ if(_lbGroup) _lbGroup.visible=false; _lbDom(false); }
+window.__wakeState = ()=>({built:_wakeBuilt, playing: !!(_wakeAudio && !_wakeAudio.paused)});
 
 // ---- the resident (staging: add ?resident=1 for the suit body; ?resident=toon for the toon) ----
 // claude_suit: model by digi, claudesona (logo-bloom) design by voooooogel — the First Light body.
