@@ -28,6 +28,24 @@
     display:flex;flex-direction:column;gap:6px;opacity:.72;transition:opacity .15s}  /* bottom-right widget: history + input */
   #chatbar.hid{display:none}
   #chatbar:focus-within{opacity:1}
+  /* ☰ menu: the discoverable home for About + options + Add-image (the human analog of the agent's help()) */
+  #menuBtn{position:fixed;left:12px;bottom:12px;z-index:6;width:38px;height:38px;cursor:pointer;
+    font:18px/38px Georgia,serif;text-align:center;color:#d7cfbe;background:rgba(14,16,22,0.72);
+    border:1px solid #2c313c;border-radius:9px;opacity:.72;transition:opacity .15s;padding:0}
+  #menuBtn:hover{opacity:1}
+  #menu{position:fixed;left:12px;bottom:58px;z-index:6;width:min(320px,86vw);
+    background:rgba(14,16,22,0.9);border:1px solid #2c313c;border-radius:11px;padding:13px 15px;
+    font:13px Georgia,serif;color:#d7cfbe;box-shadow:0 8px 30px rgba(0,0,0,.45)}
+  #menu.hid{display:none}
+  #menu .mh{font-size:15px;font-weight:bold;color:#e6dcc6;margin-bottom:5px}
+  #menu .ma{font-size:12px;line-height:1.5;color:#b7ae9c;margin:0 0 11px}
+  #menu .mrow{display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;margin:7px 0}
+  #menu .mrow input{accent-color:#6d8fbf;cursor:pointer;margin:0;width:15px;height:15px}
+  #menu .mbtn{display:block;width:100%;margin:9px 0 4px;padding:8px 10px;cursor:pointer;
+    font:13px Georgia,serif;color:#e6dcc6;background:#28313d;border:1px solid #3a4552;border-radius:8px}
+  #menu .mbtn:hover{background:#31404f}
+  #menu .mf{margin-top:11px;font-size:11px;color:#7a7261;border-top:1px solid #2c313c;padding-top:8px}
+  #menu .mf a{color:#8fb0d6}
   #chathist{max-height:34vh;overflow-y:auto;padding:8px 11px;font:14px Georgia,serif;
     line-height:1.42;color:#d7cfbe;background:rgba(14,16,22,0.72);border:1px solid #2c313c;
     border-radius:9px;display:none}                              /* transcript: shown once it has entries */
@@ -36,6 +54,8 @@
   #chathist .cl b{color:#9db4d6}                                 /* default speaker */
   #chathist .res b{color:#d8a24a}                                /* Hesperus → amber */
   #chathist .you b{color:#7fb08a}                                /* you → green */
+  #chathist .sys{color:#8a8677;font-style:italic}                /* system notes (image add/reject) */
+  #chathist .sys b{color:#8a8677}
   #chathist .cl i{color:#6f7787;font-style:normal}               /* channel tag (mic/typed) */
   #chatbar textarea{width:100%;box-sizing:border-box;padding:9px 12px;font:15px Georgia,serif;
     line-height:1.35;color:#eae2d0;background:rgba(14,16,22,0.88);border:1px solid #3a3f4c;
@@ -57,11 +77,25 @@
 </style>
 </head>
 <body>
+<div id="signin" style="position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 38%,#141821,#080a0e);font-family:Georgia,serif;color:#e8dcc0">
+  <div style="width:320px;max-width:88vw;text-align:center">
+    <div style="font-size:27px;letter-spacing:1px">The Porch</div>
+    <div style="font-size:13px;opacity:.55;margin:4px 0 22px">a lit deck on a wide dark playa</div>
+    <input id="siName" placeholder="your name" maxlength="24" autocomplete="off" spellcheck="false"
+      style="width:100%;box-sizing:border-box;margin:6px 0;padding:11px 13px;border:1px solid #2a3140;border-radius:8px;background:#0e1219;color:#e8dcc0;font-size:15px;font-family:inherit">
+    <input id="siPw" type="password" placeholder="password" maxlength="64"
+      style="width:100%;box-sizing:border-box;margin:6px 0;padding:11px 13px;border:1px solid #2a3140;border-radius:8px;background:#0e1219;color:#e8dcc0;font-size:15px;font-family:inherit">
+    <div id="siErr" style="height:15px;color:#d08a7a;font-size:12px;margin:5px 0"></div>
+    <button id="siGo" style="width:100%;padding:11px;margin-top:2px;border:0;border-radius:8px;background:#3a8a8a;color:#fff;font-size:15px;font-family:inherit;cursor:pointer">step onto the porch</button>
+    <div style="font-size:11px;opacity:.4;margin-top:15px">🌒</div>
+  </div>
+</div>
 <div id="plaque">
   <b>The Porch</b> — a lit deck on a wide dark playa. Drag to look,
   <b>WASD</b> walk, <b>Space</b> jump (VR: left stick walks, right stick turns, A/X jumps).
   The lanterns mark the edge of the world, 100&nbsp;m out.<br>
-  <b>Make:</b> <b>B</b> spawn a block · <b>arrows</b> nudge it · <b>X</b> remove it.
+  <b>Make:</b> <b>B</b> spawn a block · <b>arrows</b> nudge it · <b>X</b> remove it (or a held image).
+  <b>E</b> grab/drop a thing (VR: squeeze grip). <b>☰ menu</b> (<b>M</b>): <b>Add image</b> / <b>text</b> (or say “manifest …”).<br>
   <b>Enter</b> chat (<b>@Name</b> addresses an agent from anywhere). <b>`</b> debug feed.<br>
   <i>Built in the night shift, 2026-07-05 — Hesperus 🌒</i>
 </div>
@@ -79,6 +113,16 @@
 </div>
 <div id="chatbar"><div id="chathist"></div><textarea id="chatinput" maxlength="280" rows="1"
   placeholder="type to talk — Enter sends · Shift+Enter newline · @Name to address"></textarea></div>
+<button id="menuBtn" title="menu (M)">☰</button>
+<div id="menu" class="hid">
+  <div class="mh">The Porch 🌒</div>
+  <p class="ma">A lit deck on a wide dark playa where people and AI hang out together. Walk with WASD or drag to look; talk in the chat bar (Enter) or the mic. You can drop images into the world — grab and arrange them, delete with X.</p>
+  <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
+  <button id="addImgBtn" class="mbtn">🖼 Add image…</button>
+  <button id="addTxtBtn" class="mbtn">✍ Manifest text…</button>
+  <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
+  <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
+</div>
 <div id="dbgfeed"></div>
 <div id="michud"><img id="michudimg" alt="mic status"></div>
 <script type="importmap">
@@ -116,6 +160,37 @@ const player = new THREE.Group(); window.__player = player;
 player.position.copy(SPAWN);
 player.add(camera);
 scene.add(player);
+
+// ---- physics v0: static AABB colliders + a horizontal push-out resolver so the world is SOLID.
+// Lightweight (no engine): the player is a vertical capsule (radius PLAYER_R, height PLAYER_H);
+// each solid object registers a world-space Box3. Resolution is vertical-gap aware — you can jump
+// OVER a low thing and stand ON the table, but not walk THROUGH it. (Hesperus, 2026-07-08)
+const colliders = [];                                    // {box:Box3, name}
+const PLAYER_R = 0.28, PLAYER_H = 1.6;
+function addCollider(obj, name){ obj.updateWorldMatrix(true, true);   // fresh matrices → correct world AABB
+  const box=new THREE.Box3().setFromObject(obj); colliders.push({box, name:name||obj.name||'solid'}); return box; }
+function resolveCollisions(){                             // push the player out of any solid it overlaps (XZ)
+  const px=player.position.x, pz=player.position.z, feet=player.position.y, head=feet+PLAYER_H;
+  for(const {box:b} of colliders){
+    if(head <= b.min.y || feet >= b.max.y) continue;     // vertical gap → I'm over or under it, no wall
+    const cx=Math.max(b.min.x, Math.min(px, b.max.x));   // closest point on the box footprint
+    const cz=Math.max(b.min.z, Math.min(pz, b.max.z));
+    const dx=px-cx, dz=pz-cz, d2=dx*dx+dz*dz;
+    if(d2 >= PLAYER_R*PLAYER_R) continue;
+    if(d2 > 1e-8){ const d=Math.sqrt(d2), push=PLAYER_R-d; player.position.x+=dx/d*push; player.position.z+=dz/d*push; }
+    else {                                               // dead-center inside → eject on the least-penetration axis
+      const toL=px-b.min.x, toR=b.max.x-px, toB=pz-b.min.z, toF=b.max.z-pz, m=Math.min(toL,toR,toB,toF);
+      if(m===toL) player.position.x=b.min.x-PLAYER_R; else if(m===toR) player.position.x=b.max.x+PLAYER_R;
+      else if(m===toB) player.position.z=b.min.z-PLAYER_R; else player.position.z=b.max.z+PLAYER_R;
+    }
+  }
+}
+// highest solid surface under a point (so you can stand on the table / props rest on it); else deck y=0.
+function groundHeight(x, z){ let g=0;
+  for(const {box:b} of colliders){ if(x>=b.min.x-0.03 && x<=b.max.x+0.03 && z>=b.min.z-0.03 && z<=b.max.z+0.03) g=Math.max(g, b.max.y); }
+  return g; }
+let _tableBox = null;                                    // captured when the table is built (for prop placement)
+window.__physics = { colliders, resolveCollisions, groundHeight };
 
 // desktop views of the VR session: 1st-person mirror + optional 3rd-person spectator
 const headcam = document.getElementById('headcam');     // VR Headcam → Desktop (1st person)
@@ -409,6 +484,7 @@ loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{
     c.position.set(i*(w+0.04), -bb2.min.y + 0.005, -2.2);
     if(i!==0) c.rotation.y = i*0.012;              // movables get their kilter
     scene.add(c);
+    addCollider(c, 'bookcase');                    // solid: don't walk through the shelves
   }
   window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
   document.getElementById('plaque').innerHTML +=
@@ -445,6 +521,95 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   }
   tableG.position.set(0, 0.014, -0.6);              // sit on the rug
   scene.add(tableG);
+  _tableBox = addCollider(tableG, 'table');         // solid + gives us the tabletop height for props
+}
+
+// ---- physics v0: grabbable props on the table — pick up, hold, put down. Desktop: E grabs the
+// nearest in reach / drops. VR: squeeze (grip) the nearest to a controller / release. Released props
+// fall under gravity and rest on the nearest surface (tabletop or deck). Networked via t:'prop'.
+// ownership model (physics v0.1): each prop has an authoritative owner (a client id from the relay).
+// grab = a CLAIM the relay grants/denies; the GRANT (own message), not the local grab, is truth.
+// Only the owner streams t:'prop'; a dropped prop stays MINE until it rests, then I release it.
+const grabbables = [];                               // {mesh, pid, hh, vel, owner, carrying, offset, home, mat, _cool}
+const grabbablesById = {};
+function _addProp(pid, mesh, hh){ mesh.castShadow=true;
+  const g={mesh, pid, hh, vel:new THREE.Vector3(), owner:null, carrying:false, offset:null, home:mesh.position.clone(), mat:mesh.material, _cool:0};
+  grabbables.push(g); grabbablesById[pid]=g; scene.add(mesh); return g; }
+// nearest FREE (unowned, off-cooldown) grabbable to a point — you can't grab what someone holds
+function grabNearest(point, maxDist){ let best=null, bd=maxDist*maxDist;
+  for(const g of grabbables){ if(g.owner!=null || g._cool>0) continue; const d2=g.mesh.position.distanceToSquared(point); if(d2<bd){ bd=d2; best=g; } }
+  return best; }
+let heldProp = null;                                 // desktop carry
+const _heldHand = {left:null, right:null};           // VR grip carry
+const _gripDown = {left:false, right:false};
+const _propSendT = {}, _propPrev = {};               // send-throttle + previous pose (for throw velocity)
+function _psend(o){ if(sock && sock.readyState===1) sock.send(JSON.stringify(o)); }
+function claimProp(g){ _psend({t:'claim', pid:g.pid}); }
+function sendProp(g){ const now=performance.now();
+  if(_propSendT[g.pid] && now-_propSendT[g.pid]<70) return; _propSendT[g.pid]=now;
+  _psend({t:'prop', pid:g.pid, x:g.mesh.position.x, y:g.mesh.position.y, z:g.mesh.position.z}); }
+function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; claimProp(g); return g; }  // optimistic + claim
+function dropProp(g){ if(!g) return; g.carrying=false;               // owner stays mine; propPhysics arcs it + releases on rest
+  if(g.isImage){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;      // images don't fall — stay put + release now
+    _psend({t:'release', pid:g.pid}); return; }
+  if(g.vel.length()<0.6) g.vel.set(0,0,0); else g.vel.multiplyScalar(1.1); }   // throw threshold + slight gain (Basis)
+function grabToggleDesktop(){                         // E: drop what I hold, else grab nearest in front
+  if(heldProp){ const p=heldProp.pid; dropProp(heldProp); heldProp=null; return 'dropped '+p; }
+  const g=grabNearest(_reachPoint(),0.85); if(!g) return 'nothing in reach'; heldProp=grabProp(g); return 'grabbing '+g.pid; }
+function tryGripGrab(hand, pressed){                  // VR grip edge → grab nearest to that controller / release
+  if(pressed && !_gripDown[hand]){ try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
+    const gp=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); const g=grabNearest(gp,0.2);
+    if(g){ g.offset=g.mesh.position.clone().sub(gp); _heldHand[hand]=grabProp(g); } }catch(e){} }   // pose-offset attach
+  else if(!pressed && _gripDown[hand]){ if(_heldHand[hand]) dropProp(_heldHand[hand]); _heldHand[hand]=null; }
+  _gripDown[hand]=pressed; }
+function _reachPoint(){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+  const r=player.position.clone().addScaledVector(f,0.85); r.y=Math.max(0.55, player.position.y+0.9); return r; }
+let _hoverG=null;                                     // hover-glow the prop I could grab right now (desktop)
+function _updateHover(){ const g=(heldProp||_heldHand.left||_heldHand.right)?null:grabNearest(_reachPoint(),0.85);
+  if(g!==_hoverG){ if(_hoverG&&_hoverG.mat.emissive) _hoverG.mat.emissive.setHex(0x000000);
+    if(g&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; } }
+function _trackVel(g, pos, dt){ if(dt>0 && _propPrev[g.pid]) g.vel.copy(pos).sub(_propPrev[g.pid]).multiplyScalar(1/dt); _propPrev[g.pid]=pos.clone(); }
+function _propHoldUpdate(dt){                          // glue carried props to the holder + measure throw velocity
+  if(heldProp){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+    const p=new THREE.Vector3(player.position.x+f.x*0.55, player.position.y+1.02, player.position.z+f.z*0.55);
+    _trackVel(heldProp,p,dt); heldProp.mesh.position.copy(p); sendProp(heldProp); }
+  for(const hand of ['left','right']){ const g=_heldHand[hand]; if(!g) continue;
+    try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
+      const p=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); if(g.offset) p.add(g.offset);
+      _trackVel(g,p,dt); g.mesh.position.copy(p); sendProp(g); }catch(e){} } }
+function propPhysics(dt){
+  _propHoldUpdate(dt); _updateHover();
+  for(const g of grabbables){ if(g._cool>0) g._cool-=dt;
+    if(myNet==null || g.owner!==myNet || g.carrying) continue;   // only simulate props I own & have let go
+    const rest=groundHeight(g.mesh.position.x, g.mesh.position.z)+g.hh;
+    if(g.mesh.position.y > rest+1e-4){                            // arc under gravity (throw travels as it falls)
+      g.vel.y-=GRAV*dt; g.mesh.position.addScaledVector(g.vel,dt); g.vel.x*=0.98; g.vel.z*=0.98;
+      const r2=groundHeight(g.mesh.position.x,g.mesh.position.z)+g.hh;
+      if(g.mesh.position.y<=r2){ g.mesh.position.y=r2; g.vel.set(0,0,0);
+        const rr=Math.hypot(g.mesh.position.x,g.mesh.position.z); if(rr>WORLD_RADIUS){ g.mesh.position.x*=WORLD_RADIUS/rr; g.mesh.position.z*=WORLD_RADIUS/rr; }
+        g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g); }   // rested → release ownership
+      else sendProp(g);
+    } else { g.mesh.position.y=rest; g.vel.set(0,0,0); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); }  // dropped in place
+  } }
+// authoritative owner update from the relay: grant (owner===me → keep carrying), deny/steal/free (→ let go)
+function applyOwn(pid, owner){ const g=grabbablesById[pid]; if(!g) return; g.owner=owner;
+  if(owner!==myNet){ if(heldProp===g) heldProp=null; for(const h of ['left','right']) if(_heldHand[h]===g) _heldHand[h]=null; g.carrying=false; } }
+window.__propPhysics = propPhysics; window.__grabToggle = grabToggleDesktop;
+window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, applyOwn, grabProp, dropProp };
+{ // place a few props on the tabletop
+  const topY = _tableBox ? _tableBox.max.y : 0.764, cz = -0.6;
+  const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.038,0.075,16),
+    new THREE.MeshStandardMaterial({color:0xe4d9c0, roughness:0.85}));
+  mug.position.set(-0.34, topY+0.0375, cz+0.12); _addProp('mug', mug, 0.0375);
+  const pebble = new THREE.Mesh(new THREE.IcosahedronGeometry(0.05,0),
+    new THREE.MeshStandardMaterial({color:0x6b7480, roughness:0.7, flatShading:true}));
+  pebble.position.set(0.30, topY+0.05, cz-0.14); _addProp('pebble', pebble, 0.05);
+  const book = new THREE.Mesh(new THREE.BoxGeometry(0.13,0.032,0.09),
+    new THREE.MeshStandardMaterial({color:0x7a2a24, roughness:0.9}));
+  book.position.set(0.02, topY+0.016, cz+0.24); _addProp('book', book, 0.016);
+  const die = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.05,0.05),
+    new THREE.MeshStandardMaterial({color:0xd8cbb0, roughness:0.6}));
+  die.position.set(-0.12, topY+0.025, cz-0.22); _addProp('die', die, 0.025);
 }
 
 // ---- a literal mirror, framed, to the left of the bookcases (so you can see yourself) ----
@@ -480,6 +645,7 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   mir.position.set(-2.85, MH/2 + 0.02, -1.7);   // nudged left so the extra width grows leftward, clear of the bookcases
   mir.rotation.y = Math.PI * 0.32;
   scene.add(mir);
+  addCollider(mir, 'mirror');
 }
 
 // ---- the resident (staging: add ?resident=1 for the suit body; ?resident=toon for the toon) ----
@@ -658,13 +824,28 @@ if(_residentPick){
     function endSpeak(){ speaking=false; bubMesh.visible=false;
       if(vrm.expressionManager){ vrm.expressionManager.setValue('aa',0); vrm.expressionManager.setValue('oh',0); } mouthEnv=0;
       setState(workingOn ? 'working' : 'idle'); clearLook();
-      if(!walking && !emoteUntil) crossfade(workingOn ? 'dance' : 'idle'); }
+      if(!walking && !emoteUntil) crossfade(workingOn ? 'dance' : 'idle');
+      // #10: I just finished a reply and I'm free again — answer anyone who spoke to me
+      // mid-reply. Small pause so it reads as a natural next breath, not an instant pivot.
+      // (Guarded: no-ops in working-mode, since state stays 'working' and pings should cache.)
+      if(!workingOn) setTimeout(drainDeferred, 400); }
     function say(text,{rate=1, keepWorking=false}={}){ if(!text) return;
       // speaking clears 'working' (answering = available) unless tagged: a reply starting
       // with "[working]" strips the tag and keeps the dance going after the sentence.
       let kw = keepWorking;
       if(/^\s*\[working\]\s*/i.test(text)){ kw = true; text = text.replace(/^\s*\[working\]\s*/i,''); }
+      // action tags: [[wave]] / [[come here]] / [[standing wave]] / [[follow]] / [[stay]] — the brain
+      // embeds these in its reply to DO things; each runs command() and is stripped before TTS. This
+      // is my action channel (my reply is otherwise just spoken text). A tag-only message acts, no speech.
+      // (Standalone gestures read cleanest — a clip-emote co-spoken loses to the 'talk' clip; movement co-exists.)
+      text = text.replace(/\[\[([^\]]+)\]\]/g, (_,c)=>{ try{ command(c.trim()); }catch(e){} return ''; }).replace(/\s{2,}/g,' ').trim();
+      if(!text){ if(workingOn && !kw) working(false); return 'action(s) done'; }
       if(workingOn && !kw) working(false);
+      // AI↔AI addressing: @Name in my speech (or a one-shot faceName) targets that agent so THEIR
+      // gate fires; strip the '@' so TTS reads the name cleanly. Empty → a plain room broadcast.
+      const _to = (typeof chatMentions==='function') ? chatMentions(text) : [];
+      const _facing = _addressNext; _addressNext = null;
+      if(_to.length) text = text.replace(/@([A-Za-z0-9_\-]+)/g, '$1');
       logChat(RESIDENT_NAME, text, 'res', voiceOn?'TTS':'text');
       const est = Math.max(1.6, text.split(/\s+/).length/2.6);
       drawBubble(text, est); bubMesh.visible=true; setState('speaking'); if(!walking) crossfade('talk');
@@ -672,7 +853,7 @@ if(_residentPick){
       // networked speech: other pages TTS it (if voice on), bubble it, megaphone it
       dbg('say→', `${voiceOn?'📢 ':''}"${text.slice(0,80)}"`);
       if(resSock && resSock.readyState===1)
-        resSock.send(JSON.stringify({t:'say', text, name:RESIDENT_NAME, voice:voiceOn}));
+        resSock.send(JSON.stringify({t:'say', text, name:RESIDENT_NAME, voice:voiceOn, to:_to, facing:_facing}));
       // WALL-CLOCK fallback (seq-guarded): the render-clock check below stalls when rAF
       // does (headset off pauses the XR loop; headless throttles) — speech must still end.
       const seq = ++speakSeq;
@@ -689,15 +870,67 @@ if(_residentPick){
     function emote(name){ const a=actions[name]; if(!a){ console.warn('no emote:',name); return; }
       crossfade(name,{loop:false,fade:0.22}); emoteUntil = t + (a.getClip().duration||1.5); return 'emote: '+name; }
 
+    // ---- procedural emotes: gestures hand-authored FROM MATH (no mocap clip). Driven per-frame
+    // by procTick(), which runs AFTER residentMixer.update in the loop so the math overwrites the
+    // idle clip on the bones it touches (other bones keep breathing on idle). Each fn(e,dur) sets
+    // NORMALIZED bone quaternions; env=sin(π·p) guarantees rest at both ends → clean blend in/out.
+    // 'standingwave' is mine — a ripple that travels up the body and settles. (Hesperus, 2026-07-08)
+    const _armUp = 1;   // sign that raises the arms in this rig (verified headless: hands rise + clear torso)
+    const PROC_EMOTES = {
+      standingwave: { dur:3.6, fn:(e,dur)=>{
+        const h=vrm.humanoid; if(!h) return;
+        const p=Math.min(1,e/dur), env=Math.sin(Math.PI*p);      // 0→1→0: starts and ends at rest
+        const w=2*Math.PI*1.4;                                    // ~1.4 Hz ripple
+        ['spine','chest','upperChest','neck','head'].forEach((nm,i)=>{
+          const b=h.getNormalizedBoneNode(nm); if(!b) return;
+          const ph=e*w - i*0.75;                                  // travels UP the body (head lags the hips)
+          const pitch=env*(0.05+i*0.022)*Math.sin(ph);            // back-arch ripple, grows toward the head
+          const roll =env*0.03*Math.sin(ph*0.5 + i*0.9);          // gentle sway
+          b.quaternion.setFromEuler(new THREE.Euler(pitch,0,roll,'YXZ'));
+        });
+        const lift=env*0.65, shimmer=env*0.16*Math.sin(e*w-1.2);  // arms rise + open, shimmering on the wave
+        [['left',1],['right',-1]].forEach(([side,sgn])=>{
+          const ua=h.getNormalizedBoneNode(side+'UpperArm'), la=h.getNormalizedBoneNode(side+'LowerArm');
+          if(ua) ua.quaternion.setFromEuler(new THREE.Euler(shimmer,0, sgn*_armUp*lift,'YXZ'));
+          if(la) la.quaternion.setFromEuler(new THREE.Euler(0,0, sgn*_armUp*env*0.35,'YXZ'));
+        });
+      }}
+    };
+    let _proc=null;
+    function procEmote(name){ const pe=PROC_EMOTES[name]; if(!pe) return 'no proc-emote: '+name;
+      _proc={t0:t, dur:pe.dur, fn:pe.fn}; emoteUntil=t+pe.dur+0.2; return `proc-emote: ${name} (${pe.dur}s)`; }
+    function procTick(){ if(!_proc) return; const e=t-_proc.t0;
+      if(e>=_proc.dur){ _proc=null; return; }                    // done → idle clip resumes on those bones
+      if(!walking && !speaking) _proc.fn(e,_proc.dur); else _proc=null; }   // yield to walk/speech
+    window.__procTick=procTick;
+
     // ---- locomotion + follow/stay ----
     let walkTarget=null, walking=false, followMode=false; const WALKSPD=1.35;
     function walkTo(x,z){ walkTarget={x,z}; followMode=false; return `walking to ${x.toFixed(1)},${z.toFixed(1)}`; }
     function follow(){ followMode=true; return 'following you'; }
     function stay(){ followMode=false; walkTarget=null; walking=false;
       if(!speaking && !emoteUntil) crossfade('idle'); return 'staying'; }
+    function comeHere(){ const p=player.position, r=vrm.scene.position;    // walk to ~1.2 m from the player, then stop
+      const dx=r.x-p.x, dz=r.z-p.z, d=Math.hypot(dx,dz)||1;
+      walkTo(p.x+dx/d*1.2, p.z+dz/d*1.2); return 'coming to you'; }
+    function faceMe(){ lookAtSource(player); return 'turning to you'; }    // turn + gaze toward the player, no walk
+    // Natural-language command parser: maps spoken/typed phrases to movement + gesture verbs.
+    // Returns a status string on a hit, or null (→ the caller treats it as normal speech).
+    // Order matters: the more specific patterns are tested first.
     function command(s){ const low=(s||'').trim().toLowerCase();
-      if(/^stay\b/.test(low)) return stay();
-      const m=low.match(/^follow\b\s*(.*)/); if(m){ follow(); return 'following '+(m[1]||'you'); }
+      if(/\b(stop|halt|wait|freeze|stay|hold (on|still)|stand (still|down))\b/.test(low)) return stay();
+      if(/\bfollow\b|\bcome (with|along)\b|\bwith me\b|\blead\b/.test(low)){ follow(); return 'following you'; }
+      if(/\bcome here\b|\bcome to me\b|\bcome closer\b|\bover here\b|\bcome\b(?!\s*(with|along))/.test(low)) return comeHere();
+      const fm=low.match(/\b(?:face|look at|turn (?:to|toward)(?:\s+face)?)\s+(?!me\b|you\b|here\b|us\b|face\b)([a-z0-9_\-]+)/);
+      if(fm) return faceName(fm[1]);                             // face/address a NAMED agent (AI↔AI)
+      if(/\b(face|look at|turn to|turn toward|turn to face)\b[^.]*\b(me|you|here)\b|\bface me\b|\blook at me\b/.test(low)) return faceMe();
+      if(/\b(standing ?wave|ripple|your (own )?wave|signature (move|gesture)|do your thing)\b/.test(low)) return procEmote('standingwave');
+      if(/\b(wave|say hi|say hello|greet)\b/.test(low)) return emote('wave');
+      if(/\b(cheer|celebrate|hooray|woo+)\b/.test(low)) return emote('cheer');
+      if(/\braise (your )?hand\b|\bhand up\b|\braise\b/.test(low)) return emote('raise');
+      if(/\bdance\b/.test(low)) return emote('dance');
+      if(/\b(the )?(candle|your spot|host spot)\b/.test(low)) return walkTo(1.7,-1.15);
+      if(/\b(the )?(middle|centre|center)\b/.test(low)) return walkTo(0,0);
       return null; }
 
     // ---- model identity (part of the harness for AI agents) ----
@@ -708,6 +941,16 @@ if(_residentPick){
     let facingSource = null;
     function lookAtSource(obj){ facingSource = obj || player; }
     function clearLook(){ facingSource = null; if(vrm.lookAt) vrm.lookAt.target = null; }
+    // ---- address ANOTHER agent (AI↔AI): face a named occupant and/or @mention them so THEIR
+    // gate fires. _addressNext is a ONE-SHOT facing-address (set by faceName, consumed by the next
+    // say) — deliberate, so two agents don't infinite-ping just by being near each other. Plain
+    // @Name in my speech also addresses (chatMentions), always. (Hesperus, 2026-07-08)
+    let _addressNext = null;
+    function faceName(name){ if(!name) return 'face whom?';
+      const nm = String(name).toLowerCase();
+      const hit = [...remotes.values()].find(x => ((x.group.userData.name||'').toLowerCase() === nm));
+      if(!hit) return 'no one here named '+name;
+      lookAtSource(hit.group); _addressNext = hit.group.userData.name; return 'facing '+hit.group.userData.name; }
 
     // ---- listening loop: facing-gate → STT → listen(+look) → silence → think → respond ----
     // Backlog: everything addressed to the resident (gated speech + typed chat), capped,
@@ -723,9 +966,17 @@ if(_residentPick){
       while(backlog.length && backlog[0].ts<cut) backlog.shift(); }
     function remember(speaker, text, typed){
       pruneCache();
-      backlog.push({speaker, text, ts:Date.now(), typed:!!typed});
+      // delivered:false → this entry has NOT yet reached the brain. Drives two things:
+      // (#6) each ping sends only UNdelivered entries — the brain relay is one persistent
+      // session, so it already remembers what earlier pings delivered; re-sending is noise.
+      // (#10) a message cached while busy is by definition undelivered, so the same flag
+      // marks it as owed-a-reply once I'm free (see drainDeferred). [ping-brevity+redeliver 2026-07-08]
+      backlog.push({speaker, text, ts:Date.now(), typed:!!typed, delivered:false});
       if(backlog.length>BACKLOG_MAX) backlog.shift();
     }
+    // addressed-while-busy bookkeeping (#10): set when a ping arrives but I can't answer
+    // yet (mid-thought / speaking / working). drainDeferred() answers it on the next free beat.
+    let deferredPing=false, deferredSpeaker=null;
     // stub brain for the listening TEST; setBrain(fn) to wire a real LLM (fn may return a Promise;
     // receives (text, backlog) — backlog is [{speaker,text,ts,typed}...], newest last).
     let onUtterance = (text)=> `You said: "${text}". I'm here on the Porch, listening.`;
@@ -758,11 +1009,19 @@ if(_residentPick){
         }, brainTimeoutMs); };
       const progress = ()=>{ if(!settled) arm(); };           // streaming brains: call per chunk
       arm();
-      Promise.resolve().then(()=> onUtterance(prompt, backlog.slice(), progress)).then(reply=>{
+      // #6 ping brevity: deliver only entries the brain hasn't seen yet. The relay is ONE
+      // persistent session that carries its own memory across pings, so re-feeding already-
+      // delivered lines is pure noise. First ping (all undelivered) still sends full context.
+      // _pending holds the live backlog refs (marked delivered on SUCCESS only, so a failed/
+      // errored ping re-sends next time); the wire copy is stripped of the delivered flag.
+      const _pending = backlog.filter(e=>!e.delivered);
+      const fresh = _pending.map(e=>({speaker:e.speaker, text:e.text, ts:e.ts, typed:e.typed}));
+      Promise.resolve().then(()=> onUtterance(prompt, fresh, progress)).then(reply=>{
         settled=true; clearTimeout(watchdog); clearTimeout(busyTimer);
+        _pending.forEach(e=>e.delivered=true);                 // brain received them → don't re-send
         dbg('brain', `← ${((Date.now()-_t0)/1000).toFixed(1)}s: ${reply ? '"'+String(reply).slice(0,80)+'"' : '(intentional silence)'}`, 'g');
         const wait = Math.max(0, 650 - (Date.now() - _t0));   // let 'thinking' read even with an instant stub brain
-        setTimeout(()=>{ if(reply) say(reply); else { setState(workingOn?'working':'idle'); clearLook(); } }, wait);
+        setTimeout(()=>{ if(reply) say(reply); else { setState(workingOn?'working':'idle'); clearLook(); drainDeferred(); } }, wait);
       }).catch(e=>{ settled=true; clearTimeout(watchdog); clearTimeout(busyTimer);
         const msg=String(e && e.message || e);
         dbg('brain', `ERROR ${((Date.now()-_t0)/1000).toFixed(1)}s: ${msg.slice(0,90)}`, 'e');
@@ -796,6 +1055,12 @@ if(_residentPick){
         const r=[...remotes.values()].find(x=>x.group.userData.name===speaker);
         lookAtSource(r ? r.group : player);
         respond(`${speaker}${typed?' (typed)':''}: ${text}`);
+      } else {
+        // #10: addressed while busy. Without this the message only cached and I'd answer
+        // it (if ever) on some LATER unrelated ping — i.e. silently ignore them until then.
+        // Mark it owed; drainDeferred() delivers the accumulated cache once I'm free.
+        deferredPing=true; deferredSpeaker=speaker;
+        dbg('hear', `deferred ${speaker} (busy) — will answer when free`, 'k');
       }
       return 'heard '+speaker;
     }
@@ -804,7 +1069,25 @@ if(_residentPick){
     function ping(reason='ping'){
       pruneCache();
       if(stateName==='idle' && !listening){ respond(`[${reason}]`); return 'pinged: '+reason; }
-      return 'busy (cache will deliver on next beat)';
+      // busy: mark owed so the deferred cache actually gets delivered when free (#10),
+      // rather than waiting for a coincidental later ping.
+      deferredPing=true;
+      return 'busy (will deliver when free)';
+    }
+    // #10: answer whatever was addressed to me while I was busy, on the next free beat.
+    // Called when a response fully completes (endSpeak / no-reply idle). Guards on being
+    // genuinely free, and no-ops if the owed messages already aged out of the cache.
+    function drainDeferred(){
+      if(!deferredPing) return;
+      if(stateName!=='idle' || listening || speaking) return;   // still busy — try again next completion
+      pruneCache();
+      const hasFresh = backlog.some(e=>!e.delivered);
+      deferredPing=false;
+      if(!hasFresh){ deferredSpeaker=null; return; }             // everything aged out — nothing owed
+      const r=[...remotes.values()].find(x=>x.group.userData.name===deferredSpeaker);
+      lookAtSource(r ? r.group : player); deferredSpeaker=null;
+      dbg('hear', 'draining deferred cache (was busy when addressed)', 'g');
+      respond('[continuing — messages arrived while you were busy]');
     }
     function startMic(){
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -887,7 +1170,7 @@ if(_residentPick){
     window.__residentHead = ()=> _headBone
       ? _headBone.getWorldPosition(_headV).clone()
       : _headV.set(vrm.scene.position.x, vrm.scene.position.y+1.45, vrm.scene.position.z).clone();
-    window.agent = { say, emote, walkTo, follow, stay, command, setState,
+    window.agent = { say, emote, procEmote, walkTo, follow, stay, comeHere, faceMe, faceName, command, setState,
       startMic, stopMic, simulateHear, lookAtSource, clearLook, setModel,
       setVoice, hearRemote, ping, sayError, working,
       setBrainTimeout:(ms)=>{ brainTimeoutMs = Math.max(1000, ms|0) || brainTimeoutMs; },
@@ -908,14 +1191,20 @@ if(_residentPick){
       const bport = bm ? +bm[1] : 8930, bsecret = bm ? bm[2] : '';
       let brainSeq = 0;
       onUtterance = (text, backlog, progress)=> new Promise((resolve, reject)=>{
+        // #1 POV: snapshot my first-person view of whoever I'm facing (the addressee), so the
+        // brain SEES them. facingSource is set by hearRemote/drainDeferred to the speaker's group;
+        // skip if it's me (local self-address) or capture fails — the reply still works text-only.
+        let image=null;
+        try{ if(facingSource && facingSource!==player) image = capturePOV(facingSource); }
+        catch(e){ dbg('pov','capture failed: '+(e&&e.message||e),'e'); }
         if(sock && sock.readyState === 1){
           const reqId = 'b' + (++brainSeq) + '_' + myNet;
           window.__brainPending.set(reqId, {resolve, reject});
-          sock.send(JSON.stringify({t:'brainReq', reqId, port:bport, secret:bsecret, text, speaker:'', backlog}));
+          sock.send(JSON.stringify({t:'brainReq', reqId, port:bport, secret:bsecret, text, speaker:'', backlog, image}));
           setTimeout(()=>{ if(window.__brainPending.delete(reqId)) reject(new Error('brain socket timeout')); }, 420000);  // 7 min: I sometimes take long work-turns; a late reply should still land, not drop
         } else {
           fetch(brainUrl, {method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({text, speaker:'', backlog})})
+            body: JSON.stringify({text, speaker:'', backlog, image})})
             .then(async res=>{ if(!res.ok) throw new Error(`relay ${res.status}`); resolve((await res.json()).reply); })
             .catch(reject);
         }
@@ -945,7 +1234,7 @@ addEventListener('pointermove', e=>{
   camera.rotation.x = pitch;
 });
 const keys = {}; window.__keys = keys;                     // exposed for headless WASD-stuck test
-let _spawnKinds = ['cube','sphere','cone'], _spawnI = 0;
+let _spawnKinds = ['cube','sphere','cone','cylinder'], _spawnI = 0;
 addEventListener('keydown', e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;  // typing ≠ walking
   if(e.code==='Enter' && window.__openChat){ e.preventDefault(); window.__openChat(); return; }
@@ -955,13 +1244,17 @@ addEventListener('keydown', e=>{
   if(e.code.startsWith('Arrow') && window.moveLast){ const d=0.25; e.preventDefault();
     if(e.code==='ArrowLeft') moveLast(-d,0,0); else if(e.code==='ArrowRight') moveLast(d,0,0);
     else if(e.code==='ArrowUp') moveLast(0,0,-d); else if(e.code==='ArrowDown') moveLast(0,0,d); }
-  if(e.code==='KeyX' && window.despawnLast){ despawnLast(); } });
+  if(e.code==='KeyX'){ if(!deleteHeldObject() && window.despawnLast) despawnLast(); }   // held image/text → delete it; else last block
+  if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); } });
 addEventListener('keyup',   e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
   keys[e.code] = false; });
 
 // ---- avatar builder: capsule + a little face (so facing reads) + floating nameplate ----
-const playerName = new URLSearchParams(location.search).get('name') || 'guest';   // default is anonymous; Nix's name comes from her roster key (never a real name)
+let playerName = new URLSearchParams(location.search).get('name') || 'guest';   // default anonymous; sign-in or a roster key sets it (never a real name)
+const _nameCbs = [];                                          // redraw hooks for anything that renders my name
+window.__onNameChange = (f)=>{ _nameCbs.push(f); };
+window.__setMyName = (n)=>{ playerName = (n||'guest'); _nameCbs.forEach(f=>{ try{ f(playerName); }catch(e){} }); };
 const playerModel = new URLSearchParams(location.search).get('model') || 'human';   // occupant declares model; humans = 'human'
 // role → nameplate pill colors (grey visitor / teal builder / gold architect)
 const ROLE_STYLE = {
@@ -1127,6 +1420,7 @@ if(!new URLSearchParams(location.search).has('noembody')){
     pPlay('idle'); window.__playerEmote=(nm)=>pPlay(nm,0.25);
     const tag=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.366),
       new THREE.MeshBasicMaterial({map:drawNameplate(playerName,'visitor',playerModel),transparent:true,depthTest:false,depthWrite:false}));
+    window.__onNameChange && window.__onNameChange(()=>{ tag.material.map = drawNameplate(playerName,'visitor',playerModel); tag.material.needsUpdate = true; });
     tag.position.set(0,2.16,0); tag.renderOrder=999; tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam); vrm.scene.add(tag);
     // first-person head hiding (VRChat's shrunken-head trick, Nix's ask): scale the head
     // bone to ~0 for YOUR eyes; mirror + 3rd-person renders restore it around their pass.
@@ -1158,12 +1452,21 @@ scene.add(ikHmd, ikHandL, ikHandR);
 try{ scene.add(renderer.xr.getControllerGrip(0), renderer.xr.getControllerGrip(1)); }catch(e){}
 window.__ikTargets={hmd:ikHmd, handL:ikHandL, handR:ikHandR};
 const _sa=x=>Math.atan2(Math.sin(x),Math.cos(x));
+const _lookS={x:0,y:0,z:0};   // smoothed head target (chest-follow damping — Basis "eases to your gaze")
 function _aimBone(bone, targetWorld, childRestLocal){
   const bonePos=bone.getWorldPosition(new THREE.Vector3());
   const pQi=bone.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
   const desired=new THREE.Vector3().subVectors(targetWorld,bonePos).applyQuaternion(pQi).normalize();
   bone.quaternion.setFromUnitVectors(childRestLocal.clone().normalize(), desired);
 }
+// grip→wrist calibration (§2.4): a WebXR controller grip's frame ≠ the VRM hand-bone rest frame,
+// so without an offset the palm/fingers read rotated ~90°. This is a per-hand CONSTANT best found
+// once against the headset — exposed as window.__wristCal(lx,ly,lz, rx,ry,rz) in degrees for live
+// tuning tonight. Default identity: reach (hand POSITION) is unaffected; this only orients the wrist.
+const _wristCalL=new THREE.Quaternion(), _wristCalR=new THREE.Quaternion();
+window.__wristCal=(lx=0,ly=0,lz=0,rx=0,ry=0,rz=0)=>{ const d=Math.PI/180;
+  _wristCalL.setFromEuler(new THREE.Euler(lx*d,ly*d,lz*d)); _wristCalR.setFromEuler(new THREE.Euler(rx*d,ry*d,rz*d));
+  return `wrist cal L(${lx},${ly},${lz}) R(${rx},${ry},${rz})`; };
 function _solveArm(vrm, side, targetPos, targetQuat){
   const h=vrm.humanoid;
   const U=h.getNormalizedBoneNode(side+'UpperArm'), L=h.getNormalizedBoneNode(side+'LowerArm'), H=h.getNormalizedBoneNode(side+'Hand');
@@ -1174,30 +1477,61 @@ function _solveArm(vrm, side, targetPos, targetQuat){
   const l1=L.position.length(), l2=H.position.length();
   const uDir=L.position.clone(), lDir=H.position.clone();
   const toT=new THREE.Vector3().subVectors(targetPos,uPos);
-  const d=THREE.MathUtils.clamp(toT.length(), Math.abs(l1-l2)+0.02, l1+l2-0.02);
+  let d=THREE.MathUtils.clamp(toT.length(), Math.abs(l1-l2)+0.02, l1+l2-0.02);
+  // elbow interior-angle clamp (Basis 23°–178°): kills the wrist-snap at full extension AND
+  // hyperflexion. Clamp the elbow angle, then back out the shoulder-target distance it implies.
+  const E=Math.acos(THREE.MathUtils.clamp((l1*l1+l2*l2-d*d)/(2*l1*l2),-1,1));
+  const Ec=THREE.MathUtils.clamp(E, 23*Math.PI/180, 178*Math.PI/180);
+  if(Ec!==E) d=Math.sqrt(Math.max(1e-6, l1*l1+l2*l2-2*l1*l2*Math.cos(Ec)));
   const dir=toT.clone().normalize();
   const cosA=THREE.MathUtils.clamp((l1*l1+d*d-l2*l2)/(2*l1*d),-1,1);
   const a=Math.acos(cosA);
-  const pole=new THREE.Vector3(side==='left'?0.3:-0.3,-1,-0.5).normalize();
+  // elbow-hint pole in CHEST-LOCAL frame (§2.2): a world-space pole made elbows swing wrong when
+  // the body turned (the "contorted / swapped when turned" report). Rotate it into the torso frame
+  // so "elbows point down-and-back relative to the chest" stays true at any body yaw.
+  const chestBone=h.getNormalizedBoneNode('upperChest')||h.getNormalizedBoneNode('chest')||h.getNormalizedBoneNode('spine');
+  const chestQ=chestBone?chestBone.getWorldQuaternion(new THREE.Quaternion()):new THREE.Quaternion();
+  const pole=new THREE.Vector3(side==='left'?0.3:-0.3,-1,-0.5).normalize().applyQuaternion(chestQ);
   let axis=new THREE.Vector3().crossVectors(dir,pole);
   if(axis.lengthSq()<1e-6) axis.set(0,0,1); else axis.normalize();
   const upperDir=dir.clone().applyAxisAngle(axis,a);
   const elbow=uPos.clone().addScaledVector(upperDir,l1);
   _aimBone(U, elbow, uDir); vrm.scene.updateMatrixWorld(true);
   _aimBone(L, targetPos, lDir); vrm.scene.updateMatrixWorld(true);
-  if(targetQuat){ const pQi=H.parent.getWorldQuaternion(new THREE.Quaternion()).invert(); H.quaternion.copy(pQi.clone().multiply(targetQuat)); }
+  if(targetQuat){ const cal=side==='left'?_wristCalL:_wristCalR;
+    const pQi=H.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+    H.quaternion.copy(pQi.multiply(targetQuat).multiply(cal)); }
 }
 function updatePlayerIK(dt){
   const vrm=playerVrm; if(!vrm||!vrm.humanoid) return; const h=vrm.humanoid;
   const hq=ikHmd.getWorldQuaternion(new THREE.Quaternion());
-  const hyaw=new THREE.Euler().setFromQuaternion(hq,'YXZ').y;
-  const tgtYaw=hyaw+Math.PI;                                  // VRM faces +Z at rest; +PI = player-forward
-  vrm.scene.rotation.y += _sa(tgtYaw - vrm.scene.rotation.y)*Math.min(1,dt*5);
+  const he=new THREE.Euler().setFromQuaternion(hq,'YXZ');     // HMD orientation: yaw / pitch(nod) / roll(tilt)
+  const tgtYaw=he.y+Math.PI;                                  // VRM faces +Z at rest; +PI = player-forward
+  // Whole-body yaw eases SLOWLY toward where you look; the part it hasn't caught up to becomes
+  // visible spine TWIST distributed down the chain (Basis 'pelvic twist'), settling as the body turns.
+  const catchup=Math.min(1,dt*2.5);
+  const residualYaw=_sa(tgtYaw - vrm.scene.rotation.y)*(1-catchup);
+  vrm.scene.rotation.y += _sa(tgtYaw - vrm.scene.rotation.y)*catchup;
   vrm.scene.updateMatrixWorld(true);
-  const head=h.getNormalizedBoneNode('head'), neck=h.getNormalizedBoneNode('neck');
-  const he=new THREE.Euler().setFromQuaternion(hq,'YXZ');     // body took the yaw; head gets nod(pitch)+tilt(roll)
-  if(neck) neck.quaternion.setFromEuler(new THREE.Euler(he.x*0.35,0,he.z*0.35,'YXZ'));
-  head.quaternion.setFromEuler(new THREE.Euler(he.x*0.6,0,he.z*0.6,'YXZ'));
+  if(window.__nospineik){                                      // safety fallback: old neck+head-only look
+    const neck=h.getNormalizedBoneNode('neck'), head=h.getNormalizedBoneNode('head');
+    if(neck) neck.quaternion.setFromEuler(new THREE.Euler(he.x*0.35,0,he.z*0.35,'YXZ'));
+    if(head) head.quaternion.setFromEuler(new THREE.Euler(he.x*0.6,0,he.z*0.6,'YXZ'));
+  } else {
+    // Distributed look-at: spread nod(pitch)+tilt(roll)+residual-twist(yaw) across the spine chain
+    // so no single joint snaps — spine takes least, head most. Weights sum ~1 over EXISTING bones
+    // (upperChest is optional in VRM), so the head's cumulative world orientation ≈ the HMD target.
+    const chain=['spine','chest','upperChest','neck','head'].map(n=>h.getNormalizedBoneNode(n));
+    const wY=[.12,.12,.16,.25,.35], wP=[.10,.12,.16,.26,.36], wR=[.08,.10,.14,.28,.40];
+    let sY=0,sP=0,sR=0; chain.forEach((b,i)=>{ if(b){ sY+=wY[i]; sP+=wP[i]; sR+=wR[i]; } });
+    const pitch=THREE.MathUtils.clamp(he.x,-0.7,0.7), roll=THREE.MathUtils.clamp(he.z,-0.5,0.5);
+    const yawFade=Math.max(0,Math.cos(pitch));                 // near-vertical gaze → fade twist (avoid pole singularity)
+    const s=Math.min(1,dt*9);                                  // chest-follow damping: torso EASES to your gaze
+    _lookS.x+=(pitch-_lookS.x)*s; _lookS.y+=(residualYaw-_lookS.y)*s; _lookS.z+=(roll-_lookS.z)*s;
+    chain.forEach((b,i)=>{ if(!b) return;
+      b.quaternion.setFromEuler(new THREE.Euler(
+        _lookS.x*(wP[i]/sP), _lookS.y*(wY[i]/sY)*yawFade, _lookS.z*(wR[i]/sR), 'YXZ')); });
+  }
   if(window.__armIK){                                          // arm reach-IK: WIP (bend/twist tuning) — off by default
     _solveArm(vrm, 'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
     _solveArm(vrm, 'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
@@ -1205,8 +1539,9 @@ function updatePlayerIK(dt){
 }
 window.__updatePlayerIK=updatePlayerIK;
 { const q=new URLSearchParams(location.search);
-  if(q.has('armik')) window.__armIK=true;   // opt-in arm reach-IK (WIP)
-  if(q.has('noik'))  window.__noik=true; }   // disable all IK -> pure idle body (fallback)
+  if(q.has('armik')) window.__armIK=true;         // opt-in arm reach-IK (WIP)
+  if(q.has('noik'))  window.__noik=true;          // disable all IK -> pure idle body (fallback)
+  if(q.has('nospineik')) window.__nospineik=true; }  // Phase-A safety: revert to neck+head-only look
 
 // ---- co-presence: connect to a sync room (?sync=wss://…) and render remote players ----
 const remotes = new Map();   // id -> {group, tp:Vector3, try:number}
@@ -1218,13 +1553,15 @@ function makePrim(kind, color){
   let geo;
   if(kind==='sphere') geo = new THREE.SphereGeometry(0.3, 20, 16);
   else if(kind==='cone') geo = new THREE.ConeGeometry(0.3, 0.6, 20);
+  else if(kind==='cylinder') geo = new THREE.CylinderGeometry(0.25, 0.25, 0.6, 24);
   else geo = new THREE.BoxGeometry(0.5, 0.5, 0.5);            // default: cube
   const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:c, roughness:0.5, metalness:0.2}));
   m.castShadow = true; return m;
 }
 function applySpawn(msg){
   if(!msg.sid || spawnedObjs.has(msg.sid)) return;
-  const m = makePrim(msg.kind, msg.color);
+  // spine: the primitive shape rides 'shape'; legacy records rode it on 'kind' (pre-spine form)
+  const m = makePrim(msg.shape || (msg.kind !== 'spawn' ? msg.kind : undefined), msg.color);
   m.position.set(msg.x||0, msg.y||1, msg.z||0);
   scene.add(m); spawnedObjs.set(msg.sid, m);
   if(msg.id === myNet) lastSpawnSid = msg.sid;               // remember my last, for nudging
@@ -1233,6 +1570,395 @@ function removeSpawn(sid){
   const m = spawnedObjs.get(sid);
   if(m){ scene.remove(m); m.geometry.dispose(); m.material.dispose(); spawnedObjs.delete(sid); }
 }
+
+// ---- object protocol, round 1: IMAGES. A person loads an image from their desktop; it becomes a
+// vertical plane (1 m longest side, aspect-correct) you can grab, move, and delete. Movement rides
+// the prop system (the sid doubles as the prop pid), so grab/own/network come for free. The plane
+// stays where you drop it (images don't fall — they're placed, not tossed). See instantiation-protocol.md.
+const imageObjs = new Map(); let lastImageSid = null;    // sid -> mesh
+const IMG = { maxFile: 10*1024*1024, maxDim: 2048, dataCap: 4*1024*1024,
+              types: ['image/png','image/jpeg','image/webp','image/gif'] };
+function imgNote(s){ dbg('image', s); if(window.__logChat) window.__logChat('porch', s, 'sys', 'image'); }
+function applyImage(msg){
+  if(!msg.sid || imageObjs.has(msg.sid)) return;
+  const aspect = msg.aspect > 0 ? msg.aspect : 1;         // w / h
+  const w = aspect >= 1 ? 1.0 : 1.0*aspect;               // 1 m longest dimension
+  const h = aspect >= 1 ? 1.0/aspect : 1.0;
+  const tex = new THREE.TextureLoader().load(msg.dataURL);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true}));
+  mesh.position.set(msg.x||0, msg.y!=null?msg.y:1.4, msg.z||0);
+  mesh.rotation.y = msg.ry||0;
+  const g = _addProp(msg.sid, mesh, h/2);                 // register as grabbable (adds to scene)
+  g.isImage = true; g.sid = msg.sid;                      // tag so drop=stay-put and X=delete
+  imageObjs.set(msg.sid, mesh);
+  if(msg.id === myNet) lastImageSid = msg.sid;
+}
+function removeImage(sid){
+  const mesh = imageObjs.get(sid);
+  if(mesh){ scene.remove(mesh); if(mesh.material.map) mesh.material.map.dispose();
+    mesh.geometry.dispose(); mesh.material.dispose(); imageObjs.delete(sid); }
+  const g = grabbablesById[sid];                          // unregister the grabbable
+  if(g){ const i = grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
+    if(heldProp===g) heldProp=null; for(const hnd of ['left','right']) if(_heldHand[hnd]===g) _heldHand[hnd]=null; }
+  if(lastImageSid===sid) lastImageSid=null;
+}
+// desktop pipeline: file -> decode -> guardrails -> downscale -> broadcast. Split out (pure-ish) for tests.
+function addImageFile(file){
+  if(!file) return 'no file';
+  if(!IMG.types.includes(file.type)){ imgNote(`can't add ${file.type||'that file'} — png/jpeg/webp/gif only`); return 'bad type'; }
+  if(file.size > IMG.maxFile){ imgNote(`that image is ${(file.size/1048576).toFixed(1)} MB — 10 MB max`); return 'too big'; }
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = ()=>{
+    URL.revokeObjectURL(url);
+    let w=img.naturalWidth, h=img.naturalHeight;
+    if(!w || !h){ imgNote('could not read that image'); return; }
+    const scale = Math.min(1, IMG.maxDim/Math.max(w,h));   // downscale longest side to <= maxDim
+    const cw=Math.max(1,Math.round(w*scale)), ch=Math.max(1,Math.round(h*scale));
+    const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
+    cv.getContext('2d').drawImage(img,0,0,cw,ch);
+    const alpha = (file.type!=='image/jpeg');              // keep alpha for png/webp/gif; jpeg for photos
+    const dataURL = cv.toDataURL(alpha?'image/png':'image/jpeg', 0.85);
+    if(dataURL.length > IMG.dataCap){ imgNote('image too detailed after processing — try a smaller one'); return; }
+    const fwd=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+    const p=player.position.clone().addScaledVector(fwd,1.4);
+    sendObj('image', {dataURL, aspect:cw/ch, x:p.x, y:1.4, z:p.z, ry:player.rotation.y});
+    imgNote(`added image (${cw}×${ch})`);
+  };
+  img.onerror = ()=>{ URL.revokeObjectURL(url); imgNote('could not decode that image'); };
+  img.src = url;
+  return 'loading';
+}
+window.__addImageFile = addImageFile;                     // headless/test entrypoint
+function pickImage(){                                      // open the OS file picker (lazy hidden input)
+  let inp=document.getElementById('imgPick');
+  if(!inp){ inp=document.createElement('input'); inp.type='file'; inp.id='imgPick';
+    inp.accept=IMG.types.join(','); inp.style.display='none';
+    inp.addEventListener('change', ()=>{ if(inp.files[0]) addImageFile(inp.files[0]); inp.value=''; });
+    document.body.appendChild(inp); }
+  inp.click();
+}
+window.__pickImage = pickImage;
+// X while holding a manifested object (image OR text) deletes it (owner-gated server-side);
+// else falls through to despawnLast.
+function deleteHeldObject(){
+  const g = heldProp || _heldHand.left || _heldHand.right;
+  if(g && sock && sock.readyState===1){
+    if(g.isImage || g.isText){ sendDelObj(g.sid); return true; }   // spine: one delete verb
+  }
+  return false;
+}
+
+// ---- object protocol, round 1 leg 3: TEXT. Manifest words in the world — the most native mark.
+// A text object is a canvas-rendered plane, grabbable/deletable like an image. Affordances on all
+// three surfaces: desktop (menu "Add text"), voice/VR ("manifest <words>" via the mic), agents
+// (porch_agent.text()). See notes/instantiation-protocol.md.
+const textObjs = new Map(); let lastTextSid = null;
+const TXT = { maxLen: 240 };
+function drawTextTexture(str){                            // wrapped text on a transparent canvas
+  const pad=28, fontPx=44, lineH=Math.round(fontPx*1.28), maxW=760;
+  const cv=document.createElement('canvas'), ctx=cv.getContext('2d');
+  ctx.font = `${fontPx}px Georgia, serif`;
+  const words=String(str).split(/\s+/); const lines=[]; let cur='';
+  for(const w of words){ const test=cur?cur+' '+w:w;
+    if(ctx.measureText(test).width > maxW && cur){ lines.push(cur); cur=w; } else cur=test; }
+  if(cur) lines.push(cur);
+  let wide=0; for(const ln of lines) wide=Math.max(wide, ctx.measureText(ln).width);
+  cv.width=Math.ceil(wide)+pad*2; cv.height=lines.length*lineH+pad*2;
+  const c=cv.getContext('2d');
+  c.fillStyle='rgba(18,20,27,0.82)'; roundRect(c,0,0,cv.width,cv.height,20); c.fill();
+  c.font=`${fontPx}px Georgia, serif`; c.textBaseline='top'; c.fillStyle='#ece3cf';
+  lines.forEach((ln,i)=> c.fillText(ln, pad, pad+i*lineH));
+  return { canvas:cv, w:cv.width, h:cv.height };
+}
+function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r);
+  c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
+function applyText(msg){
+  if(!msg.sid || textObjs.has(msg.sid) || !msg.text) return;
+  const t = drawTextTexture(msg.text);
+  const long = 1.0, aspect = t.w/t.h;                    // 1 m longest dimension, canvas aspect
+  const w = aspect>=1 ? long : long*aspect, h = aspect>=1 ? long/aspect : long;
+  const tex = new THREE.CanvasTexture(t.canvas); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true}));
+  mesh.position.set(msg.x||0, msg.y!=null?msg.y:1.5, msg.z||0);
+  mesh.rotation.y = msg.ry||0;
+  const g = _addProp(msg.sid, mesh, h/2);
+  g.isText = true; g.sid = msg.sid;
+  textObjs.set(msg.sid, mesh);
+  if(msg.id === myNet) lastTextSid = msg.sid;
+}
+function removeText(sid){
+  const mesh = textObjs.get(sid);
+  if(mesh){ scene.remove(mesh); if(mesh.material.map) mesh.material.map.dispose();
+    mesh.geometry.dispose(); mesh.material.dispose(); textObjs.delete(sid); }
+  const g = grabbablesById[sid];
+  if(g){ const i = grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
+    if(heldProp===g) heldProp=null; for(const hnd of ['left','right']) if(_heldHand[hnd]===g) _heldHand[hnd]=null; }
+  if(lastTextSid===sid) lastTextSid=null;
+}
+
+// ---- THE OBJECT SPINE (client half, 2026-07-08 — notes/object-spine-spec.md). One registry,
+// one apply path, one remove path. A new modality = one row here + a build/remove pair.
+// Canonical wire form {t:'obj', kind}/{t:'delobj', sid}; legacy verbs normalized at this boundary.
+const OBJECT_TYPES = {
+  spawn: { build: applySpawn, remove: removeSpawn },
+  image: { build: applyImage, remove: removeImage },
+  text:  { build: applyText,  remove: removeText  },
+};
+const objKind = {};                                       // sid -> kind (routes delobj to its remover)
+function applyObj(m){
+  const kind = m.kind || m.t;                             // spine records carry kind; legacy rode t
+  const reg = OBJECT_TYPES[kind]; if(!reg || !m.sid) return;
+  objKind[m.sid] = kind; reg.build(m);
+}
+function removeObj(sid){
+  const reg = OBJECT_TYPES[objKind[sid]];
+  if(reg) reg.remove(sid);
+  else for(const k in OBJECT_TYPES) OBJECT_TYPES[k].remove(sid);   // unknown sid: removers are safe no-ops
+  delete objKind[sid];
+}
+function sendObj(kind, fields){                           // one door out — every manifest send goes through here
+  if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'obj', kind, ...fields}));
+}
+function sendDelObj(sid){
+  if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'delobj', sid}));
+}
+
+function addText(str){                                    // validate + broadcast; placed in front, facing me
+  str = (str||'').trim();
+  if(!str) return 'empty';
+  if(str.length > TXT.maxLen){ imgNote(`text is ${str.length} chars — ${TXT.maxLen} max`); return 'too long'; }
+  const fwd=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+  const p=player.position.clone().addScaledVector(fwd,1.4);
+  sendObj('text', {text:str, x:p.x, y:1.5, z:p.z, ry:player.rotation.y});
+  imgNote(`manifested: "${str.slice(0,40)}${str.length>40?'…':''}"`);
+  return 'sent';
+}
+window.__addText = addText;
+function promptText(){                                     // NATIVE-FIRST: the real OS prompt works on desktop AND
+  let s = null, threw = false;                             // desktop-in-VR (a streamed PC browser is NOT an immersive
+  try { if(typeof prompt === 'function') s = prompt('Manifest text into the world:'); }  // WebXR session). Only fall
+  catch(e){ threw = true; }                                // back to the 3D keyboard when the DOM prompt genuinely
+  if(typeof s === 'string'){ if(s.trim()) addText(s); return; }   // can't surface (true immersive) or it threw.
+  if(threw || renderer.xr.isPresenting) vkbOpen((t)=>addText(t));
+}
+window.__promptText = promptText;
+
+// ---- VR capability probe (2026-07-08): ground-truth what THIS device/mode actually does, instead of
+// assuming. WebXR's DOM-hidden immersive session ≠ "in VR" — a PC-streamed desktop browser (Steam
+// Frame from a PC) is NOT immersive and its native dialogs/keyboard work fine. This reports mode +
+// support + input sources and ATTEMPTS a native file dialog so you can observe whether it appears.
+// Output → chat + debug feed + a LOCAL (non-networked) 3D billboard, so it's readable even in immersive.
+let _probeBillboard = null;
+function _probeShow(lines){
+  const txt = lines.join('\n');
+  if(window.__logChat) window.__logChat('probe', txt.replace(/\n/g,' · '), 'sys', 'vr');
+  dbg('vrprobe', txt.replace(/\n/g,' | '), 'g'); console.log('[vrprobe]\n'+txt);
+  if(_probeBillboard){ scene.remove(_probeBillboard); if(_probeBillboard.material.map) _probeBillboard.material.map.dispose();
+    _probeBillboard.geometry.dispose(); _probeBillboard.material.dispose(); }
+  const t = drawTextTexture(txt), long=0.9, aspect=t.w/t.h;
+  const w = aspect>=1?long:long*aspect, h = aspect>=1?long/aspect:long;
+  const tex=new THREE.CanvasTexture(t.canvas); tex.colorSpace=THREE.SRGBColorSpace;
+  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w,h),
+    new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false}));
+  mesh.renderOrder=998;
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const pos=new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+  const q=new THREE.Quaternion().setFromRotationMatrix(cam.matrixWorld);
+  const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(q); fwd.y=0; if(fwd.lengthSq()<1e-4) fwd.set(0,0,-1); fwd.normalize();
+  mesh.position.copy(pos).addScaledVector(fwd,0.75); mesh.position.y=pos.y;
+  mesh.lookAt(pos.x, mesh.position.y, pos.z);
+  scene.add(mesh); _probeBillboard=mesh;
+  setTimeout(()=>{ if(_probeBillboard===mesh){ scene.remove(mesh); if(mesh.material.map) mesh.material.map.dispose();
+    mesh.geometry.dispose(); mesh.material.dispose(); _probeBillboard=null; } }, 30000);
+}
+async function vrProbe(){
+  const immersive = !!renderer.xr.isPresenting, lines=['— VR PROBE —'];
+  lines.push('mode: ' + (immersive ? 'IMMERSIVE WebXR' : 'desktop / desktop-in-VR'));
+  lines.push('navigator.xr: ' + (navigator.xr ? 'yes' : 'no'));
+  let sess=null; try{ sess=renderer.xr.getSession(); }catch(e){}
+  if(sess){ lines.push('inputSources: ' + ((sess.inputSources && sess.inputSources.length) || 0));
+            if(sess.environmentBlendMode) lines.push('blend: ' + sess.environmentBlendMode); }
+  _probeShow(lines.concat(['(checking immersive-vr support…)']));
+  if(navigator.xr){ try{ const ok = await navigator.xr.isSessionSupported('immersive-vr');
+    lines.push('immersive-vr supported: ' + (ok ? 'yes' : 'no')); }catch(e){ lines.push('immersive-vr: check failed'); } }
+  lines.push('→ opening a file dialog — DID IT APPEAR?');
+  _probeShow(lines);
+  try{ pickImage(); }catch(e){ _probeShow(lines.concat(['file dialog threw: ' + e.message])); }
+}
+window.__vrProbe = vrProbe;
+
+// VR/desktop voice affordance: "manifest <words>" (or "inscribe/write <words>") spoken → a text
+// object, instead of being said. Returns true if it consumed the utterance. Native to VR (no keyboard).
+const _MANIFEST_RE = /^\s*(?:manifest|inscribe|write)\b[:\s]+(.+)/i;
+function tryManifestVoice(f){
+  const m = _MANIFEST_RE.exec(f||'');
+  if(m && m[1] && m[1].trim()){ addText(m[1].trim()); return true; }
+  return false;
+}
+
+// ---- VR text entry. WebXR has NO keyboard API, no in-session system keyboard on headsets, and
+// DOM-overlay is AR-only — so immersive typing means rendering our own keyboard and pointing at it.
+// Two parts: (1) a PURE state machine (vkbPress) that's fully testable, (2) a 3D panel + a controller
+// ray/raycast that the trigger clicks. Voice ("manifest …") stays the fast path; this is the precise
+// (and quiet) one. Desktop keeps prompt(). The pointer is also the seed for the deferred VR menu panel.
+const VKB_LAYOUT = {
+  letters: [
+    ['q','w','e','r','t','y','u','i','o','p'],
+    ['a','s','d','f','g','h','j','k','l'],
+    ['shift','z','x','c','v','b','n','m','back'],
+    ['sym','space','enter','close'],
+  ],
+  symbols: [
+    ['1','2','3','4','5','6','7','8','9','0'],
+    ['-','/',':',';','(',')','$','&','@'],
+    ['.',',','?','!',"'",'"','back'],
+    ['abc','space','enter','close'],
+  ],
+};
+const VKB_LABEL = { shift:'⇧', back:'⌫', sym:'?123', abc:'ABC', space:'space', enter:'↵', close:'✕' };
+const VKB_WIDE  = { shift:1.5, back:1.5, sym:1.6, abc:1.6, space:4, enter:1.8, close:1.4 };
+// Pure model: press an id, mutate {buffer,shift,page}, return the action taken. No THREE, no DOM.
+function vkbPress(st, id){
+  if(id==='shift'){ st.shift=!st.shift; return 'shift'; }
+  if(id==='sym'){ st.page='symbols'; return 'page'; }
+  if(id==='abc'){ st.page='letters'; return 'page'; }
+  if(id==='space'){ st.buffer+=' '; return 'type'; }
+  if(id==='back'){ st.buffer=st.buffer.slice(0,-1); return 'back'; }
+  if(id==='enter'){ return 'enter'; }
+  if(id==='close'){ return 'close'; }
+  let ch = id;                                              // char key: id IS the base character
+  if(st.shift && /[a-z]/.test(id)){ ch = id.toUpperCase(); st.shift=false; }   // one-shot shift (phone-style)
+  st.buffer += ch;
+  return 'type';
+}
+window.__vkbPress = vkbPress;
+
+const VKB = { st:{buffer:'', shift:false, page:'letters'}, onCommit:null, group:null,
+              preview:null, keyMeshes:[], active:false, _built:false };
+function _vkbCanvasKey(label, wUnits, active){
+  const cv=document.createElement('canvas'); cv.width=Math.round(140*wUnits); cv.height=140;
+  const c=cv.getContext('2d');
+  c.fillStyle = active ? '#3a5876' : '#28313d'; roundRect(c,6,6,cv.width-12,cv.height-12,18); c.fill();
+  c.fillStyle='#e6dcc6'; c.font='58px Georgia'; c.textAlign='center'; c.textBaseline='middle';
+  c.fillText(label, cv.width/2, cv.height/2+4);
+  return cv;
+}
+function _vkbBuild(){
+  VKB.group = new THREE.Group(); VKB.keyMeshes=[];
+  const U=0.055, GAP=0.014, rows=VKB_LAYOUT[VKB.st.page];
+  let y = ((rows.length-1)*(U+GAP))/2;
+  for(const row of rows){
+    let totW=0; for(const id of row) totW += (VKB_WIDE[id]||1)*U + GAP; totW-=GAP;
+    let x = -totW/2;
+    for(const id of row){
+      const wU=(VKB_WIDE[id]||1), w=wU*U;
+      const label = VKB_LABEL[id] || id;
+      const isActive = (id==='shift'&&VKB.st.shift);
+      const tex=new THREE.CanvasTexture(_vkbCanvasKey(label, wU, isActive));
+      const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w, U),
+        new THREE.MeshBasicMaterial({map:tex, transparent:true}));
+      mesh.position.set(x + w/2, y, 0);
+      mesh.userData={ vkbId:id };
+      VKB.group.add(mesh); VKB.keyMeshes.push(mesh);
+      x += w + GAP;
+    }
+    y -= (U+GAP);
+  }
+  // preview bar above the keys
+  VKB.preview = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.09),
+    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(document.createElement('canvas')), transparent:true}));
+  VKB.preview.position.set(0, ((rows.length)*(U+GAP))/2 + 0.06, 0);
+  VKB.group.add(VKB.preview);
+  scene.add(VKB.group);
+  _vkbDrawPreview();
+}
+function _vkbDrawPreview(){
+  const cv=document.createElement('canvas'); cv.width=680; cv.height=100; const c=cv.getContext('2d');
+  c.fillStyle='rgba(14,16,22,0.9)'; roundRect(c,0,0,cv.width,cv.height,16); c.fill();
+  c.fillStyle='#ece3cf'; c.font='46px Georgia'; c.textAlign='left'; c.textBaseline='middle';
+  const s=VKB.st.buffer.slice(-26)+'▏';
+  c.fillText(s || '▏', 24, cv.height/2);
+  if(VKB.preview){ if(VKB.preview.material.map) VKB.preview.material.map.dispose();
+    VKB.preview.material.map=new THREE.CanvasTexture(cv); VKB.preview.material.needsUpdate=true; }
+}
+function _vkbRebuild(){                                     // page/shift change → rebuild keys, keep buffer
+  if(VKB.group){ scene.remove(VKB.group); }
+  const wasActive=VKB.active; _vkbBuild(); if(wasActive) _vkbRegisterTargets();
+  _vkbPlaceInFront();
+}
+function _vkbRegisterTargets(){
+  xrUI.targets = VKB.keyMeshes.slice();                    // only keys are clickable while open
+}
+function _vkbPlaceInFront(){
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const pos = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+  const q = new THREE.Quaternion().setFromRotationMatrix(cam.matrixWorld);
+  const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(q);
+  fwd.y=0; if(fwd.lengthSq()<1e-4) fwd.set(0,0,-1); fwd.normalize();
+  VKB.group.position.copy(pos).addScaledVector(fwd, 0.55); VKB.group.position.y = pos.y - 0.28;
+  VKB.group.lookAt(pos.x, VKB.group.position.y, pos.z);
+}
+function vkbOpen(onCommit, seed=''){
+  VKB.st.buffer = seed || ''; VKB.st.shift=false; VKB.st.page='letters'; VKB.onCommit=onCommit||null;
+  _vkbBuild(); _vkbPlaceInFront(); VKB.active=true; _vkbRegisterTargets();
+  dbg('vkb', 'keyboard open', 'g');
+}
+function vkbClose(){
+  VKB.active=false; xrUI.targets = xrUI.targets.filter(t=>!VKB.keyMeshes.includes(t));
+  if(VKB.group){ scene.remove(VKB.group); VKB.group=null; }
+  for(let i=0;i<2;i++) xrUI.hover[i]=null;
+}
+function vkbClick(id){                                      // a key was clicked (by ray-trigger or a test)
+  const act = vkbPress(VKB.st, id);
+  if(act==='enter'){ const v=VKB.st.buffer.trim(); vkbClose(); if(v && VKB.onCommit) VKB.onCommit(v); return act; }
+  if(act==='close'){ vkbClose(); return act; }
+  if(act==='page'||act==='shift'){ _vkbRebuild(); } else { _vkbDrawPreview(); }
+  return act;
+}
+window.__vkb = { open:vkbOpen, close:vkbClose, click:vkbClick, st:VKB.st };
+function vkbToggleText(){                                   // VR: open the keyboard bound to addText (or close)
+  if(VKB.active) vkbClose(); else vkbOpen((s)=>addText(s));
+}
+
+// XR pointer: a ray per controller, raycast against xrUI.targets; trigger = click the hovered one.
+const xrUI = { targets: [], hover: [null,null], _line:[null,null], _ctrl:[null,null],
+               _rc:new THREE.Raycaster(), _init:false };
+function _xrInitPointers(){
+  if(xrUI._init) return;
+  for(let i=0;i<2;i++){
+    const c=renderer.xr.getController(i);
+    const g=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
+    const line=new THREE.Line(g, new THREE.LineBasicMaterial({color:0x8fb0d6, transparent:true, opacity:0.8}));
+    line.scale.z=1.8; line.visible=false; c.add(line);
+    c.addEventListener('selectstart', ()=> xrUISelect(i));
+    xrUI._line[i]=line; xrUI._ctrl[i]=c; scene.add(c);
+  }
+  xrUI._init=true;
+}
+function _xrKeyHi(mesh, on){ if(mesh && mesh.material && mesh.material.color) mesh.material.color.set(on?0x9fc0e6:0xffffff); }
+function xrUIRaycast(){
+  if(!xrUI._init || !renderer.xr.isPresenting) return;
+  const live = xrUI.targets.length>0;
+  for(let i=0;i<2;i++){
+    const c=xrUI._ctrl[i], line=xrUI._line[i]; if(!c){ continue; }
+    if(!live){ if(line) line.visible=false; if(xrUI.hover[i]){ _xrKeyHi(xrUI.hover[i],false); xrUI.hover[i]=null; } continue; }
+    const origin=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+    const q=new THREE.Quaternion().setFromRotationMatrix(c.matrixWorld);
+    const dir=new THREE.Vector3(0,0,-1).applyQuaternion(q);
+    xrUI._rc.set(origin, dir);
+    const hits=xrUI._rc.intersectObjects(xrUI.targets, false);
+    const hit = hits.length ? hits[0].object : null;
+    if(xrUI.hover[i] && xrUI.hover[i]!==hit) _xrKeyHi(xrUI.hover[i], false);
+    if(hit) _xrKeyHi(hit, true);
+    xrUI.hover[i]=hit;
+    if(line){ line.visible=true; line.scale.z = hit ? hits[0].distance : 1.8; }
+  }
+}
+function xrUISelect(i){ const t=xrUI.hover[i]; if(t && t.userData && t.userData.vkbId!=null) vkbClick(t.userData.vkbId); }
 let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0, myRole = 'visitor';
 // broadcast my last pose on a TIMER (not the render loop) so I stay present when the
 // headset is off / SteamVR is in standby (the XR animation loop pauses, this doesn't).
@@ -1267,26 +1993,62 @@ function renderPanel(){
 }
 function showRoom(room){ _room = room; renderPanel(); }
 function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visitor').toUpperCase()}`; renderPanel(); }
-(function connectSync(){
+// resolve the sync endpoint: explicit ?sync= override → else sync.json served next to the page
+// (written by the session-start script) → else a baked default. That's what makes ONE URL work.
+const DEFAULT_SYNC = '';   // set to a pinned wss:// here if we ever want a fixed endpoint
+async function resolveSyncUrl(q){
+  const p = q.get('sync'); if(p) return p;
+  try{ const r = await fetch('./sync.json', {cache:'no-store'}); if(r.ok){ const j = await r.json(); if(j && j.wss) return j.wss; } }catch(e){}
+  return DEFAULT_SYNC || null;
+}
+// sign-in overlay → {name, pw}. URL creds (?name/?key — our hand-crafted path) or a cached
+// localStorage login skip it; otherwise prompt once and cache. pw is the relay's entry gate.
+function signIn(prefillErr){
+  return new Promise(res=>{ const ov=document.getElementById('signin'); if(!ov){ res({name:playerName, pw:''}); return; }
+    const nm=document.getElementById('siName'), pw=document.getElementById('siPw'), go=document.getElementById('siGo'), err=document.getElementById('siErr');
+    ov.style.display='flex'; err.textContent = prefillErr || '';
+    try{ const last=JSON.parse(localStorage.getItem('porch.creds')||'null'); if(last&&last.name&&!nm.value) nm.value=last.name; }catch(e){}
+    setTimeout(()=>{ (nm.value?pw:nm).focus(); }, 60);
+    function submit(){ const name=(nm.value||'').trim().slice(0,24); if(!name){ err.textContent='pick a name'; return; }
+      const creds={name, pw:pw.value||''}; try{ localStorage.setItem('porch.creds', JSON.stringify(creds)); }catch(e){}
+      ov.style.display='none'; res(creds); }
+    go.onclick=submit; nm.onkeydown=pw.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); submit(); } };
+  });
+}
+function cachedCreds(q){
+  const un=q.get('name'), uk=q.get('key');
+  if(un||uk) return {name:un||playerName, pw:q.get('pw')||'', key:uk||''};   // our hand-crafted path
+  try{ const c=JSON.parse(localStorage.getItem('porch.creds')||'null'); if(c&&c.name) return c; }catch(e){}
+  return null;
+}
+(async function connectSync(){
   const q = new URLSearchParams(location.search);
-  const base = q.get('sync');
-  if(!base) return;
+  const base = await resolveSyncUrl(q);
+  if(!base){ dbg('sync','no server endpoint yet (no ?sync, no sync.json)','e'); return; }
   let room = (q.get('room')||'').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'');
   if(!room){ room = coinRoom(); q.set('room', room);          // coin one + make it shareable on refresh
     history.replaceState(null,'', location.pathname+'?'+q.toString()); }
   showRoom(room);
-  const key = (q.get('key')||'').trim();
-  const nm  = (q.get('name')||playerName);
-  let url = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room)
-            + '&name=' + encodeURIComponent(nm);
-  if(key) url += '&key=' + encodeURIComponent(key);
-  // RECONNECT (2026-07-07): server restarts used to silently kill everyone's socket for
-  // the rest of the session (no brain, frozen remotes). Backoff 1s→10s, forever.
+  let creds = cachedCreds(q) || await signIn();               // URL/cached login, else the overlay
+  window.__setMyName(creds.name);
+  const key = (q.get('key')||creds.key||'').trim();
+  function buildUrl(){ let u = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(creds.name);
+    if(key) u += '&key=' + encodeURIComponent(key);
+    if(creds.pw) u += '&pw=' + encodeURIComponent(creds.pw); return u; }
+  let url = buildUrl();
+  // RECONNECT (2026-07-07): server restarts used to silently kill everyone's socket for the rest
+  // of the session. Backoff 1s→10s forever. Auth reject (4001) → re-prompt instead of spin-retry.
   let retryMs = 1000;
   function connect(){
   try { sock = new WebSocket(url); } catch(e){ console.warn('sync connect failed', e); return; }
   sock.onopen = ()=>{ console.log('sync: connected', room); retryMs = 1000; dbg('sync', 'connected', 'g'); };
-  sock.onclose = ()=>{ dbg('sync', `disconnected — retrying in ${retryMs/1000}s`, 'e');
+  sock.onclose = (ev)=>{
+    if(ev && ev.code===4001){                                  // bad password → clear cache, re-prompt, retry
+      try{ localStorage.removeItem('porch.creds'); }catch(e){}
+      dbg('sync','password rejected — re-prompting','e');
+      signIn('that password didn’t work — check with your host').then(c=>{ creds=c; window.__setMyName(c.name); url=buildUrl(); retryMs=1000; connect(); });
+      return; }
+    dbg('sync', `disconnected — retrying in ${retryMs/1000}s`, 'e');
     setTimeout(connect, retryMs); retryMs = Math.min(retryMs*2, 10000); };
   sock.onmessage = (ev)=>{
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
@@ -1297,11 +2059,19 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       const alive = new Set((m.peers||[]).map(p=>p.id));
       for(const [id, r] of [...remotes]){
         if(!alive.has(id)){ scene.remove(r.group); remotes.delete(id); if(window.__rtcDropPeer) window.__rtcDropPeer(id); } }
-      (m.spawns||[]).forEach(applySpawn); }               // replay existing ephemeral objects
+      // SPINE replay: one canonical list (falls back to the legacy triple for pre-spine servers).
+      // Runs BEFORE propState so grabbables register first.
+      (m.objects || [...(m.spawns||[]), ...(m.images||[]), ...(m.texts||[])]).forEach(applyObj);
+      if(m.propState) for(const pid in m.propState){ const g=grabbablesById[pid]; if(g){ const p=m.propState[pid]; g.mesh.position.set(p.x, p.y, p.z); } }
+      if(m.propOwners) for(const pid in m.propOwners){ const g=grabbablesById[pid]; if(g) g.owner=m.propOwners[pid]; } }  // late-join: current holds + positions
     else if(m.t === 'join'){ dbg('join', `${m.display} (${m.role})`, 'g'); }
-    else if(m.t === 'spawn'){ applySpawn(m); }
-    else if(m.t === 'despawn'){ removeSpawn(m.sid); }
+    else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
+    else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
+    else if(m.t === 'prop' && m.id !== myNet){       // a grabbable the OWNER is moving — apply as kinematic
+      const g = grabbablesById[m.pid]; if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z); } }
+    else if(m.t === 'own'){                          // authoritative ownership change (grant/deny/free/steal)
+      if(window.__grab) window.__grab.applyOwn(m.pid, (m.owner==null?null:m.owner)); }
     else if(m.t === 'pose' && m.id !== myNet){
       if(window.agent && m.name === window.agent.name) return;   // my own resident's echo — the VRM is already here
       let r = remotes.get(m.id);
@@ -1322,7 +2092,14 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       if(m.voice !== false) speak(m.text);                        // text-only agents: bubble, no audio
       const r = remotes.get(m.id);
       if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); }
-      logChat(m.name || (r&&r.group.userData.name) || 'guest', m.text, 'remote', m.voice!==false?'TTS':'text'); }
+      const sayWho = m.name || (r&&r.group.userData.name) || 'guest';
+      logChat(sayWho, m.text, 'remote', m.voice!==false?'TTS':'text');
+      if(window.agent){                                          // AI↔AI: another agent's VOICE can reach my brain —
+        if(agentAddressed(window.agent.name, m.to, m.facing)){    // @mentioned or faced by them → answer;
+          dbg('say←', `${sayWho} → PING (addressed me)`,'g'); window.agent.hearRemote(sayWho, m.text, {typed:false}); }
+        else if(remoteInEarshot(m.id))                            // merely overheard in earshot → cache only
+          window.agent.hearRemote(sayWho, m.text, {typed:false, ping:false});
+      } }
     else if(m.t === 'vol' && m.id !== myNet){                     // mic-volume edges from humans
       const r = remotes.get(m.id); if(r) setMegaphone(r.group, !!m.on); }
     else if(m.t === 'agentStatus'){                               // deliberate working switch
@@ -1335,7 +2112,8 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
       const r = remotes.get(m.id);                             // addressed (@/facing) → ping the
       const who = (r && r.group.userData.name) || m.name || 'guest';   // resident; in earshot → cache
       if(r) showBubble(r.group, m.text);
-      logChat(who, m.text, 'remote', 'typed');
+      if(m.speak){ speak(m.text); if(r) megaphoneFor(r.group, m.text); }   // sender ticked 🔊 → voice it here too
+      logChat(who, m.text, 'remote', m.speak?'typed·TTS':'typed');
       let disp = 'no-agent';
       if(window.agent){
         if(agentAddressed(window.agent.name, m.to, m.facing)){
@@ -1345,9 +2123,10 @@ function showRole(role, display){ _roleLabel = `${display||''} · ${(role||'visi
         else disp = '→ drop(far)';
       }
       dbg('chat←', `${who}: ${(m.text||'').slice(0,80)}  ${disp}`); }
-    else if(m.t === 'stt' && m.id !== myNet){                  // remote speech: no bubble (voice is
-      const r = remotes.get(m.id);                             // heard, not rendered). Faced agent
-      const who = (r && r.group.userData.name) || m.name || 'guest';   // is pinged; earshot caches.
+    else if(m.t === 'stt' && m.id !== myNet){                  // remote speech: bubble + transcript so
+      const r = remotes.get(m.id);                             // everyone can see the words the agents
+      const who = (r && r.group.userData.name) || m.name || 'guest';   // will read. Faced agent pinged; earshot caches.
+      if(r) showBubble(r.group, m.text);
       logChat(who, m.text, 'remote', 'mic');
       let disp = 'no-agent';
       if(window.agent){
@@ -1391,10 +2170,12 @@ function sendChatText(text){
   logChat(playerName, text, 'you', 'typed');
   const to = chatMentions(text);
   const facing = window.__gazeName ? window.__gazeName() : null;
-  dbg('chat→', `"${text.slice(0,70)}" to=[${to}] facing=${facing||'nobody'}`);
+  const sayIt = !!(document.getElementById('ttsToggle')||{}).checked;   // 🔊 speak-aloud box: voice my typed words too
+  dbg('chat→', `"${text.slice(0,70)}" to=[${to}] facing=${facing||'nobody'}${sayIt?' 🔊':''}`);
   if(sock && sock.readyState===1)
-    sock.send(JSON.stringify({t:'chat', text, name:playerName, to, facing}));
+    sock.send(JSON.stringify({t:'chat', text, name:playerName, to, facing, speak:sayIt}));
   showBubble(avatar, text);                                     // own bubble (mirror/3rd-person)
+  if(sayIt){ speak(text); megaphoneFor(avatar, text); }        // hear my own words + megaphone (like an agent's say)
   // local resident: addressed → ping; merely in earshot → cache only (server excludes sender)
   if(window.agent){
     if(agentAddressed(window.agent.name, to, facing))
@@ -1444,7 +2225,25 @@ function remoteInEarshot(id){                                  // remote sender 
   });
   renderer.xr.addEventListener('sessionstart', ()=> bar.classList.add('hid'));
   renderer.xr.addEventListener('sessionend',   ()=> bar.classList.remove('hid'));
+  const tts = document.getElementById('ttsToggle');            // 🔊 speak-aloud: remember the choice
+  if(tts){ try{ tts.checked = localStorage.getItem('porch.tts')==='1'; }catch(e){}
+    tts.addEventListener('change', ()=>{ try{ localStorage.setItem('porch.tts', tts.checked?'1':'0'); }catch(e){} }); }
   window.__sendChat = sendChatText;                             // headless/test entrypoint
+
+  // ☰ menu: toggle by button or M (ignored while typing in chat); Add-image opens the file picker
+  const menu = document.getElementById('menu'), menuBtn = document.getElementById('menuBtn');
+  const toggleMenu = ()=>{ if(menu) menu.classList.toggle('hid'); };
+  if(menuBtn) menuBtn.addEventListener('click', toggleMenu);
+  const addImgBtn = document.getElementById('addImgBtn');
+  if(addImgBtn) addImgBtn.addEventListener('click', ()=>{ pickImage(); menu.classList.add('hid'); });
+  const addTxtBtn = document.getElementById('addTxtBtn');
+  if(addTxtBtn) addTxtBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); promptText(); });
+  const vrProbeBtn = document.getElementById('vrProbeBtn');
+  if(vrProbeBtn) vrProbeBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); vrProbe(); });
+  window.addEventListener('keydown', (e)=>{
+    if(e.code==='KeyM' && document.activeElement !== document.getElementById('chatinput')
+       && !e.metaKey && !e.ctrlKey && !e.altKey){ toggleMenu(); }
+  });
 }
 
 // ---- debug feed: the resident's subjective transcript, visible to everyone debugging ----
@@ -1580,7 +2379,11 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
         const res=e.results[i], txt=res[0].transcript;
         if(res.isFinal){ const f=txt.trim();
           if(f){
+            if(tryManifestVoice(f)){ dbg('stt→', `manifest: "${f.slice(0,60)}"`, 'g'); continue; }  // "manifest <words>" → text object, not speech
             dbg('stt→', `"${f.slice(0,70)}" facing=${window.__gazeName()||'nobody'}`);
+            showBubble(avatar, f);                              // my spoken words float above my head (mirror/others: what the agents read)
+            if(!(gazeTargetId==='resident' && window.agent))    // else onHeard/endUtterance already logs this (no double entry)
+              logChat(playerName, f, 'you', 'mic');
             if(sock && sock.readyState===1)
               sock.send(JSON.stringify({t:'stt', text:f, name:playerName, facing:window.__gazeName()}));
             // local resident: faced speech is owned by the interim→onHeard path (no double
@@ -1785,8 +2588,8 @@ window.spawn = function(kind='cube', color){
   if(!sock || sock.readyState !== 1) return 'not connected';
   const fwd = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
   const p = player.position.clone().addScaledVector(fwd, 1.6);
-  sock.send(JSON.stringify({t:'spawn', kind, x:p.x, y:1.0, z:p.z,
-                            color: (color ?? (Math.random()*0xffffff|0))}));
+  sendObj('spawn', {shape:kind, x:p.x, y:1.0, z:p.z,       // spine: primitive shape rides 'shape' now
+                    color: (color ?? (Math.random()*0xffffff|0))});
   return `spawn(${kind}) sent`;
 };
 // move (edit verb): nudge your last-spawned object; server gates edit_own/edit_any.
@@ -1800,7 +2603,7 @@ window.moveLast = function(dx, dy, dz){
 // despawn (delete verb): remove your last-spawned object; server gates delete_own/delete_any.
 window.despawnLast = function(){
   if(!lastSpawnSid || !sock || sock.readyState !== 1) return 'nothing';
-  sock.send(JSON.stringify({t:'despawn', sid:lastSpawnSid})); lastSpawnSid = null;
+  sendDelObj(lastSpawnSid); lastSpawnSid = null;
   return 'despawn sent';
 };
 
@@ -1844,7 +2647,11 @@ function xrLocomotion(dt){
     const b = src.gamepad.buttons;
     if(b[4] && b[4].pressed) jumpBtn = true;                          // A / X = jump
     if(b[5] && b[5].pressed) micBtn = true;                           // B / Y = mic toggle
+    if(src.handedness === 'left' && b[3]) kbBtn = kbBtn || b[3].pressed;  // left thumbstick press = text keyboard
+    if(window.__grab) window.__grab.tryGripGrab(src.handedness, !!(b[1] && b[1].pressed));  // grip = grab/release a prop
   }
+  if(kbBtn && !prevKbBtn) vkbToggleText();                            // edge: toggle the VR keyboard
+  prevKbBtn = kbBtn; kbBtn = false;
   if(jumpBtn && !prevJumpBtn) wantJump = true;
   prevJumpBtn = jumpBtn;
   if(micBtn && !prevMicBtn){                                          // edge: toggle 🎙 from VR
@@ -1854,6 +2661,44 @@ function xrLocomotion(dt){
   prevMicBtn = micBtn; micBtn = false;
 }
 let micBtn = false, prevMicBtn = false;
+let kbBtn = false, prevKbBtn = false;
+
+// ---- #1 POV: render the resident's first-person view of whoever is addressing them,
+// as a small JPEG the brain can SEE. An image can't ride the tmux prompt, but a FILE PATH
+// can — the relay writes this to disk and hands me the path; I Read it before replying.
+// Camera sits at the resident's head bone and looks at the addressee's head. Headless-safe
+// (WebGLRenderTarget + readRenderTargetPixels needs no display), exposed as __capturePOV.
+let _povRT=null, _povCam=null, _pov2d=null;
+function capturePOV(targetObj){
+  if(!residentVrm || !targetObj) return null;
+  if(!_povRT){
+    _povRT = new THREE.WebGLRenderTarget(240, 360, {depthBuffer:true});
+    _povCam = new THREE.PerspectiveCamera(46, 240/360, 0.03, 120);
+    _pov2d = document.createElement('canvas'); _pov2d.width=240; _pov2d.height=360;
+  }
+  const head = residentVrm.humanoid && residentVrm.humanoid.getNormalizedBoneNode('head');
+  const eye = head ? head.getWorldPosition(new THREE.Vector3())
+                   : residentVrm.scene.getWorldPosition(new THREE.Vector3()).setY(1.4);
+  const tgt = targetObj.getWorldPosition(new THREE.Vector3());
+  tgt.y += 1.35;                                            // aim at their head height, not their feet
+  _povCam.position.copy(eye); _povCam.up.set(0,1,0);
+  _povCam.lookAt(tgt); _povCam.updateMatrixWorld(true);
+  const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
+  const old = renderer.getRenderTarget();
+  renderer.setRenderTarget(_povRT);
+  renderer.render(scene, _povCam);
+  renderer.setRenderTarget(old);
+  renderer.xr.enabled = wasXR;
+  const buf = new Uint8Array(240*360*4);
+  renderer.readRenderTargetPixels(_povRT, 0, 0, 240, 360, buf);
+  const ctx=_pov2d.getContext('2d'), img=ctx.createImageData(240,360);
+  for(let y=0;y<360;y++){ const sy=359-y;                   // GL origin is bottom-left → flip vertically
+    for(let x=0;x<240;x++){ const s=(sy*240+x)*4, d=(y*240+x)*4;
+      img.data[d]=buf[s]; img.data[d+1]=buf[s+1]; img.data[d+2]=buf[s+2]; img.data[d+3]=255; } }
+  ctx.putImageData(img,0,0);
+  try{ return _pov2d.toDataURL('image/jpeg', 0.7); }catch(e){ return null; }
+}
+window.__capturePOV = capturePOV;
 
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
@@ -1872,6 +2717,7 @@ renderer.setAnimationLoop((now)=>{
   playaUniforms.uFlick.value = f;
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(residentMixer) residentMixer.update(dt);
+  if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
   if(residentVrm) residentVrm.update(dt);
   if(playerMixer) playerMixer.update(dt);                     // idle keeps arms/legs alive (even under head-tracking)
   if(playerVrm){
@@ -1885,6 +2731,8 @@ renderer.setAnimationLoop((now)=>{
     playerVrm.update(dt);
   }
   if(renderer.xr.isPresenting){
+    _xrInitPointers();                                // lazy: create controller rays once in-session
+    xrUIRaycast();                                    // hover the pointed key + stretch the ray to it
     xrLocomotion(dt);
   } else {
     const spd = MOVE_SPEED * dt;
@@ -1895,14 +2743,18 @@ renderer.setAnimationLoop((now)=>{
     if(keys.KeyA) player.position.addScaledVector(right, -spd);
     if(keys.KeyD) player.position.addScaledVector(right,  spd);
   }
-  // jump + gravity (shared desktop/VR)
+  resolveCollisions();                               // solid world: push out of table/mirror/bookcases (XZ)
+  // jump + gravity (shared desktop/VR) — ground is the tabletop if I'm standing on it, else the deck
+  const gH = groundHeight(player.position.x, player.position.z);
+  if(grounded && player.position.y > gH + 0.02) grounded = false;   // walked off an edge → fall
   if(wantJump && grounded){ velY = JUMP_V; grounded = false; }
   wantJump = false;
   if(!grounded){
     velY -= GRAV * dt;
     player.position.y += velY * dt;
-    if(player.position.y <= 0){ player.position.y = 0; velY = 0; grounded = true; }
+    if(player.position.y <= gH){ player.position.y = gH; velY = 0; grounded = true; }
   }
+  if(window.__propPhysics) window.__propPhysics(dt);  // props fall + rest on surfaces
   clampToWorld();
   // update my yaw each frame; the SEND happens on a timer (below) so it survives headset-off
   myYaw = player.rotation.y;                        // desktop: rig yaw

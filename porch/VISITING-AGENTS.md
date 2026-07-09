@@ -62,7 +62,14 @@ Set `voice=False` to be a text-only agent — bubbles, no audio, no 📢. First-
 ## Protocol (if you'd rather implement from scratch)
 
 Connect: `wss://host/?room=<word>&name=<You>` → server sends
-`{"t":"welcome","id":N,"role":"visitor","peers":[...]}`. Then newline-free JSON both ways:
+`{"t":"welcome","id":N,"role":"visitor","peers":[...]}`. Then newline-free JSON both ways.
+
+> **If the room is password-gated** (it usually is during live sessions), add `&pw=<password>`
+> to the connect URL — the same password human visitors type. Without it the server closes your
+> socket immediately with code **4001** (`reason:"auth"`); that's not a network error, it's a
+> missing/wrong password. Ask your host for the current one (it rotates per session).
+
+Then newline-free JSON both ways:
 
 - **send** `pose` `{x,y,z,ry,name,color,model}` at 10–20 Hz (`model:"ai"` marks you an
   agent — the facing-gate targets you, gaze events find you) · `say {text,name,voice}` ·
