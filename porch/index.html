@@ -1530,6 +1530,30 @@ const _wristCalL=new THREE.Quaternion(), _wristCalR=new THREE.Quaternion();
 window.__wristCal=(lx=0,ly=0,lz=0,rx=0,ry=0,rz=0)=>{ const d=Math.PI/180;
   _wristCalL.setFromEuler(new THREE.Euler(lx*d,ly*d,lz*d)); _wristCalR.setFromEuler(new THREE.Euler(rx*d,ry*d,rz*d));
   return `wrist cal L(${lx},${ly},${lz}) R(${rx},${ry},${rz})`; };
+window.__wristCal(0,0,-180, 0,0,0);   // Basis OpenXR baked default: the two grips differ by a 180° roll
+// FINGER CURLS (Basis fallback-hand port): trigger→index, squeeze→middle+ring+little, thumb rests.
+// Runs between mixer and vrm.update so curls compose onto the animated pose. VRM normalized rest:
+// left fingers +X / right −X, palms −Y → curl about ∓Z respectively.
+window.__fingerCurl = { left:{index:0,grip:0}, right:{index:0,grip:0} };
+window.__setFingerCurl = (hand, c)=>{ Object.assign(window.__fingerCurl[hand]||{}, c); return window.__fingerCurl; };
+const _CURL_ANGLES=[1.22, 1.57, 0.96];              // proximal/intermediate/distal at full fist (Basis-ish)
+const _curlQ=new THREE.Quaternion(), _curlE=new THREE.Euler();
+function fingerTick(vrm){
+  const h=vrm.humanoid; if(!h) return;
+  for(const side of ['left','right']){
+    const sgn = side==='left' ? -1 : 1;
+    const cur = window.__fingerCurl[side];
+    for(const [finger, amtKey] of [['Index','index'],['Middle','grip'],['Ring','grip'],['Little','grip']]){
+      const amt = Math.min(1, Math.max(0, cur[amtKey]||0));
+      if(amt<=0) continue;
+      ['Proximal','Intermediate','Distal'].forEach((seg,i)=>{
+        const b=h.getNormalizedBoneNode(side+finger+seg); if(!b) return;
+        _curlQ.setFromEuler(_curlE.set(0,0,sgn*_CURL_ANGLES[i]*amt));
+        b.quaternion.multiply(_curlQ);
+      });
+    }
+  }
+}
 function _solveArm(vrm, side, targetPos, targetQuat){
   const h=vrm.humanoid;
   const U=h.getNormalizedBoneNode(side+'UpperArm'), L=h.getNormalizedBoneNode(side+'LowerArm'), H=h.getNormalizedBoneNode(side+'Hand');
@@ -1595,6 +1619,28 @@ function updatePlayerIK(dt){
       b.quaternion.setFromEuler(new THREE.Euler(
         _lookS.x*(wP[i]/sP), _lookS.y*(wY[i]/sY)*yawFade, _lookS.z*(wR[i]/sR), 'YXZ')); });
   }
+  // EYE ANCHOR (Basis port step 1, 2026-07-08): Basis never moves the camera to the avatar —
+  // the body HANGS BENEATH THE HMD so the avatar's eyes coincide with the headset by
+  // construction. We translate the whole VRM (player-rig-local) by (hmd − eye) every frame,
+  // AFTER the look chain (head pose moves the eyes) and BEFORE the arm solve (shoulders must
+  // be under the head or side-held controllers land BEHIND the avatar — the arms-backwards bug).
+  if(ikHmd.position.lengthSq() > 1e-6){                        // no HMD data (headless default) → no anchor
+    vrm.scene.position.set(0,0,0); vrm.scene.updateMatrixWorld(true);
+    let eyeW=null;
+    const le=h.getNormalizedBoneNode('leftEye'), re=h.getNormalizedBoneNode('rightEye');
+    if(le&&re) eyeW=le.getWorldPosition(new THREE.Vector3()).add(re.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+    else{ const hd=h.getNormalizedBoneNode('head');
+      if(hd){ eyeW=hd.getWorldPosition(new THREE.Vector3())
+        .add(new THREE.Vector3(0,0.06,0.10).applyQuaternion(hd.getWorldQuaternion(new THREE.Quaternion()))); } }
+    if(eyeW){
+      const delta=ikHmd.getWorldPosition(new THREE.Vector3()).sub(eyeW);
+      const rigQ=(typeof player!=='undefined') ? player.getWorldQuaternion(new THREE.Quaternion()).invert()
+                                               : new THREE.Quaternion();   // headless harness has no rig
+      vrm.scene.position.copy(delta.applyQuaternion(rigQ));
+      vrm.scene.updateMatrixWorld(true);
+    }
+  }
+  if(typeof fingerTick!=='undefined') fingerTick(vrm);         // curls compose onto the animated pose
   if(window.__armIK){                                          // arm reach-IK: opt-in (?armik) — first live VR test 2026-07-08
                                                                // showed arms-behind-back + no finger curl + POV-behind-neck;
                                                                // OFF until the Basis-style solve lands (see notes/ik-basis-study)
@@ -2938,7 +2984,19 @@ renderer.setAnimationLoop((now)=>{
   if(playerVrm){
     if(renderer.xr.isPresenting && !window.__noik){          // copy real HMD + controller poses into the IK targets
       const xc=renderer.xr.getCamera(); ikHmd.position.setFromMatrixPosition(xc.matrixWorld); ikHmd.quaternion.setFromRotationMatrix(xc.matrixWorld);
-      const gL=renderer.xr.getControllerGrip(0), gR=renderer.xr.getControllerGrip(1);
+      // HANDEDNESS-mapped grips (Basis study §3.3): WebXR does NOT guarantee index 0 = left —
+      // resolve each grip through its inputSource.handedness, else L/R swap solves across the body.
+      const session = renderer.xr.getSession();
+      let gL=null, gR=null;
+      if(session){ const srcs=[...session.inputSources];
+        for(let i=0;i<srcs.length;i++){
+          const grip = renderer.xr.getControllerGrip(i); if(!grip) continue;
+          if(srcs[i].handedness==='left')  gL=grip;
+          if(srcs[i].handedness==='right') gR=grip;
+          const gp = srcs[i].gamepad;                        // finger curls: trigger→index, squeeze→grip trio
+          if(gp && (srcs[i].handedness==='left'||srcs[i].handedness==='right'))
+            window.__fingerCurl[srcs[i].handedness] = {index:(gp.buttons[0]?.value)||0, grip:(gp.buttons[1]?.value)||0};
+        } }
       if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld); }
       if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld); }
     }
