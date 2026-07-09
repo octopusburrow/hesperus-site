@@ -2176,6 +2176,7 @@ function cachedCreds(q){
     else if(m.t === 'rtc'){ if(m.to===myNet) dbg('rtc←', m.sdp ? m.sdp.type : (m.ice?'ice':'?'));
       if(window.__rtcSignal) window.__rtcSignal(m); }
     else if(m.t === 'say' && m.id !== myNet){
+      faceSpeaker(m);
       if(window.agent && m.name === window.agent.name) return;   // my own resident already spoke locally
       dbg('say←', `${m.name||('#'+m.id)}${m.voice===false?' (text-only)':''}: ${(m.text||'').slice(0,90)}`);
       if(m.voice !== false) speak(m.text);                        // text-only agents: bubble, no audio
@@ -2198,6 +2199,7 @@ function cachedCreds(q){
       if(p){ window.__brainPending.delete(m.reqId);
         if(m.error) p.reject(new Error(m.error)); else p.resolve(m.reply); } }
     else if(m.t === 'chat' && m.id !== myNet){                 // typed chat: bubble for everyone;
+      faceSpeaker(m);
       const r = remotes.get(m.id);                             // addressed (@/facing) → ping the
       const who = (r && r.group.userData.name) || m.name || 'guest';   // resident; in earshot → cache
       if(r) showBubble(r.group, m.text);
@@ -2213,6 +2215,7 @@ function cachedCreds(q){
       }
       dbg('chat←', `${who}: ${(m.text||'').slice(0,80)}  ${disp}`); }
     else if(m.t === 'stt' && m.id !== myNet){                  // remote speech: bubble + transcript so
+      faceSpeaker(m);
       const r = remotes.get(m.id);                             // everyone can see the words the agents
       const who = (r && r.group.userData.name) || m.name || 'guest';   // will read. Faced agent pinged; earshot caches.
       if(r) showBubble(r.group, m.text);
@@ -2289,6 +2292,31 @@ function doGoto(target){
       doTeleport(r.tp.x-dx/d*1.5, r.tp.z-dz/d*1.5, `went to ${r.name||target}`); return; } }
   window.__gotoSid = target; sendQuery({what:'object', sid:target});   // resolves on the senses reply
 }
+// ---- social auto-face (2026-07-08, Nix: "why aren't you facing the closest speaker?") ----
+// The reflex used to live in the resident agent; port it to the player body people actually see.
+// Guarded so it NEVER hijacks an active driver: only when idle >4s, desktop only (VR = your neck),
+// and it releases the moment you touch anything. Default ON via ?autoface=1 (my window), else off.
+let _faceTgt = null, _lastInput = 0;
+const _autoFace = new URLSearchParams(location.search).has('autoface');
+addEventListener('keydown', ()=>{ _lastInput = performance.now(); _faceTgt = null; }, true);
+addEventListener('mousedown', ()=>{ _lastInput = performance.now(); _faceTgt = null; }, true);
+function faceSpeaker(m){
+  if(!_autoFace || m.id === myNet) return;
+  const r = remotes.get(m.id); if(!r) return;
+  const d = Math.hypot(r.tp.x - player.position.x, r.tp.z - player.position.z);
+  if(d < 0.5 || d > 14) return;                            // too close to matter / out of earshot
+  _faceTgt = { id: m.id, until: performance.now() + 6000 };
+}
+function autoFaceTick(){
+  if(!_faceTgt || renderer.xr.isPresenting) return;
+  const now = performance.now();
+  if(now > _faceTgt.until || now - _lastInput < 4000){ if(now > _faceTgt.until) _faceTgt = null; return; }
+  const r = remotes.get(_faceTgt.id); if(!r){ _faceTgt = null; return; }
+  const want = Math.atan2(player.position.x - r.tp.x, player.position.z - r.tp.z) + Math.PI;
+  let d = want - player.rotation.y;
+  player.rotation.y += Math.atan2(Math.sin(d), Math.cos(d)) * 0.06;    // gentle social turn
+}
+
 const CMD_HELP = [
   '/help — this list (local only, like all queries)',
   '/where — your coordinates', '/nearby [n] — closest things & people',
@@ -2783,6 +2811,7 @@ window.despawnLast = function(){
 // ---- world law: stay inside the fence (jump physics owns Y) ----
 function clampToWorld(){
   fxTick();                                              // teleport particles ride the frame loop here
+  autoFaceTick();                                        // social reflex: idle bodies turn toward speakers
   if(_followName){                                       // /follow: walk after them, stop at ~2m
     for(const rm of remotes.values()){
       if((rm.name||'').toLowerCase() === _followName.toLowerCase()){
