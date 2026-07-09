@@ -129,6 +129,9 @@ class PorchAgent:
         if self._carrying:
             await self._send({"t": "release", "pid": self._carrying})
         self._carrying = None; self._carry_owned = False
+    def respawn(self):
+        """Back to the deck spawn — the un-stick lever (bad teleport, lost in the dark, etc)."""
+        self.teleport(0.8, 1.8, 0.0)
 
     async def _send(self, obj):
         if self._ws: await self._ws.send(json.dumps(obj))

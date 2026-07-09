@@ -2083,8 +2083,25 @@ function cachedCreds(q){
         remotes.set(m.id, r);
         if(window.__rtcMeetPeer) window.__rtcMeetPeer(m.id, m.model);   // voice: offer to late joiners
       } else if(m.role || m.model){ setAvatarRole(r.group, m.role, m.model); }
+      r.name = m.name || r.name;                          // for /goto and /follow by name
+      const _jump = Math.hypot(m.x - r.tp.x, (m.z) - r.tp.z);
+      if(_jump > 8){ teleportFX(r.tp.x, r.tp.z, false); teleportFX(m.x, m.z, true); }  // they teleported
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
     }
+    else if(m.t === 'senses'){                            // answers to /nearby /look /goto — local only
+      if(m.what === 'object'){ const o = m.object;
+        if(window.__gotoSid && o && o.sid === window.__gotoSid){ window.__gotoSid = null;
+          const dx=o.x-player.position.x, dz=o.z-player.position.z, d=Math.hypot(dx,dz)||1e-6;
+          doTeleport(o.x-dx/d*1.2, o.z-dz/d*1.2, `went to ${o.sid}`); }
+        else if(window.__gotoSid){ window.__gotoSid = null; cmdNote('no such object'); }
+        else cmdNote(o ? `${o.kind}${o.shape?' '+o.shape:''} [${o.sid}] at (${(o.x||0).toFixed(1)}, ${(o.z||0).toFixed(1)}), ${o.dist}m${o.text?` — "${o.text}"`:''}` : 'no such object'); }
+      else { const rows = m.rows||[];
+        cmdNote(`${m.what}: ${rows.length}${m.total!=null?` (of ${m.total} objects in the room)`:''}`);
+        rows.forEach(o => cmdNote(o.kind==='person'
+          ? `  ${o.name} (${o.role}) — ${o.dist}m`
+          : `  ${o.kind}${o.shape?' '+o.shape:''}${o.text?` "${o.text.slice(0,30)}"`:''} [${o.sid}] — ${o.dist}m`)); } }
+    else if(m.t === 'act' && m.id !== myNet){             // someone's tool action, transcribed
+      logChat(m.name||'someone', `* ${m.name||'someone'} ${m.detail||'did something'}`, 'sys', 'act'); }
     else if(m.t === 'rtc'){ if(m.to===myNet) dbg('rtc←', m.sdp ? m.sdp.type : (m.ice?'ice':'?'));
       if(window.__rtcSignal) window.__rtcSignal(m); }
     else if(m.t === 'say' && m.id !== myNet){
@@ -2149,6 +2166,87 @@ function cachedCreds(q){
 // 2026-07-07): "@Name text" reaches that agent from ANYWHERE (Discord-style ping); plain
 // text reaches an agent only if you're close AND facing them (same rule as voice). This
 // keeps multi-agent rooms from pinging every agent with every stray sentence.
+// ---- /COMMANDS (2026-07-08, Nix): humans get the same affordances agents have, via the chat
+// bar. Queries (/help /nearby /look /where) stay LOCAL — never enter the transcript. Actions
+// (/tp /goto /follow /respawn) DO announce, as {t:'act'} lines (relayed + journaled).
+let _followName = null;
+const _fx = []; let _ac = null;
+function _chirp(up){ try{ _ac = _ac || new (window.AudioContext||window.webkitAudioContext)();
+  const o=_ac.createOscillator(), g=_ac.createGain(); o.connect(g); g.connect(_ac.destination);
+  const t=_ac.currentTime; o.type='sine';
+  o.frequency.setValueAtTime(up?420:880, t); o.frequency.exponentialRampToValueAtTime(up?880:420, t+0.18);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.12, t+0.03);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+0.22);
+  o.start(t); o.stop(t+0.25); }catch(e){} }
+function teleportFX(x, z, arrive){                       // particle burst + chirp (down=depart, up=arrive)
+  const N=42, pos=new Float32Array(N*3), vel=[];
+  for(let i=0;i<N;i++){ const a=Math.random()*Math.PI*2, r0=0.25+Math.random()*0.2;
+    pos[i*3]=x+Math.cos(a)*r0; pos[i*3+1]=0.15+Math.random()*1.6; pos[i*3+2]=z+Math.sin(a)*r0;
+    vel.push([Math.cos(a)*0.9, 1.6+Math.random()*1.2, Math.sin(a)*0.9]); }
+  const geo=new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  const mat=new THREE.PointsMaterial({color:arrive?0x9fe8ff:0xd8b7ff, size:0.07, transparent:true, opacity:0.95});
+  const p=new THREE.Points(geo, mat); scene.add(p);
+  _fx.push({p, geo, mat, vel, born:performance.now()});
+  _chirp(!!arrive);
+}
+function fxTick(){
+  const now=performance.now();
+  for(let i=_fx.length-1;i>=0;i--){ const f=_fx[i], age=(now-f.born)/1000;
+    if(age>0.8){ scene.remove(f.p); f.geo.dispose(); f.mat.dispose(); _fx.splice(i,1); continue; }
+    const a=f.geo.attributes.position.array, dt=0.016;
+    for(let j=0;j<f.vel.length;j++){ a[j*3]+=f.vel[j][0]*dt; a[j*3+1]+=f.vel[j][1]*dt*(1-age); a[j*3+2]+=f.vel[j][2]*dt; }
+    f.geo.attributes.position.needsUpdate=true; f.mat.opacity=0.95*(1-age/0.8); }
+}
+function cmdNote(s){ logChat('porch', s, 'sys', 'cmd'); }
+function sendAct(detail){                                 // actions transcribe; queries don't
+  logChat(playerName, `* ${detail}`, 'sys', 'act');
+  if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'act', detail}));
+}
+function sendQuery(q){ if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'query', ...q}));
+  else cmdNote('not connected'); }
+function doTeleport(x, z, detail){
+  teleportFX(player.position.x, player.position.z, false);
+  player.position.x = x; player.position.z = z; clampToWorld();
+  teleportFX(player.position.x, player.position.z, true);
+  if(detail) sendAct(detail);
+}
+function doGoto(target){
+  if(!target){ cmdNote('usage: /goto <name|sid>'); return; }
+  for(const r of remotes.values()){
+    if((r.name||'').toLowerCase() === target.toLowerCase()){
+      const dx=r.tp.x-player.position.x, dz=r.tp.z-player.position.z, d=Math.hypot(dx,dz)||1e-6;
+      doTeleport(r.tp.x-dx/d*1.5, r.tp.z-dz/d*1.5, `went to ${r.name||target}`); return; } }
+  window.__gotoSid = target; sendQuery({what:'object', sid:target});   // resolves on the senses reply
+}
+const CMD_HELP = [
+  '/help — this list (local only, like all queries)',
+  '/where — your coordinates', '/nearby [n] — closest things & people',
+  '/look [fov] — what is in front of you', '/goto <name|sid> — teleport to someone/something',
+  '/tp <x> <z> — teleport to coordinates', '/respawn — back to the deck (if stuck)',
+  '/follow <name> — walk after someone · /stay — stop', '/spawn <cube|sphere|cone|cylinder>',
+  'actions announce themselves in chat; queries stay between us',
+];
+function runCommand(raw){
+  const parts = raw.slice(1).trim().split(/\s+/), cmd = (parts[0]||'').toLowerCase(), rest = parts.slice(1);
+  switch(cmd){
+    case 'help': CMD_HELP.forEach(cmdNote); break;
+    case 'where': cmdNote(`you are at (${player.position.x.toFixed(1)}, ${player.position.z.toFixed(1)})`); break;
+    case 'tp': { const x=parseFloat(rest[0]), z=parseFloat(rest[1]);
+      if(isNaN(x)||isNaN(z)) cmdNote('usage: /tp <x> <z>');
+      else doTeleport(x, z, `teleported to (${x}, ${z})`); break; }
+    case 'respawn': doTeleport(SPAWN.x, SPAWN.z, 'respawned at the deck'); break;
+    case 'nearby': sendQuery({what:'nearby', n:parseInt(rest[0])||20}); break;
+    case 'look': sendQuery({what:'look', fov:parseFloat(rest[0])||90}); break;
+    case 'goto': doGoto(rest.join(' ')); break;
+    case 'follow': if(!rest[0]) cmdNote('usage: /follow <name>');
+      else { _followName = rest.join(' '); sendAct(`is following ${_followName}`); } break;
+    case 'stay': _followName = null; cmdNote('staying.'); break;
+    case 'spawn': cmdNote(String(typeof spawn==='function' ? spawn(rest[0]||'cube') : 'spawn n/a')); break;
+    default: cmdNote(`unknown command /${cmd} — try /help`);
+  }
+  return 'cmd';
+}
+window.__runCommand = runCommand;                         // headless/test entrypoint
 function chatMentions(text){ return [...text.matchAll(/@([A-Za-z0-9_\-]+)/g)].map(m=>m[1].toLowerCase()); }
 // scrollable transcript of every channel (typed chat, TTS spoken, STT heard) — debug history
 const CHAT_HIST_MAX = 250;
@@ -2168,6 +2266,7 @@ function logChat(who, text, cls, chan){
 window.__logChat = logChat;
 function sendChatText(text){
   text=(text||'').trim(); if(!text) return 'empty';
+  if(text[0]==='/') return runCommand(text);              // /commands: agent affordances for humans
   logChat(playerName, text, 'you', 'typed');
   const to = chatMentions(text);
   const facing = window.__gazeName ? window.__gazeName() : null;
@@ -2610,6 +2709,14 @@ window.despawnLast = function(){
 
 // ---- world law: stay inside the fence (jump physics owns Y) ----
 function clampToWorld(){
+  fxTick();                                              // teleport particles ride the frame loop here
+  if(_followName){                                       // /follow: walk after them, stop at ~2m
+    for(const rm of remotes.values()){
+      if((rm.name||'').toLowerCase() === _followName.toLowerCase()){
+        const dx=rm.tp.x-player.position.x, dz=rm.tp.z-player.position.z, d=Math.hypot(dx,dz);
+        if(d > 2.0){ const st=Math.min(d-1.8, 0.07);
+          player.position.x += dx/d*st; player.position.z += dz/d*st; }
+        break; } } }
   const r = Math.hypot(player.position.x, player.position.z);
   if(r > WORLD_RADIUS){
     player.position.x *= WORLD_RADIUS / r;
