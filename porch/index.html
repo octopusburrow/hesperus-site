@@ -1693,6 +1693,12 @@ function _scaleTracked(obj, rig, k){                        // p' = rig + k·(p 
   obj.position.sub(rig.position).multiplyScalar(k).add(rig.position);
 }
 window.__devScale = ()=>({scale:_devScale, samples:_hmdYSamples.length, avatarEyeY:window.__avatarEyeY||null});
+function _poseToWorld(poseMat16, parentMatrixWorld, outObj){    // XR ref-space pose → world, via the rig
+  const pm=new THREE.Matrix4().fromArray(poseMat16);
+  pm.premultiply(parentMatrixWorld);
+  outObj.position.setFromMatrixPosition(pm);
+  outObj.quaternion.setFromRotationMatrix(pm);
+}
 function updatePlayerIK(dt){
   const vrm=playerVrm; if(!vrm||!vrm.humanoid) return; const h=vrm.humanoid;
   const hq=ikHmd.getWorldQuaternion(new THREE.Quaternion());
@@ -1776,7 +1782,9 @@ window.__updatePlayerIK=updatePlayerIK;
 { const q=new URLSearchParams(location.search);
   if(q.has('armik'))   window.__armIK=true;       // force arm IK even on desktop (testing)
   if(q.has('noarmik')) window.__armIK=false;      // opt OUT of the VR default (fallback if wrists misbehave)
-  if(q.has('iktelem')) window.__iktelem=true;     // 1Hz input-pipeline telemetry → room journal (hands mystery)
+  if(q.has('iktelem')) window.__iktelem=true;     // 1Hz input-pipeline telemetry → room journal (hands mystery; now reports raw poses too)
+  if(q.has('rawgrips')) window.__rawgrips=true;   // hands Plan B: frame.getPose(gripSpace) direct, bypassing three's controller slots
+  if(q.has('noscale')) window.__noscale=true;     // opt out of DeviceScale (standing-height → avatar mapping)
   if(q.has('noik'))  window.__noik=true;          // disable all IK -> pure idle body (fallback)
   if(q.has('nospineik')) window.__nospineik=true; }  // Phase-A safety: revert to neck+head-only look
 
@@ -3084,7 +3092,7 @@ window.__capturePOV = capturePOV;
 
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
-renderer.setAnimationLoop((now)=>{
+renderer.setAnimationLoop((now, xrFrame)=>{
   const dt = _last ? Math.min((now - _last)/1000, 0.05) : 0.016;
   _last = now;
   t += dt;
@@ -3133,6 +3141,23 @@ renderer.setAnimationLoop((now)=>{
               if(!window.__noscale) _scaleTracked(ikHandL, player, _devScale); }
       if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld);
               if(!window.__noscale) _scaleTracked(ikHandR, player, _devScale); }
+      // ?rawgrips — hands Plan B (ik-verdicts #3, 2026-07-09): bypass three's controller slots
+      // entirely and read frame.getPose(gripSpace, refSpace) ourselves. If telemetry shows the
+      // slots never bind (or bind without poses), this is the standing fix. Caged; flag-gated.
+      if(window.__rawgrips && xrFrame){
+        try{
+          const ref=renderer.xr.getReferenceSpace();
+          if(ref) for(const src of (session ? session.inputSources : [])){
+            if(!src.gripSpace || (src.handedness!=='left' && src.handedness!=='right')) continue;
+            const pose=xrFrame.getPose(src.gripSpace, ref);
+            if(!pose) continue;
+            const tgt = src.handedness==='left' ? ikHandL : ikHandR;
+            _poseToWorld(pose.transform.matrix, player.matrixWorld, tgt);
+            if(!window.__noscale) _scaleTracked(tgt, player, _devScale);
+            window.__rawgripsHit=(window.__rawgripsHit||0)+1;
+          }
+        }catch(e){ window.__rawgripsErr=String(e); }
+      }
       // IK TELEMETRY (&iktelem, 2026-07-09 — Nix: "are you even getting translation data?"):
       // 1 Hz ground-truth dump of the whole input pipeline; the relay journals it automatically,
       // so she just plays and the answers land in server/logs/room-*.jsonl for offline harvest.
@@ -3146,9 +3171,14 @@ renderer.setAnimationLoop((now)=>{
           const now = performance.now();
           if(!window.__iktelemLast || now - window.__iktelemLast > 1000){
             window.__iktelemLast = now;
-            const srcs = [...(session ? session.inputSources : [])].map(s=>({
-              hand: s.handedness, ray: s.targetRayMode, prof: (s.profiles||[]).slice(0,2),
-              hasGrip: !!s.gripSpace, hasGamepad: !!s.gamepad }));
+            const _ref = renderer.xr.getReferenceSpace();
+            const srcs = [...(session ? session.inputSources : [])].map(s=>{
+              let raw=null;                                     // does the RAW pipeline see a pose even if three's slots don't?
+              try{ if(xrFrame && _ref && s.gripSpace){ const p=xrFrame.getPose(s.gripSpace,_ref);
+                if(p) raw=[p.transform.position.x,p.transform.position.y,p.transform.position.z].map(v=>+v.toFixed(3)); } }catch(e){}
+              return { hand: s.handedness, ray: s.targetRayMode, prof: (s.profiles||[]).slice(0,2),
+                hasGrip: !!s.gripSpace, hasGamepad: !!s.gamepad, raw };
+            });
             const gdump = _grips.map((g,i)=>({ slot: i,
               bound: !!(g.userData && g.userData.src),
               hand: g.userData && g.userData.src ? g.userData.src.handedness : null,
