@@ -274,9 +274,20 @@ window.__physics = { colliders, resolveCollisions, groundHeight };
 // 0.14 m face gets exactly round(0.14*32)=4 px. One texture, one material, one draw call per box.
 const PPM = 32;                                          // pixels per metre — the house density (deck = 64px/2m = this)
 const _snap = x => Math.round(x*PPM)/PPM;                // MODEL ON THE GRID: dims must be k/PPM or pixels can't be square
+const _oakPaint = (name, ctx, w, h) => {                 // shared house-style oak grain (table + bookcase)
+  const top = (name==='py'||name==='ny');
+  for(let yy=0; yy<h; yy++) for(let xx=0; xx<w; xx++){
+    const grain = ((xx*7 + yy*3) % 5) - 2;
+    const plank = top && (yy%6===0) ? -16 : 0;           // plank seams across the grain on flat faces
+    const v = grain + plank;
+    ctx.fillStyle = `rgb(${91+v},${64+v},${35+Math.floor(v*0.7)})`; ctx.fillRect(xx,yy,1,1);
+  }
+};
 // three.js BoxGeometry face order + the 6 world-face dims for (W=x,H=y,D=z):
 const _BOX_FACES = [ ['px','D','H'], ['nx','D','H'], ['py','W','D'], ['ny','W','D'], ['pz','W','H'], ['nz','W','H'] ];
 function _makePixelBox(W, H, D, drawFace, matOpts){
+  for(const [n,v] of [['W',W],['H',H],['D',D]]){ const px=v*PPM;   // grid audit: off-grid dims can't be square
+    if(Math.abs(px-Math.round(px))>0.01) console.warn(`pixelBox: ${n}=${v}m is off the 1/${PPM} grid (${px.toFixed(2)}px) → non-square pixels. Use _snap().`); }
   const dim = {W, H, D};
   const cells = _BOX_FACES.map(([name, aw, ah]) => ({ name,
     w: Math.max(1, Math.round(dim[aw]*PPM)), h: Math.max(1, Math.round(dim[ah]*PPM)) }));
@@ -665,8 +676,7 @@ function _populateShelves(cases){
                          pid:'book_'+_shelfBooks.length, taken:false }); });
     im.instanceMatrix.needsUpdate = true; scene.add(im);
   }
-  window.__booksInstanced = imeshes;
-  if(typeof dbg==='function') dbg('books', _shelfBooks.length+' books in '+imeshes+' instanced meshes (duplicates drawn once)', 'k');
+  window.__booksInstanced = imeshes;   // (no dbg() here — _populateShelves now runs at synchronous load, before the dbg feed exists)
 }
 function _materializeShelfBook(sb){                        // grab: pop an instance into a real grabbable prop
   sb.taken = true;
@@ -682,44 +692,43 @@ window.__perf = ()=>({ drawCalls: renderer.info.render.calls, triangles: rendere
   books: _shelfBooks.length, instancedMeshes: window.__booksInstanced||0,
   grabbed: _shelfBooks.filter(s=>s.taken).length });
 
-const loader = new GLTFLoader();
-loader.load('./assets/bookcase.gltf?v=clean2', (gltf)=>{
-  const src = gltf.scene;
-  src.traverse(o=>{
-    if(!o.isMesh) return;
-    o.castShadow = true; o.receiveShadow = true;
-    o.material.metalness = 0; o.material.roughness = 1;
-    o.material.side = THREE.FrontSide;                      // kill doubleSided thin-face fighting (the real fix?)
-    if(o.material.map){
-      const t = o.material.map;
-      t.magFilter = THREE.NearestFilter;                   // crisp nearest-neighbor pixels (no mush)
-      t.minFilter = THREE.LinearMipmapLinearFilter;        // mips for distance stability, like the rug
-      t.generateMipmaps = true;
-      t.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true;
-    }
-  });
-  const bb = new THREE.Box3().setFromObject(src);
-  const size = bb.getSize(new THREE.Vector3());
-  const s = 2.2 / size.y;                          // measured, never vibed
-  src.scale.setScalar(s);
-  const bb2 = new THREE.Box3().setFromObject(src);
-  const w = bb2.getSize(new THREE.Vector3()).x;
+// HOUSE-STYLE BOOKCASE (2026-07-09): rebuilt from grid-snapped _makePixelBox oak boards, replacing
+// the imported bookcase.gltf whose baked UVs stretched pixels on the thin shelf facings (Nix's
+// catch). Built in 1/16 m units (⊂ the 1/32 grid) → square pixels by construction. 3 shelves.
+function _buildBookcase(){
+  const U = 1/16, T = U, CW = 15*U, CH = 35*U, CD = 5*U;   // width 0.9375, height 2.1875, depth 0.3125
+  const inW = CW - 2*T, shD = CD - T, shZ = T + (CD-T)/2;
+  const boards = [                                          // [name, cx, cy, cz, w, h, d] (metres, grid-aligned)
+    ['bookcase_side_L', -CW/2+T/2, CH/2,   CD/2, T,   CH,     CD ],
+    ['bookcase_side_R',  CW/2-T/2, CH/2,   CD/2, T,   CH,     CD ],
+    ['bookcase_top',     0,        CH-T/2, CD/2, inW, T,      CD ],
+    ['bookcase_bottom',  0,        T/2,    CD/2, inW, T,      CD ],
+    ['bookcase_back',    0,        CH/2,   T/2,  inW, CH-2*T, T  ],
+    ['bookcase_shelf0',  0,        10*U,   shZ,  inW, T,      shD],
+    ['bookcase_shelf1',  0,        20*U,   shZ,  inW, T,      shD],
+    ['bookcase_shelf2',  0,        30*U,   shZ,  inW, T,      shD],
+  ];
+  const g = new THREE.Group();
+  for(const [name,cx,cy,cz,w,h,d] of boards){
+    const r = _makePixelBox(w, h, d, _oakPaint, {roughness:1});
+    r.mesh.position.set(cx, cy, cz); r.mesh.name = name; g.add(r.mesh);
+  }
+  return { group:g, width:CW };
+}
+{
+  const built = _buildBookcase();
+  const spacing = built.width + 0.04;
   const _cases = [];
   for(let i=-1;i<=1;i++){
-    const c = i===0 ? src : src.clone(true);
-    c.position.set(i*(w+0.04), -bb2.min.y + 0.005, -2.2);
-    if(i!==0) c.rotation.y = i*0.012;              // movables get their kilter
-    scene.add(c); _cases.push(c);
-    addCollider(c, 'bookcase');                    // solid: don't walk through the shelves
+    const c = i===0 ? built.group : built.group.clone(true);  // clones share board geo+material
+    c.position.set(i*spacing, 0.005, -2.2);                    // bottom on the deck, back wall at z=-2.2
+    if(i!==0) c.rotation.y = i*0.012;
+    scene.add(c); _cases.push(c); addCollider(c, 'bookcase');
   }
   scene.updateMatrixWorld(true);
-  _populateShelves(_cases);                         // house-style grabbable books (2026-07-09)
-  window.__dbg = {raw:[bb.min.toArray(),bb.max.toArray()], scaled:[bb2.min.toArray(),bb2.max.toArray()], w:w};
-  // (scale-audit + UA plaque breadcrumbs removed 2026-07-08 — Nix: dev noise on the HUD; UA
-  // lives in dbg feed territory if ever needed again: dbg('ua', navigator.userAgent))
-}, undefined, (e)=>{ console.error('GLTF load failed', e);
-  document.getElementById('plaque').innerHTML += '<br>⚠️ bookcase failed to load'; });
+  _populateShelves(_cases);
+  window.__dbg = { bookcase:'house-style', width:built.width };
+}
 
 // ---- the rug (Fable's RD rug, 3×2 m) ----
 new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
@@ -736,19 +745,9 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
 {
   const CUBES = [[-16,11,-8,32,1,16],[13,0,-7,2,11,2],[-15,0,-7,2,11,2],[13,0,5,2,11,2],
     [-15,0,5,2,11,2],[-13,8,-7,26,3,1],[-13,8,6,26,3,1],[13,8,-5,2,3,10],[-15,8,-5,2,3,10]];
-  // house-style oak: per-box 32px/m pixel grain (was a flat colour). Plank lines on top/bottom.
-  const oakPaint = (name, ctx, w, h) => {
-    const top = (name==='py'||name==='ny');
-    for(let yy=0; yy<h; yy++) for(let xx=0; xx<w; xx++){
-      const grain = ((xx*7 + yy*3) % 5) - 2;
-      const plank = top && (yy%6===0) ? -16 : 0;           // plank seams across the grain
-      const v = grain + plank;
-      ctx.fillStyle = `rgb(${91+v},${64+v},${35+Math.floor(v*0.7)})`; ctx.fillRect(xx,yy,1,1);
-    }
-  };
   const tableG = new THREE.Group();
   for(const c of CUBES){
-    const r = _makePixelBox(c[3]/16, c[4]/16, c[5]/16, oakPaint, {roughness:0.85});
+    const r = _makePixelBox(c[3]/16, c[4]/16, c[5]/16, _oakPaint, {roughness:0.85});
     r.mesh.position.set((c[0]+c[3]/2)/16, (c[1]+c[4]/2)/16, (c[2]+c[5]/2)/16);
     tableG.add(r.mesh);
   }
