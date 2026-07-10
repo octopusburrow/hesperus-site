@@ -712,6 +712,16 @@ function _materializeShelfBook(sb){                        // grab: pop an insta
   const g = _addProp(sb.pid, mesh, tpl.mesh.userData.bookDims[1]/2); g.home.copy(sb.pos);
   return g;
 }
+// Remote materialise (Nix's duplicate-book find, 2026-07-09): a book grabbed on ANOTHER client
+// arrives here as prop/own/propState messages with a pid this client never materialised — the
+// updates were dropped, so the shelf copy stayed visible AND the join-replay added a loose one.
+// The pid encodes the shelf index; materialise OUR instance of the same book on first contact.
+function _ensureBookProp(pid){
+  if(grabbablesById[pid]) return grabbablesById[pid];
+  const m = /^book_(\d+)$/.exec(pid || ''); if(!m) return null;
+  const sb = _shelfBooks[+m[1]]; if(!sb || sb.taken) return null;
+  return _materializeShelfBook(sb);
+}
 window.__perf = ()=>({ drawCalls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
   books: _shelfBooks.length, instancedMeshes: window.__booksInstanced||0,
   grabbed: _shelfBooks.filter(s=>s.taken).length });
@@ -851,7 +861,7 @@ function propPhysics(dt){
     } else { g.mesh.position.y=rest; g.vel.set(0,0,0); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); }  // dropped in place
   } }
 // authoritative owner update from the relay: grant (owner===me → keep carrying), deny/steal/free (→ let go)
-function applyOwn(pid, owner){ const g=grabbablesById[pid]; if(!g) return; g.owner=owner;
+function applyOwn(pid, owner){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(!g) return; g.owner=owner;
   if(owner!==myNet){ if(heldProp===g) heldProp=null; for(const h of ['left','right']) if(_heldHand[h]===g) _heldHand[h]=null; g.carrying=false; } }
 window.__propPhysics = propPhysics; window.__grabToggle = grabToggleDesktop;
 window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, applyOwn, grabProp, dropProp };
@@ -1812,8 +1822,12 @@ if(_residentPick){
       const base = q.get('sync');
       if(base){
         const room = (q.get('room')||'porch').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'') || 'porch';
-        const rurl = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room)
+        let rurl = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room)
                    + '&name=' + encodeURIComponent(RESIDENT_NAME);
+        // auth (Nix's invisible-orange find, 2026-07-09): this second socket sent NO pw/key, so the
+        // password gate 4001'd the resident's body — orange Hesperus existed only in the host window
+        if(q.get('pw'))  rurl += '&pw='  + encodeURIComponent(q.get('pw'));
+        if(q.get('key')) rurl += '&key=' + encodeURIComponent(q.get('key'));
         const resConnect = ()=>{                       // reconnect: survive server restarts
           try{ resSock = new WebSocket(rurl); }catch(e){ console.warn('resident occupant socket failed', e); return; }
           resSock.onclose = ()=> setTimeout(resConnect, 2500);
@@ -3186,6 +3200,9 @@ let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0, myRole = 'visitor'
 // broadcast my last pose on a TIMER (not the render loop) so I stay present when the
 // headset is off / SteamVR is in standby (the XR animation loop pauses, this doesn't).
 setInterval(()=>{
+  if(_residentPick) return;   // resident windows are the OPERATOR'S CHAIR, not an occupant: the body
+                              // on the relay is resSock's (orange, model-badged) — without this guard the
+                              // main socket ALSO broadcast a default blue-'human' ghost wearing my name
   if(sock && sock.readyState === 1)
     sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
                               ry:myYaw, name:playerName, color:myColor, model:playerModel,
@@ -3316,14 +3333,14 @@ function cachedCreds(q){
       // SPINE replay: one canonical list (falls back to the legacy triple for pre-spine servers).
       // Runs BEFORE propState so grabbables register first.
       (m.objects || [...(m.spawns||[]), ...(m.images||[]), ...(m.texts||[])]).forEach(applyObj);
-      if(m.propState) for(const pid in m.propState){ const g=grabbablesById[pid]; if(g){ const p=m.propState[pid]; g.mesh.position.set(p.x, p.y, p.z); } }
+      if(m.propState) for(const pid in m.propState){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(g){ const p=m.propState[pid]; g.mesh.position.set(p.x, p.y, p.z); } }
       if(m.propOwners) for(const pid in m.propOwners){ const g=grabbablesById[pid]; if(g) g.owner=m.propOwners[pid]; } }  // late-join: current holds + positions
     else if(m.t === 'join'){ dbg('join', `${m.display} (${m.role})`, 'g'); }
     else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
     else if(m.t === 'prop' && m.id !== myNet){       // a grabbable the OWNER is moving — apply as kinematic
-      const g = grabbablesById[m.pid]; if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z); }
+      const g = grabbablesById[m.pid]||_ensureBookProp(m.pid); if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z); }
       const sp = spawnedObjs.get(m.pid); if(sp) sp.position.set(m.x, m.y||1, m.z); }   // agents carry primitives too (gym)
     else if(m.t === 'own'){                          // authoritative ownership change (grant/deny/free/steal)
       if(window.__grab) window.__grab.applyOwn(m.pid, (m.owner==null?null:m.owner)); }
