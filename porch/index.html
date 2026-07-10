@@ -599,16 +599,8 @@ const sky = new THREE.Mesh(
         float star = step(0.992, hash(cell)) * smoothstep(0.42, 0.10, length(f));
         float tw = 0.75 + 0.25 * sin(uTime*1.7 + hash(cell + 7.0) * 40.0);
         col += star * tw * smoothstep(0.02, 0.30, h) * vec3(0.90, 0.93, 1.00) * 0.13;  // faint dust; the ACCURATE HYG starfield (Points) carries the real sky
-        // AURORA (2026-07-10): northern lights over the pole. Slow undulating curtains low
-        // in the sky — a green body with teal/violet tips, drifting with layered noise around the azimuth.
-        float az = atan(vDir.z, vDir.x);
-        float band = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.10, 0.42, h));   // hug the horizon, fade up
-        float drift = sin(az*3.0 + uTime*0.06) * 0.5 + sin(az*7.0 - uTime*0.10) * 0.3 + sin(az*13.0 + uTime*0.05) * 0.2;
-        float curtain = smoothstep(0.15, 0.95, 0.5 + 0.5*drift);                       // gaps between the sheets
-        float ray = 0.55 + 0.45*sin(az*70.0 + drift*4.0 + uTime*0.2);                  // vertical striations
-        float aur = band * curtain * ray;
-        float up = smoothstep(0.02, 0.30, h);                                          // greener low, violet as it climbs
-        col += aur * (mix(vec3(0.10,0.42,0.24), vec3(0.28,0.16,0.42), up)) * 0.9;
+        // (aurora removed 2026-07-10 — the striations read as bands, not curtains. A real attempt
+        //  later would want flowing 3D curtain geometry + Perlin flow, not a horizon-band shader.)
         // the moon, and its patient halo
         vec3 moonDir = normalize(vec3(-0.45, 0.55, 0.35));
         float md = dot(normalize(vDir), moonDir);
