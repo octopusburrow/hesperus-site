@@ -4191,7 +4191,7 @@ function _startAmbient(){
   new THREE.AudioLoader().load('./assets/porch_ambient.ogg', (buf)=>{
     _ambient = new THREE.Audio(_audioListener);
     _ambient.setBuffer(buf); _ambient.setLoop(true); _ambient.setVolume(0.0);
-    if(_ambientOn && _audioListener.context.state==='running'){ _ambient.play(); _ambientFade(0.30, 4); }
+    if(_ambientOn && _audioListener.context.state==='running'){ _ambient.play(); _ambientFade(0.20, 4); }
   }, undefined, (e)=>{ _ambientLoading=false; console.warn('ambient load failed', e); });
 }
 function _ambientFade(to, secs){                            // gentle ramp instead of an abrupt start/stop
@@ -4199,13 +4199,13 @@ function _ambientFade(to, secs){                            // gentle ramp inste
   g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(to, now+secs);
 }
 function setAmbient(on){ _ambientOn=on; localStorage.setItem('porch.ambient', on?'on':'off');
-  if(on){ if(!_ambient) _startAmbient(); else { if(!_ambient.isPlaying) _ambient.play(); _ambientFade(0.30, 3); } }
+  if(on){ if(!_ambient) _startAmbient(); else { if(!_ambient.isPlaying) _ambient.play(); _ambientFade(0.20, 3); } }
   else if(_ambient && _ambient.isPlaying){ _ambientFade(0.0, 2); setTimeout(()=>{ if(!_ambientOn && _ambient) _ambient.pause(); }, 2100); } }
 window.__setAmbient = setAmbient;
 function _audioGesture(){                                   // autoplay gate: resume context + start on first interaction
   if(_audioListener.context.state==='suspended') _audioListener.context.resume().catch(()=>{});
   if(_ambientOn){ if(!_ambient) _startAmbient();
-    else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambientFade(0.30, 4); } }
+    else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambientFade(0.20, 4); } }
 }
 ['pointerdown','keydown','touchstart'].forEach(ev=>addEventListener(ev, _audioGesture));
 addEventListener('DOMContentLoaded', ()=>{ const cb=document.getElementById('ambientToggle');
