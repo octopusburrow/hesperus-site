@@ -3058,27 +3058,68 @@ function removeSpawn(sid){
 const imageObjs = new Map(); let lastImageSid = null;    // sid -> mesh
 const IMG = { maxFile: 10*1024*1024, maxDim: 2048, dataCap: 4*1024*1024,
               types: ['image/png','image/jpeg','image/webp','image/gif'] };
+// LOADING PLACEHOLDER (Nix 2026-07-10: an image manifest "shows nothing for a while → looks like it
+// didn't work"). Shared material: dark rounded field + a sweeping progress bar + faint shimmer, so a
+// pending image reads as *loading*, not *failed*. One material for all pending images (same uTime).
+let _imgLoaders = 0;                                      // >0 while any placeholder is on screen (drives uTime)
+const _imgLoadMat = new THREE.ShaderMaterial({
+  transparent:true, side:THREE.DoubleSide, depthWrite:false,
+  uniforms:{ uTime:{value:0} },
+  vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`
+    varying vec2 vUv; uniform float uTime;
+    float box(vec2 p, vec2 b){ vec2 d=abs(p)-b; return length(max(d,0.0))+min(max(d.x,d.y),0.0); }
+    void main(){
+      vec2 c = vUv-0.5;
+      float frame = smoothstep(0.002,0.0, box(c, vec2(0.48,0.48)));   // rounded-ish border
+      vec3 col = vec3(0.09,0.10,0.14);
+      // sweeping progress bar across the lower third
+      float barY = smoothstep(0.02,0.0,abs(vUv.y-0.30));
+      float sweep = fract(uTime*0.6);
+      float head = smoothstep(0.10,0.0, abs(vUv.x-sweep)) * barY;
+      col += vec3(0.55,0.48,0.72)*head*1.4 + vec3(0.10,0.11,0.16)*barY;
+      // faint shimmer particles
+      float sp = 0.5+0.5*sin(vUv.x*30.0+uTime*2.0)*sin(vUv.y*24.0-uTime*1.3);
+      col += vec3(0.06,0.05,0.09)*sp;
+      col += vec3(0.25,0.22,0.32)*frame;
+      gl_FragColor = vec4(col, 0.9);
+    }`
+});
 function imgNote(s, kind='image'){ dbg(kind, s); if(window.__logChat) window.__logChat('porch', s, 'sys', kind); }  // kind: text manifests say (text), not (image) — Nix 2026-07-10
+const _pendingImg = new Map(); let _imgCidSeq = 1;        // cid -> {mesh, t0}: optimistic local image placeholders
+function _clearPendingImg(cid){ const e=_pendingImg.get(cid); if(!e) return;
+  scene.remove(e.mesh); if(e.mesh.userData._loading){ e.mesh.userData._loading=false; _imgLoaders=Math.max(0,_imgLoaders-1); }
+  e.mesh.geometry.dispose(); _pendingImg.delete(cid); }   // shared material — don't dispose it
 function applyImage(msg){
   if(!msg.sid || imageObjs.has(msg.sid)) return;
   const aspect = msg.aspect > 0 ? msg.aspect : 1;         // w / h
   const w = aspect >= 1 ? 1.0 : 1.0*aspect;               // 1 m longest dimension
   const h = aspect >= 1 ? 1.0/aspect : 1.0;
-  const tex = new THREE.TextureLoader().load(msg.dataURL);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
-      new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true}));
+  // 1) show the LOADING placeholder immediately (grabbable already) — no dead air while the dataURL decodes
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), _imgLoadMat);
   mesh.position.set(msg.x||0, msg.y!=null?msg.y:1.4, msg.z||0);
   mesh.rotation.y = msg.ry||0;
+  mesh.userData._loading = true; _imgLoaders++;
   const g = _addProp(msg.sid, mesh, h/2);                 // register as grabbable (adds to scene)
   g.isImage = true; g.sid = msg.sid;                      // tag so drop=stay-put and X=delete
   imageObjs.set(msg.sid, mesh);
-  if(msg.id === myNet) lastImageSid = msg.sid;
+  if(msg.id === myNet){ lastImageSid = msg.sid; if(msg.cid) _clearPendingImg(msg.cid); }  // my echo: drop the optimistic local placeholder
+  // 2) decode + swap in the real texture when ready
+  new THREE.TextureLoader().load(msg.dataURL, (tex)=>{
+    tex.colorSpace = THREE.SRGBColorSpace;
+    if(!imageObjs.has(msg.sid)) { tex.dispose(); return; }   // removed while loading
+    mesh.material = new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true});
+    if(mesh.userData._loading){ mesh.userData._loading=false; _imgLoaders=Math.max(0,_imgLoaders-1); }
+  }, undefined, ()=>{ imgNote('image failed to load'); });  // onError: leave the placeholder as a visible marker
 }
 function removeImage(sid){
   const mesh = imageObjs.get(sid);
-  if(mesh){ scene.remove(mesh); if(mesh.material.map) mesh.material.map.dispose();
-    mesh.geometry.dispose(); mesh.material.dispose(); imageObjs.delete(sid); }
+  if(mesh){ scene.remove(mesh);
+    if(mesh.userData._loading){ mesh.userData._loading=false; _imgLoaders=Math.max(0,_imgLoaders-1); }
+    if(mesh.material.map) mesh.material.map.dispose();
+    mesh.geometry.dispose();
+    if(mesh.material !== _imgLoadMat) mesh.material.dispose();   // NEVER dispose the shared loading material
+    imageObjs.delete(sid); }
   const g = grabbablesById[sid];                          // unregister the grabbable
   if(g){ const i = grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
     if(heldProp===g) heldProp=null; for(const hnd of ['left','right']) if(_heldHand[hnd]===g) _heldHand[hnd]=null; }
@@ -3104,7 +3145,14 @@ function addImageFile(file){
     if(dataURL.length > IMG.dataCap){ imgNote('image too detailed after processing — try a smaller one'); return; }
     const fwd=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
     const p=player.position.clone().addScaledVector(fwd,1.4);
-    sendObj('image', {dataURL, aspect:cw/ch, x:p.x, y:1.4, z:p.z, ry:player.rotation.y});
+    // optimistic local placeholder: covers the send→relay→echo round-trip (applyImage can't — it only
+    // runs once the echo lands). cid round-trips through the relay (it rebroadcasts the whole msg) so
+    // my own echo clears it. Removed on cid match, or by a 20s safety sweep if the echo never comes.
+    const cid = 'ic'+(_imgCidSeq++);
+    const ph = new THREE.Mesh(new THREE.PlaneGeometry(cw>=ch?1.0:cw/ch, cw>=ch?ch/cw:1.0), _imgLoadMat);
+    ph.position.set(p.x, 1.4, p.z); ph.rotation.y = player.rotation.y; ph.userData._loading=true;
+    _imgLoaders++; scene.add(ph); _pendingImg.set(cid, {mesh:ph, t0:performance.now()});
+    sendObj('image', {dataURL, aspect:cw/ch, x:p.x, y:1.4, z:p.z, ry:player.rotation.y, cid});
     imgNote(`added image (${cw}×${ch})`);
   };
   img.onerror = ()=>{ URL.revokeObjectURL(url); imgNote('could not decode that image'); };
@@ -4533,6 +4581,8 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   sky.material.uniforms.uTime.value = t;
   fenceMat.uniforms.uTime.value = t;
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
+  if(_imgLoaders>0) _imgLoadMat.uniforms.uTime.value = t;  // image loading placeholders sweep/shimmer
+  if(_pendingImg.size){ for(const [cid,e] of _pendingImg) if(now-e.t0 > 20000) _clearPendingImg(cid); }  // echo never came
   for(const m of _porticoMotes){ const a=m.geo.attributes.position; // motes drift up + wrap, slight sway
     for(let i=0;i<m.n;i++){ let y=a.array[i*3+1] + dt*(0.12+0.06*m.phase[i]); if(y>2.35) y-=2.35;
       a.array[i*3+1]=y; a.array[i*3]=0.02+Math.sin(t*0.8+m.phase[i]*6.28)*0.05; }
