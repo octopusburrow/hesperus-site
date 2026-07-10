@@ -2023,8 +2023,11 @@ const REMOTE_STATE_STYLE = {                       // live-state pill (resident 
   working:   {bg:'rgba(96,70,40,0.92)',   fg:'#e8cfa8', label:'🛠 working'},
 };
 function drawNameplate(name, role, model, state){
-  const nc = document.createElement('canvas'); nc.width = 256; nc.height = 104;
-  const ng = nc.getContext('2d');
+  // 2.5x supersample (Nix: "labels pretty pixelated") — same layout coordinates via ctx scale;
+  // true SDF text (troika) is the endgame, staged for a session that can vendor it properly.
+  const SS = 2.5;
+  const nc = document.createElement('canvas'); nc.width = 256*SS; nc.height = 104*SS;
+  const ng = nc.getContext('2d'); ng.scale(SS, SS);
   ng.textAlign='center'; ng.textBaseline='middle';
   // name + model plate (model = second line; occupant declares it, humans = 'human')
   ng.fillStyle='rgba(10,12,16,0.62)';
@@ -4389,6 +4392,25 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     const sp = Math.hypot(player.position.x - _locoPX, player.position.z - _locoPZ) / Math.max(dt, 1e-4);
     _locoPX = player.position.x; _locoPZ = player.position.z;
     window.__playerLoco(sp);
+    // DESKTOP planted feet (Nix 2026-07-10: "foot IK in flatscreen too, especially turning"):
+    // when idle, the mouse yaws the body and the idle clip lets feet SLIDE. Run the same gait
+    // (feet planted in the world, stepping on drift/twist) with desktop inputs — the whole
+    // machinery is HMD-free (_footTargets reads the hips bone). Walking hands legs back to the
+    // walk clip and clears gait state so re-plant SNAPs fresh. ?nofootik opts out here too.
+    if(playerVrm && !renderer.xr.isPresenting && !window.__nofootik && !window.__noik){
+      const ud=playerVrm.userData=playerVrm.userData||{};
+      if(sp > 0.5){ ud._gait=null; }                          // moving: the walk clip owns the legs
+      else {
+        const ft=_footTargets(playerVrm, player.position.y);
+        if(ft){
+          ud._gaitT=(ud._gaitT||0)+dt;
+          if(!ud._gait) ud._gait=_gaitInit(ft.left, ft.right, ft.yaw);
+          const gp=_gaitTick(ud._gait, ft.left, ft.right, ft.yaw, ud._gaitT, dt);
+          gp.L.pos.y+=gp.L.lift; gp.R.pos.y+=gp.R.lift;
+          _solveLeg(playerVrm,'left',gp.L.pos,gp.L.yaw); _solveLeg(playerVrm,'right',gp.R.pos,gp.R.yaw);
+        }
+      }
+    }
   }
   if(playerVrm){
     if(renderer.xr.isPresenting && !window.__noik){          // copy real HMD + controller poses into the IK targets
