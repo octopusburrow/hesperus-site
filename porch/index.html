@@ -74,6 +74,32 @@
     white-space:pre-wrap;word-break:break-word;z-index:50}
   #dbgfeed .k{color:#7da7d9} #dbgfeed .e{color:#e08a8a} #dbgfeed .g{color:#8fc98f}
   #dbgfeed .t{color:#5a6474}
+  /* the vendored fonts, for the WYSIWYG compose preview (troika renders the SAME ttf in-world) */
+  @font-face{font-family:'PorchSerif';src:url('./vendor/fonts/gelasio.ttf')}
+  @font-face{font-family:'PorchSans'; src:url('./vendor/fonts/rubik.ttf')}
+  @font-face{font-family:'PorchMono'; src:url('./vendor/fonts/spacemono.ttf')}
+  /* text compose panel — desktop preview editor (Nix #25): type → see font/color/bg live → manifest */
+  #compose{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
+    background:rgba(4,6,10,0.55);backdrop-filter:blur(3px)}
+  #compose.on{display:flex}
+  #compose .card{width:min(560px,92vw);background:rgba(18,21,29,0.97);border:1px solid #2f3644;
+    border-radius:14px;padding:18px 18px 15px;box-shadow:0 12px 40px rgba(0,0,0,.55);color:#dfe4ea;font-family:Georgia,serif}
+  #compose h3{margin:0 0 10px;font-size:15px;color:#e8dcc0;font-weight:600}
+  #compose .prev{min-height:96px;display:flex;align-items:center;justify-content:center;text-align:center;
+    border-radius:9px;padding:14px;margin-bottom:12px;font-size:24px;line-height:1.3;word-break:break-word;
+    background-size:16px 16px;background-image:linear-gradient(45deg,#1a1d24 25%,transparent 25%),linear-gradient(-45deg,#1a1d24 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#1a1d24 75%),linear-gradient(-45deg,transparent 75%,#1a1d24 75%);background-position:0 0,0 8px,8px -8px,-8px 0}  /* checkerboard shows through when bg is off */
+  #compose textarea{width:100%;box-sizing:border-box;height:56px;resize:none;border-radius:8px;border:1px solid #333c4b;
+    background:#0f1218;color:#e8e2d4;font:15px Georgia,serif;padding:8px 10px;margin-bottom:11px}
+  #compose .row{display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap}
+  #compose .row .lbl{font-size:12px;color:#9aa3b0;width:70px}
+  #compose .pill{padding:5px 11px;border-radius:8px;border:1px solid #39424f;background:#20262f;color:#cfd6df;
+    font-size:13px;cursor:pointer;user-select:none}
+  #compose .pill.sel{background:#3a4d63;border-color:#5a7ba8;color:#eaf2fb;box-shadow:inset 0 0 0 1px #6d8fbf}
+  #compose .sw{display:inline-block;width:24px;height:24px;border-radius:50%;border:2px solid #2a303b;cursor:pointer;margin-right:6px;vertical-align:middle}
+  #compose .sw.sel{border-color:#eaf2fb;box-shadow:0 0 0 2px #6d8fbf}
+  #compose .actions{display:flex;justify-content:flex-end;gap:9px;margin-top:13px}
+  #compose .btn{padding:8px 16px;border-radius:9px;border:0;cursor:pointer;font-size:13px;font-family:Georgia,serif}
+  #compose .btn.go{background:#3a6d4d;color:#eafaf0} #compose .btn.no{background:#31363f;color:#c7ccd4}
 </style>
 </head>
 <body>
@@ -149,6 +175,22 @@
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
 </div>
+<div id="compose"><div class="card">
+  <h3>✍ Manifest text</h3>
+  <div class="prev" id="cmpPrev">your words, in the world</div>
+  <textarea id="cmpText" maxlength="240" placeholder="type the words to manifest…"></textarea>
+  <div class="row"><span class="lbl">Font</span>
+    <span class="pill" data-font="serif">Serif</span>
+    <span class="pill" data-font="sans">Sans</span>
+    <span class="pill" data-font="mono">Mono</span></div>
+  <div class="row"><span class="lbl">Color</span><span id="cmpColors"></span></div>
+  <div class="row"><span class="lbl">Background</span>
+    <span class="pill" id="cmpBgToggle" data-on="1">On</span>
+    <span id="cmpBgColors"></span></div>
+  <div class="actions">
+    <button class="btn no" id="cmpCancel">Cancel</button>
+    <button class="btn go" id="cmpGo">Manifest ↵</button></div>
+</div></div>
 <div id="dbgfeed"></div>
 <div id="michud"><img id="michudimg" alt="mic status"></div>
 <script type="importmap">
@@ -166,7 +208,9 @@ import {Text as TroikaText, preloadFont} from 'troika-three-text';
 
 // ---- SDF vector text (troika) — crisp 3D labels at any distance, replacing the canvas-texture
 // approach that pixelated close up (Nix, repeatedly). vendored + proven: tests/troika_render_test.html.
-const PORCH_FONT = './vendor/fonts/gelasio.ttf';         // OFL Georgia-twin; matches the canvas serif we used
+const PORCH_FONTS = { serif:'./vendor/fonts/gelasio.ttf', sans:'./vendor/fonts/rubik.ttf', mono:'./vendor/fonts/spacemono.ttf' };
+const PORCH_FONT = PORCH_FONTS.serif;                    // default: OFL Georgia-twin (matches the old canvas serif)
+function _resolveFont(f){ return (f && PORCH_FONTS[f]) || (f && f.endsWith('.ttf') ? f : PORCH_FONT); }
 let _fontReady = false;
 // ASCII-ONLY preload: any glyph Gelasio lacks (◆, ·, box-drawing…) makes troika fetch a fallback-font
 // index from jsdelivr — a hidden external dependency that dies under CSP/offline. Keep the warmup to
@@ -178,7 +222,7 @@ preloadFont({font: PORCH_FONT, characters: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJ
 function makeTextMesh(str, opts={}){
   const t = new TroikaText();
   t.text = String(str||'');
-  t.font = PORCH_FONT;
+  t.font = _resolveFont(opts.font);                       // 'serif'|'sans'|'mono' key, or a .ttf path
   t.fontSize = opts.size!=null ? opts.size : 0.14;
   t.color = opts.color!=null ? opts.color : 0xece3cf;
   t.anchorX = opts.anchorX || 'center';
@@ -3207,13 +3251,19 @@ function applyText(msg){
   if(!msg.sid || textObjs.has(msg.sid) || !msg.text) return;
   // SDF vector text (Nix: canvas manifests looked pixelated). The grab/raycast mesh is a rounded
   // background plane; the troika Text rides as its child and the plane resizes to fit once synced.
+  // Optional msg.style {font, color, bg:{on,color}} from the compose panel — defaults preserve the
+  // original look (serif / cream / dark bg on), so pre-style objects are unchanged.
+  const st = msg.style || {};
+  const bgOn = st.bg ? st.bg.on !== false : true;
+  const bgColor = (st.bg && st.bg.color!=null) ? st.bg.color : 0x12141b;
+  const txtColor = st.color!=null ? st.color : 0xece3cf;
   const FS = 0.09, PAD = 0.06, MAXW = 1.4;               // metres
-  const bgMat = new THREE.MeshBasicMaterial({color:0x12141b, transparent:true, opacity:0.82,
-    side:THREE.DoubleSide, depthWrite:false});
+  const bgMat = new THREE.MeshBasicMaterial({color:bgColor, transparent:true, opacity:bgOn?0.82:0.0,
+    side:THREE.DoubleSide, depthWrite:false, visible:bgOn});
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.3), bgMat);   // placeholder size; fit on sync
   mesh.position.set(msg.x||0, msg.y!=null?msg.y:1.5, msg.z||0);
   mesh.rotation.y = msg.ry||0;
-  const txt = makeTextMesh(msg.text, {size:FS, color:0xece3cf, maxWidth:MAXW, align:'center',
+  const txt = makeTextMesh(msg.text, {size:FS, color:txtColor, font:st.font, maxWidth:MAXW, align:'center',
     renderOrder:6, onSync: (tm)=>{
       const bb = tm.textRenderInfo && tm.textRenderInfo.blockBounds;     // [minX,minY,maxX,maxY]
       if(!bb) return;
@@ -3267,13 +3317,16 @@ function sendDelObj(sid){
   if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'delobj', sid}));
 }
 
-function addText(str){                                    // validate + broadcast; placed in front, facing me
+function addText(str, style){                             // validate + broadcast; placed in front, facing me
   str = (str||'').trim();
   if(!str) return 'empty';
   if(str.length > TXT.maxLen){ imgNote(`text is ${str.length} chars — ${TXT.maxLen} max`, 'text'); return 'too long'; }
   const fwd=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
   const p=player.position.clone().addScaledVector(fwd,1.4);
-  sendObj('text', {text:str, x:p.x, y:1.5, z:p.z, ry:player.rotation.y});
+  const msg = {text:str, x:p.x, y:1.5, z:p.z, ry:player.rotation.y};
+  if(style) msg.style = style;                            // {font, color, bg:{on,color}} from the compose panel
+  window.__lastManifest = msg;                            // debug/test: inspect the last outgoing text manifest
+  sendObj('text', msg);
   imgNote(`manifested: "${str.slice(0,40)}${str.length>40?'…':''}"`, 'text');
   return 'sent';
 }
@@ -4000,7 +4053,7 @@ const PORCH_ACTIONS = [
   {id:'move.faceme', cat:'Move', label:'Face me',   icon:'👁', desc:'turn to face the caller',  surfaces:['agent'], agent:a=>a.faceMe&&a.faceMe()},
   // — Make (both kinds; the porch’s thesis: same affordance, not a lesser tier) —
   {id:'make.text',  cat:'Make', label:'Manifest text', icon:'✍', desc:'words on a plane (<=240 chars)', args:{text:'string'},
-    human:()=>window.__promptText&&window.__promptText(),  agent:(a,x)=>window.__addText&&window.__addText(x&&x.text)},
+    human:()=>window.__openTextCompose?window.__openTextCompose():(window.__promptText&&window.__promptText()),  agent:(a,x)=>window.__addText&&window.__addText(x&&x.text)},
   {id:'make.image', cat:'Make', label:'Add image',     icon:'🖼', desc:'an image plane (agents pass a data URL via the harness)', args:{dataURL:'string', aspect:'number'},
     human:()=>window.__pickImage&&window.__pickImage(),    agent:null},
   {id:'make.spawn', cat:'Make', label:'Spawn shape',   icon:'⬛', desc:'a primitive maker block', args:{shape:'cube|sphere|cone|cylinder'},
@@ -4032,6 +4085,59 @@ function actionCatalogText(forAgent){
     return `  ${a.icon||' '} ${a.id}${args} — ${a.desc}`; }).join('\n')).join('\n\n'); }
 window.__actions = PORCH_ACTIONS; window.__doAction = doAction;   // surfaces + tests read these
 window.__agentDo = agentDo; window.__agentCatalog = agentActionCatalog;
+
+// ---- TEXT COMPOSE PANEL (#25 preview, 2026-07-10): type → see font/color/background live → manifest.
+// Desktop first (verifiable); the VR version will reuse this state + the troika style path. The HTML
+// preview uses the SAME vendored ttf via @font-face, so what you see ≈ what troika renders in-world.
+const CMP_FONTS = { serif:'PorchSerif', sans:'PorchSans', mono:'PorchMono' };
+const CMP_TEXT_COLORS = [0xece3cf,0xffffff,0xf2ce86,0x8fd3c8,0xe6a2b8,0xb9a3e8,0x0e1014];  // cream/white/gold/teal/rose/violet/ink
+const CMP_BG_COLORS   = [0x12141b,0x000000,0x2a1d12,0xece3cf];                              // dark/black/wood/cream
+const _cmp = { font:'serif', color:CMP_TEXT_COLORS[0], bgOn:true, bgColor:CMP_BG_COLORS[0] };
+const _hex = n => '#'+('000000'+ (n>>>0).toString(16)).slice(-6);
+function _cmpRenderControls(){
+  const cc=document.getElementById('cmpColors'); if(cc && !cc.dataset.built){ cc.dataset.built='1';
+    CMP_TEXT_COLORS.forEach(c=>{ const s=document.createElement('span'); s.className='sw'; s.style.background=_hex(c);
+      s.onclick=()=>{ _cmp.color=c; _cmpSync(); }; s.dataset.col=c; cc.appendChild(s); }); }
+  const bc=document.getElementById('cmpBgColors'); if(bc && !bc.dataset.built){ bc.dataset.built='1';
+    CMP_BG_COLORS.forEach(c=>{ const s=document.createElement('span'); s.className='sw'; s.style.background=_hex(c);
+      s.onclick=()=>{ _cmp.bgColor=c; _cmp.bgOn=true; _cmpSync(); }; s.dataset.bg=c; bc.appendChild(s); }); }
+}
+function _cmpSync(){                                       // reflect _cmp state into the preview + selection UI
+  const prev=document.getElementById('cmpPrev'), ta=document.getElementById('cmpText');
+  if(!prev) return;
+  prev.textContent = (ta && ta.value.trim()) || 'your words, in the world';
+  prev.style.fontFamily = CMP_FONTS[_cmp.font]+', Georgia, serif';
+  prev.style.color = _hex(_cmp.color);
+  prev.style.background = _cmp.bgOn ? _hex(_cmp.bgColor) : 'transparent';
+  document.querySelectorAll('#compose .pill[data-font]').forEach(p=>p.classList.toggle('sel', p.dataset.font===_cmp.font));
+  const bt=document.getElementById('cmpBgToggle'); if(bt){ bt.textContent=_cmp.bgOn?'On':'Off'; bt.classList.toggle('sel',_cmp.bgOn); }
+  document.querySelectorAll('#cmpColors .sw').forEach(s=>s.classList.toggle('sel', +s.dataset.col===_cmp.color));
+  document.querySelectorAll('#cmpBgColors .sw').forEach(s=>s.classList.toggle('sel', _cmp.bgOn && +s.dataset.bg===_cmp.bgColor));
+}
+function openTextCompose(){
+  const el=document.getElementById('compose'); if(!el) return;
+  _cmpRenderControls(); el.classList.add('on');
+  const ta=document.getElementById('cmpText'); if(ta){ ta.value=''; setTimeout(()=>ta.focus(),30); }
+  _cmpSync();
+}
+function closeTextCompose(){ const el=document.getElementById('compose'); if(el) el.classList.remove('on'); }
+function _cmpConfirm(){
+  const ta=document.getElementById('cmpText'); const text=(ta&&ta.value||'').trim(); if(!text){ closeTextCompose(); return; }
+  addText(text, { font:_cmp.font, color:_cmp.color, bg:{on:_cmp.bgOn, color:_cmp.bgColor} });
+  closeTextCompose();
+}
+window.__openTextCompose = openTextCompose;                // the make.text human binding + ✍ button call this
+(function wireCompose(){
+  const el=document.getElementById('compose'); if(!el) return;
+  el.addEventListener('click', e=>{ if(e.target===el) closeTextCompose(); });   // click backdrop = cancel
+  document.querySelectorAll('#compose .pill[data-font]').forEach(p=> p.onclick=()=>{ _cmp.font=p.dataset.font; _cmpSync(); });
+  const bt=document.getElementById('cmpBgToggle'); if(bt) bt.onclick=()=>{ _cmp.bgOn=!_cmp.bgOn; _cmpSync(); };
+  const ta=document.getElementById('cmpText'); if(ta){ ta.addEventListener('input',_cmpSync);
+    ta.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); _cmpConfirm(); }
+      else if(e.key==='Escape'){ e.preventDefault(); closeTextCompose(); } }); }
+  const go=document.getElementById('cmpGo'); if(go) go.onclick=_cmpConfirm;
+  const no=document.getElementById('cmpCancel'); if(no) no.onclick=closeTextCompose;
+})();
 
 function chatMentions(text){ return [...text.matchAll(/@([A-Za-z0-9_\-]+)/g)].map(m=>m[1].toLowerCase()); }
 // scrollable transcript of every channel (typed chat, TTS spoken, STT heard) — debug history
@@ -4125,7 +4231,7 @@ function remoteInEarshot(id){                                  // remote sender 
   const addImgBtn = document.getElementById('addImgBtn');
   if(addImgBtn) addImgBtn.addEventListener('click', ()=>{ pickImage(); menu.classList.add('hid'); });
   const addTxtBtn = document.getElementById('addTxtBtn');
-  if(addTxtBtn) addTxtBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); promptText(); });
+  if(addTxtBtn) addTxtBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); openTextCompose(); });  // preview editor, not native prompt
   const vrProbeBtn = document.getElementById('vrProbeBtn');
   if(vrProbeBtn) vrProbeBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); vrProbe(); });
   // ---- emote menu (desktop): tray toggle + click + 1-4 hotkeys. VR uses the world-space panel. ----
