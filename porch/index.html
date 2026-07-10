@@ -1798,7 +1798,7 @@ if(_residentPick){
               z:vrm.scene.position.z, ry:vrm.scene.rotation.y, name:RESIDENT_NAME,
               color:0xffb45e, model:modelName||'ai',
               face:(function(){ const s=_faceLife.get(vrm); return (s&&s.expr)?s.expr.name:undefined; })(),
-              hid:_outfitField(vrm)||''}));
+              hid:_outfitField(vrm)||'', world:'porch'}));   // the resident lives on the porch (presence world-tag)
         }, 150);
       }
     }
@@ -3122,7 +3122,8 @@ setInterval(()=>{
     sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
                               ry:myYaw, name:playerName, color:myColor, model:playerModel,
                               face:(_myFace && t<_myFace.until+0.4) ? _myFace.name : undefined,
-                              hid:playerVrm ? (_outfitField(playerVrm)||'') : undefined}));
+                              hid:playerVrm ? (_outfitField(playerVrm)||'') : undefined,
+                              world:(typeof _district!=='undefined' ? _district : 'porch')}));  // presence world-tag: don't bleed avatars across worlds
 }, 100);
 const _voice = window.speechSynthesis;
 function speak(text){
@@ -3251,6 +3252,7 @@ function cachedCreds(q){
       if(_jump > 8){ teleportFX(r.tp.x, r.tp.z, false); teleportFX(m.x, m.z, true); }  // they teleported
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
       r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
+      r.world = m.world || 'porch';                  // presence world-tag — only shown when it matches mine
       if(r.vrm && m.hid!==undefined) _applyOutfitField(r.vrm, m.hid);   // clothes toggles travel with the pose
     }
     else if(m.t === 'avfx' && m.id !== myNet){         // avatar moments from peers: winks, pats, boops
@@ -4183,7 +4185,11 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     const xc = renderer.xr.getCamera(); const h = (xc.cameras && xc.cameras[0]) ? xc.cameras[0] : xc;
     const e = h.matrixWorld.elements; myYaw = Math.atan2(e[8], e[10]);
   }
+  const _myWorld = (typeof _district!=='undefined' ? _district : 'porch');
   for(const r of remotes.values()){
+    const sameWorld = (r.world || 'porch') === _myWorld;   // WORLD-TAG: only see people in YOUR world
+    if(r.group.visible !== sameWorld) r.group.visible = sameWorld;
+    if(!sameWorld) continue;                                 // skip updates for hidden (other-world) avatars
     const px = r.group.position.x, pz = r.group.position.z;
     r.group.position.lerp(r.tp, 0.25);
     let d = r.try_ - r.group.rotation.y;
