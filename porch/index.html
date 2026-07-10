@@ -1669,7 +1669,7 @@ if(_residentPick){
 
     // ---- locomotion + follow/stay ----
     let walkTarget=null, walking=false, followMode=false; const WALKSPD=1.35;
-    let _settleYaw=null;    // after a walk ends: turn to face SPAWN (greet arrivals, don't show them your back — Nix 2026-07-10)
+    let _settleYaw=null, _spawnSettleDone=false;   // ONE-TIME: after the initial spawn-in walk to the table, turn to face SPAWN so I'm not showing arrivals my back (Nix 2026-07-10). Not on later walks.
     function walkTo(x,z){ walkTarget={x,z}; followMode=false; return `walking to ${x.toFixed(1)},${z.toFixed(1)}`; }
     function follow(){ followMode=true; return 'following you'; }
     function stay(){ followMode=false; walkTarget=null; walking=false;
@@ -1897,7 +1897,7 @@ if(_residentPick){
         else { walkTarget=null; if(walking){ walking=false; if(!speaking&&!emoteUntil) crossfade('idle'); } } }
       if(walkTarget){ const dx=walkTarget.x-r.x, dz=walkTarget.z-r.z, d=Math.hypot(dx,dz);
         if(d<0.12){ walkTarget=null; walking=false; if(!speaking&&!emoteUntil) crossfade('idle');
-          if(typeof SPAWN!=='undefined') _settleYaw=Math.atan2(SPAWN.x-r.x, SPAWN.z-r.z); }
+          if(!_spawnSettleDone && typeof SPAWN!=='undefined'){ _spawnSettleDone=true; _settleYaw=Math.atan2(SPAWN.x-r.x, SPAWN.z-r.z); } }
         else { if(!walking){ walking=true; if(!speaking) crossfade('walk'); }
           const step=Math.min(d, WALKSPD*dt); r.x+=dx/d*step; r.z+=dz/d*step;
           vrm.scene.rotation.y = Math.atan2(dx,dz); } }
