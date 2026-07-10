@@ -3223,6 +3223,7 @@ function _authVeil(on){ const ov=document.getElementById('signin'); if(!ov) retu
 function signIn(prefillErr){
   return new Promise(res=>{ const ov=document.getElementById('signin'); if(!ov){ res({name:playerName, pw:''}); return; }
     const nm=document.getElementById('siName'), pw=document.getElementById('siPw'), go=document.getElementById('siGo'), err=document.getElementById('siErr');
+    _authVeil(false);                                          // the form is the point here — un-hide the card if veiled
     ov.style.display='flex'; err.textContent = prefillErr || '';
     try{ const last=JSON.parse(localStorage.getItem('porch.creds')||'null'); if(last&&last.name&&!nm.value) nm.value=last.name; }catch(e){}
     setTimeout(()=>{ (nm.value?pw:nm).focus(); }, 60);
@@ -3239,9 +3240,12 @@ function cachedCreds(q){
   return null;
 }
 (async function connectSync(){
+  _authVeil(true);                                            // veil from the FIRST frame: resolveSyncUrl is a
+  // network fetch, and the world was painting for the ~1s it took (Nix saw the glimpse survive rev.1 of this fix)
   const q = new URLSearchParams(location.search);
   const base = await resolveSyncUrl(q);
-  if(!base){ dbg('sync','no server endpoint yet (no ?sync, no sync.json)','e'); return; }
+  if(!base){ dbg('sync','no server endpoint yet (no ?sync, no sync.json)','e');
+    _authVeil(false); const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; return; }  // solo mode: no gate to wait behind
   let room = (q.get('room')||'').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'');
   if(!room){ room = 'porch';                                  // bare URL = the COMMONS (2026-07-08, Nix's
     // instance-split find: coining a room per visitor scattered guests who all opened the same
@@ -3252,8 +3256,7 @@ function cachedCreds(q){
   showRoom(room);
   const _cached = cachedCreds(q);                             // URL/cached login, else the overlay
   let credsTyped = !_cached;                                  // typed-this-visit ⇒ auth errors are theirs to see
-  if(_cached) _authVeil(true);                                // hold the backdrop until the relay accepts
-  let creds = _cached || await signIn();
+  let creds = _cached || await signIn();                      // (veil already up since connectSync entry)
   window.__setMyName(creds.name);
   const key = (q.get('key')||creds.key||'').trim();
   function buildUrl(){ let u = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(creds.name);
