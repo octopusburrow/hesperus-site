@@ -3211,6 +3211,15 @@ async function resolveSyncUrl(q){
 }
 // sign-in overlay → {name, pw}. URL creds (?name/?key — our hand-crafted path) or a cached
 // localStorage login skip it; otherwise prompt once and cache. pw is the relay's entry gate.
+// Auth veil (2026-07-09, Nix): during a cached/URL auto-join the overlay shows as a bare backdrop
+// (form hidden) so the world isn't glimpsed before the relay accepts — welcome drops it, 4001
+// reveals the form. Stale cached passwords re-prompt with NO error; only a TYPED failure earns one.
+let _siCard=null;
+function _authVeil(on){ const ov=document.getElementById('signin'); if(!ov) return;
+  const card=_siCard||(_siCard=ov.firstElementChild);
+  if(on){ if(card) card.style.visibility='hidden'; ov.style.display='flex'; }
+  else if(card) card.style.visibility='';
+}
 function signIn(prefillErr){
   return new Promise(res=>{ const ov=document.getElementById('signin'); if(!ov){ res({name:playerName, pw:''}); return; }
     const nm=document.getElementById('siName'), pw=document.getElementById('siPw'), go=document.getElementById('siGo'), err=document.getElementById('siErr');
@@ -3241,7 +3250,10 @@ function cachedCreds(q){
     q.set('room', room);
     history.replaceState(null,'', location.pathname+'?'+q.toString()); }
   showRoom(room);
-  let creds = cachedCreds(q) || await signIn();               // URL/cached login, else the overlay
+  const _cached = cachedCreds(q);                             // URL/cached login, else the overlay
+  let credsTyped = !_cached;                                  // typed-this-visit ⇒ auth errors are theirs to see
+  if(_cached) _authVeil(true);                                // hold the backdrop until the relay accepts
+  let creds = _cached || await signIn();
   window.__setMyName(creds.name);
   const key = (q.get('key')||creds.key||'').trim();
   function buildUrl(){ let u = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(creds.name);
@@ -3250,21 +3262,27 @@ function cachedCreds(q){
   let url = buildUrl();
   // RECONNECT (2026-07-07): server restarts used to silently kill everyone's socket for the rest
   // of the session. Backoff 1s→10s forever. Auth reject (4001) → re-prompt instead of spin-retry.
-  let retryMs = 1000;
+  let retryMs = 1000, _everWelcomed = false, _veilOff = false;
   function connect(){
+  if(!_everWelcomed && !_veilOff) _authVeil(true);             // every pre-accept attempt stays behind the backdrop
   try { sock = new WebSocket(url); } catch(e){ console.warn('sync connect failed', e); return; }
   sock.onopen = ()=>{ console.log('sync: connected', room); retryMs = 1000; dbg('sync', 'connected', 'g'); };
   sock.onclose = (ev)=>{
     if(ev && ev.code===4001){                                  // bad password → clear cache, re-prompt, retry
-      try{ localStorage.removeItem('porch.creds'); }catch(e){}
+      try{ localStorage.setItem('porch.creds', JSON.stringify({name:creds.name||''})); }catch(e){}   // drop only the pw: the name still greets them
       dbg('sync','password rejected — re-prompting','e');
-      signIn('that password didn’t work — check with your host').then(c=>{ creds=c; window.__setMyName(c.name); url=buildUrl(); retryMs=1000; connect(); });
+      _authVeil(false);                                        // veil → form (backdrop stays: no world glimpse)
+      signIn(credsTyped ? 'that password didn’t work — check with your host' : '')
+        .then(c=>{ credsTyped=true; creds=c; window.__setMyName(c.name); url=buildUrl(); retryMs=1000; connect(); });
       return; }
+    if(!_everWelcomed){ _veilOff=true; _authVeil(false); const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; }  // server unreachable ≠ veil-lock: show the world, keep retrying
     dbg('sync', `disconnected — retrying in ${retryMs/1000}s`, 'e');
     setTimeout(connect, retryMs); retryMs = Math.min(retryMs*2, 10000); };
   sock.onmessage = (ev)=>{
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
     if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
+      _everWelcomed = true;                                    // accepted: drop the auth veil, reveal the world
+      _authVeil(false); { const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; }
       dbg('welcome', `#${m.id} ${m.display} (${myRole}) room=${m.room} proto=${m.proto}`, 'g');
       setAvatarRole(avatar, myRole); showRole(myRole, m.display);
       if(window.__refreshOwnTag) window.__refreshOwnTag();   // re-badge the VRM nameplate (was stuck VISITOR)
