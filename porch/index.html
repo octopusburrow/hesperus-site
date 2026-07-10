@@ -110,7 +110,7 @@
 </div>
 <div id="mirrorToggle">
   <label><input type="checkbox" id="headcam" checked> VR&nbsp;Headcam&nbsp;→&nbsp;Desktop (1st&nbsp;person)</label><br>
-  <label><input type="checkbox" id="spec3rd"> 3rd-person view on desktop</label><br>
+  <label><input type="checkbox" id="spec3rd"> 3rd-person view</label><br>
   <label>sharpness&nbsp;<select id="aa">
     <option value="1">off</option>
     <option value="1.5" selected>medium</option>
@@ -3209,7 +3209,10 @@ function xrUISelect(i){
     const d=new THREE.Vector3(0,0,-1).applyQuaternion(c.getWorldQuaternion(new THREE.Quaternion()));
     _clickRC.set(o, d);
     if(_tryClickables(_clickRC)) return; }catch(e){}
-  const t=xrUI.hover[i]; if(t && t.userData && t.userData.vkbId!=null) vkbClick(t.userData.vkbId);
+  const t=xrUI.hover[i]; if(t && t.userData){
+    if(t.userData.vkbId!=null) vkbClick(t.userData.vkbId);
+    else if(t.userData.action){ const r=t.userData.action(); if(r && typeof dbg==='function') dbg('click', String(r), 'k'); }
+  }
 }
 
 // ---- VR emote panel: world-space buttons summoned by the right thumbstick. Buttons carry
@@ -3250,6 +3253,13 @@ window.__toggleEmotePanel=(f)=>{
   EMOTE_PANEL.on=on; g.visible=on;
   EMOTE_PANEL.buttons.forEach(b=>{ const idx=_clickables.indexOf(b);   // only clickable while open
     if(on && idx<0) _clickables.push(b); if(!on && idx>=0) _clickables.splice(idx,1); });
+  // VR: ride the VKB's laser-pointer infra (Nix: 'no pointer, no highlight — can't aim'). Targets
+  // registered → rays light up, hover tints, trigger clicks. Removed on close so lasers sleep.
+  if(typeof xrUI!=='undefined'){
+    if(on) EMOTE_PANEL.buttons.forEach(b=>{ if(!xrUI.targets.includes(b)) xrUI.targets.push(b); });
+    else { xrUI.targets = xrUI.targets.filter(t=>!EMOTE_PANEL.buttons.includes(t));
+           for(let i=0;i<2;i++) if(EMOTE_PANEL.buttons.includes(xrUI.hover[i])) xrUI.hover[i]=null; }
+  }
   return on;
 };
 
@@ -3329,8 +3339,12 @@ function signIn(prefillErr){
 }
 function cachedCreds(q){
   const un=q.get('name'), uk=q.get('key');
-  if(un||uk) return {name:un||playerName, pw:q.get('pw')||'', key:uk||''};   // our hand-crafted path
-  try{ const c=JSON.parse(localStorage.getItem('porch.creds')||'null'); if(c&&c.name) return c; }catch(e){}
+  let stored=null; try{ stored=JSON.parse(localStorage.getItem('porch.creds')||'null'); }catch(e){}
+  // URL creds MERGE with the cache (Nix's seamless-pip ask, 2026-07-10): a ?key= URL without ?pw=
+  // used to ignore the remembered password and re-prompt on every reload — so the update pip
+  // couldn't be a one-click restart. Key from URL, pw from wherever we have it.
+  if(un||uk) return {name:un||(stored&&stored.name)||playerName, pw:q.get('pw')||(stored&&stored.pw)||'', key:uk||''};
+  if(stored&&stored.name) return stored;
   return null;
 }
 (async function connectSync(){
@@ -4419,7 +4433,19 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     }
   }
   avatar.visible = false;                         // the driver never sees their own capsule
-  renderer.render(scene, camera);
+  if(!renderer.xr.isPresenting && spec3rd.checked){   // desktop 3rd person (Nix: 'just 3rd person, either mode')
+    if(!playerVrm) avatar.visible = true;
+    if(window.__setHeadScale) window.__setHeadScale(1);
+    const back = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+    specCam.position.copy(player.position).addScaledVector(back, 3.2); specCam.position.y = player.position.y + 2.3;
+    specCam.lookAt(player.position.x, player.position.y + 1.4, player.position.z);
+    specCam.aspect = innerWidth/innerHeight; specCam.updateProjectionMatrix();
+    renderer.render(scene, specCam);
+    if(window.__setHeadScale) window.__setHeadScale(0);
+    avatar.visible = false;
+  } else {
+    renderer.render(scene, camera);
+  }
   // ---- desktop view of the VR session (checkbox-gated) ----
   if(renderer.xr.isPresenting && (headcam.checked || spec3rd.checked)){
     const xrCam = renderer.xr.getCamera();
