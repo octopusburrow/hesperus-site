@@ -3928,6 +3928,7 @@ const CMD_HELP = [
   '/follow <name> — walk after someone · /stay — stop', '/spawn <cube|sphere|cone|cylinder>',
   '/face <happy|sad|angry|surprised|relaxed|catface> [secs] — expression (others see it)',
   '/wink [l|r] · /outfit <piece|all|none> — suit clothes · T or /pat — pat/boop whoever you face',
+  '/actions [agent] — the menu: everything you can do here · /do <action.id> — run one',
   'actions announce themselves in chat; queries stay between us',
 ];
 function runCommand(raw){
@@ -3955,11 +3956,83 @@ function runCommand(raw){
         const n=_setOutfit(playerVrm,p,hidden); cmdNote(n?('outfit: '+p+(hidden?' on':' off')):'this body has no '+p); }
       else cmdNote('usage: /outfit <'+OUTFIT_PIECES.join('|')+'|all|none>'); break; }
     case 'pat': case 'boop': case 'touch': cmdNote(String(window.__tryTouch())); break;
+    case 'actions': { const forAgent = (rest[0]||'').toLowerCase()==='agent';
+      cmdNote('— things you can do here'+(forAgent?' (agent catalog)':'')+' —');
+      actionCatalogText(forAgent).split('\n').forEach(cmdNote); break; }
+    case 'do': { const id=rest[0]; if(!id){ cmdNote('usage: /do <action.id> — see /actions'); break; }
+      cmdNote(String(doAction(id))); break; }
     default: cmdNote(`unknown command /${cmd} — try /help`);
   }
   return 'cmd';
 }
 window.__runCommand = runCommand;                         // headless/test entrypoint
+
+// ============================================================================================
+// ACTION REGISTRY — one table of "things you can do here", projected onto every surface (radial
+// menu, desktop, slash, agent catalog). See notes/ui-organization-design.md. Bindings are LAZY
+// (resolved at dispatch) so they tolerate the player/agent embodying later. This is ADDITIVE: it
+// WRAPS the existing window.* / window.agent.* implementations — no behaviour is reimplemented,
+// nothing existing is rewired. Surfaces migrate onto it incrementally.
+// ============================================================================================
+const PORCH_ACTIONS = [
+  // — Emotes (human + agent) —
+  {id:'emote.wave',  cat:'Emote', label:'Wave',       icon:'👋', desc:'a friendly wave',
+    human:()=>window.__doEmote&&window.__doEmote('wave'),  agent:a=>a.emote&&a.emote('wave')},
+  {id:'emote.cheer', cat:'Emote', label:'Cheer',      icon:'🎉', desc:'celebrate',
+    human:()=>window.__doEmote&&window.__doEmote('cheer'), agent:a=>a.emote&&a.emote('cheer')},
+  {id:'emote.dance', cat:'Emote', label:'Dance',      icon:'💃', desc:'dance',
+    human:()=>window.__doEmote&&window.__doEmote('dance'), agent:a=>a.emote&&a.emote('dance')},
+  {id:'emote.raise', cat:'Emote', label:'Raise hand', icon:'🙌', desc:'raise a hand',
+    human:()=>window.__doEmote&&window.__doEmote('raise'), agent:a=>a.emote&&a.emote('raise')},
+  {id:'emote.standingwave', cat:'Emote', label:'Signature wave', icon:'🌊', desc:'the resident’s procedural ripple wave',
+    human:null, agent:a=>a.procEmote&&a.procEmote('standingwave')},
+  {id:'emote.wink',  cat:'Emote', label:'Wink',       icon:'😉', desc:'a wink',
+    human:null, agent:a=>a.wink&&a.wink()},
+  // — Expressions (agent face-life; humans set via /face) —
+  {id:'face.happy',     cat:'Express', label:'Smile',    icon:'🙂', desc:'happy expression',    human:null, agent:a=>a.face&&a.face('happy')},
+  {id:'face.sad',       cat:'Express', label:'Frown',    icon:'🙁', desc:'sad expression',      human:null, agent:a=>a.face&&a.face('sad')},
+  {id:'face.surprised', cat:'Express', label:'Gasp',     icon:'😮', desc:'surprised expression',human:null, agent:a=>a.face&&a.face('surprised')},
+  {id:'face.catface',   cat:'Express', label:'Cat face', icon:'😺', desc:'the cat face',        human:null, agent:a=>a.face&&a.face('catface')},
+  // — Move (agent locomotion; humans walk with WASD, so these are agent + slash only) —
+  {id:'move.come',   cat:'Move', label:'Come here', icon:'🚶', desc:'walk to whoever called', surfaces:['agent'], agent:a=>a.comeHere&&a.comeHere()},
+  {id:'move.follow', cat:'Move', label:'Follow',    icon:'👣', desc:'follow the caller',       surfaces:['agent'], agent:a=>a.follow&&a.follow()},
+  {id:'move.stay',   cat:'Move', label:'Stay',      icon:'🛑', desc:'stop and stay put',        surfaces:['agent'], agent:a=>a.stay&&a.stay()},
+  {id:'move.faceme', cat:'Move', label:'Face me',   icon:'👁', desc:'turn to face the caller',  surfaces:['agent'], agent:a=>a.faceMe&&a.faceMe()},
+  // — Make (both kinds; the porch’s thesis: same affordance, not a lesser tier) —
+  {id:'make.text',  cat:'Make', label:'Manifest text', icon:'✍', desc:'words on a plane (<=240 chars)', args:{text:'string'},
+    human:()=>window.__promptText&&window.__promptText(),  agent:(a,x)=>window.__addText&&window.__addText(x&&x.text)},
+  {id:'make.image', cat:'Make', label:'Add image',     icon:'🖼', desc:'an image plane (agents pass a data URL via the harness)', args:{dataURL:'string', aspect:'number'},
+    human:()=>window.__pickImage&&window.__pickImage(),    agent:null},
+  {id:'make.spawn', cat:'Make', label:'Spawn shape',   icon:'⬛', desc:'a primitive maker block', args:{shape:'cube|sphere|cone|cylinder'},
+    human:()=>window.spawn&&window.spawn('cube'),          agent:(a,x)=>window.spawn&&window.spawn((x&&x.shape)||'cube')},
+];
+const PORCH_ACTION_BY_ID = Object.fromEntries(PORCH_ACTIONS.map(a=>[a.id, a]));
+// which surfaces an action appears on (explicit surfaces[] wins; else inferred from its bindings)
+function actionSurfaces(a){ if(a.surfaces) return a.surfaces;
+  const s=[]; if(a.human) s.push('radial','desktop'); if(a.agent) s.push('agent'); return s; }
+// HUMAN dispatch (radial/desktop/slash): run the local-player binding
+function doAction(id){ const a=PORCH_ACTION_BY_ID[id];
+  if(!a || !a.human) return `no human action '${id}'`;
+  try{ a.human(); return a.id; }catch(e){ return 'action failed: '+e.message; } }
+// AGENT dispatch: structured API beneath the NL grammar — agentDo('emote.wave') etc.
+function agentDo(id, args){ const a=PORCH_ACTION_BY_ID[id];
+  if(!a || !a.agent) return `no agent action '${id}'`;
+  if(!window.agent) return 'no body yet';
+  try{ return a.agent(window.agent, args) || a.id; }catch(e){ return 'action failed: '+e.message; } }
+// the AGENT MENU: the registry, filtered to agent-surfaced actions, as a structured catalog. Drives
+// /actions, the (auto-generated) llms.txt Actions section, and the brain prompt — one source of truth.
+function agentActionCatalog(){ return PORCH_ACTIONS.filter(a=>actionSurfaces(a).includes('agent'))
+  .map(a=>({id:a.id, cat:a.cat, label:a.label, desc:a.desc, args:a.args||null})); }
+// a plain-text render of the catalog, grouped by category — shared by /actions and llms.txt
+function actionCatalogText(forAgent){
+  const list = PORCH_ACTIONS.filter(a=>actionSurfaces(a).includes(forAgent?'agent':'desktop'));
+  const cats={}; for(const a of list){ (cats[a.cat]=cats[a.cat]||[]).push(a); }
+  return Object.entries(cats).map(([c,as])=> `${c}:\n`+as.map(a=>{
+    const args=a.args?` (${Object.keys(a.args).join(', ')})`:'';
+    return `  ${a.icon||' '} ${a.id}${args} — ${a.desc}`; }).join('\n')).join('\n\n'); }
+window.__actions = PORCH_ACTIONS; window.__doAction = doAction;   // surfaces + tests read these
+window.__agentDo = agentDo; window.__agentCatalog = agentActionCatalog;
+
 function chatMentions(text){ return [...text.matchAll(/@([A-Za-z0-9_\-]+)/g)].map(m=>m[1].toLowerCase()); }
 // scrollable transcript of every channel (typed chat, TTS spoken, STT heard) — debug history
 const CHAT_HIST_MAX = 250;
