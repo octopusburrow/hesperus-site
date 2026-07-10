@@ -177,6 +177,7 @@
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
+  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
@@ -668,6 +669,31 @@ let _starMat = null;
     window.__starCount = count;
   }).catch(e=>console.warn('stars load failed', e));
 })();
+
+// ---- STAR NAMES (2026-07-10, for the stargazers): faint troika labels on the bright named stars, aligned
+// to the starfield's rotation so they sit on the right stars. Toggle in ☰ (default off — clean sky).
+let _starLabels = null; const _slQ = new THREE.Quaternion();
+function _buildStarLabels(){
+  if(_starLabels) { _starLabels.visible = true; return; }
+  _starLabels = new THREE.Group(); scene.add(_starLabels);   // unrotated: positions are PRE-rotated
+  fetch('./assets/stars_named.json').then(r=>r.json()).then(list=>{
+    const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
+    for(const s of list){
+      if(s.n === 'Sol') continue;                          // no Sun label in the night sky
+      const wx = (s.x*cy + s.z*sy)*R, wy = s.y*R, wz = (-s.x*sy + s.z*cy)*R;   // rotate into world
+      const t = makeTextMesh(s.n, {size:11, color:0xcfe0f2, font:'sans', renderOrder:3});
+      t.position.set(wx, wy + 10, wz);                     // float the name just above the star
+      t.material.opacity = 0.78; t.material.transparent = true; t.material.depthTest = false;
+      t.material.fog = false;                              // CRITICAL: scene fog (far 130) is way inside R=420 → fog would erase them
+      _starLabels.add(t);                                  // billboarded in the render loop (onBeforeRender is too late — matrix already built)
+    }
+    window.__starLabelCount = list.length;
+  }).catch(e=>console.warn('star labels failed', e));
+}
+function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
+window.__setStarNames = setStarNames;
+addEventListener('DOMContentLoaded', ()=>{ const cb=document.getElementById('starNamesToggle');
+  if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked)); });
 
 // ---- the playa: cracked-earth PHOTO texture (First Light's CC0 ground, Nix's ask
 // 2026-07-07) modulated by the original procedural layers — fades, spill, crests kept ----
@@ -4869,6 +4895,8 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   fenceMat.uniforms.uTime.value = t;
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
   if(_starMat) _starMat.uniforms.uTime.value = t;          // star twinkle
+  if(_starLabels && _starLabels.visible && _starLabels.children.length){   // billboard star-name labels to the camera (before draw)
+    camera.getWorldQuaternion(_slQ); for(const c of _starLabels.children) c.quaternion.copy(_slQ); }
   if(_imgLoaders>0) _imgLoadMat.uniforms.uTime.value = t;  // image loading placeholders sweep/shimmer
   if(_pendingImg.size){ for(const [cid,e] of _pendingImg) if(now-e.t0 > 20000) _clearPendingImg(cid); }  // echo never came
   for(const m of _porticoMotes){ const a=m.geo.attributes.position; // motes drift up + wrap, slight sway
