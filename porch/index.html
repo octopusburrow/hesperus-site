@@ -14,7 +14,7 @@
 <style>
   html,body{margin:0;height:100%;background:#0a0c10;overflow:hidden;font-family:Georgia,serif}
   canvas{display:block}
-  #michud{position:fixed;left:14px;bottom:200px;width:42px;height:42px;z-index:45}
+  #michud{position:fixed;left:14px;bottom:104px;width:42px;height:42px;z-index:45}
   #michud img{width:100%;height:100%}
   #plaque{position:fixed;left:16px;bottom:14px;color:#b9a683;opacity:.85;font-size:13px;
     line-height:1.5;max-width:34em;pointer-events:none;text-shadow:0 1px 3px #000}
@@ -123,8 +123,8 @@
 <div id="chatbar"><div id="chathist"></div><textarea id="chatinput" maxlength="280" rows="1"
   placeholder="type to talk — Enter sends · Shift+Enter newline · @Name to address"></textarea></div>
 <button id="menuBtn" title="menu (M)">☰</button>
-<button id="emoteBtn" title="emotes (G)" style="position:fixed;left:14px;bottom:104px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🙂</button>
-<div id="emoteTray" style="position:fixed;left:66px;bottom:104px;z-index:6;display:none;flex-direction:row;gap:6px">
+<button id="emoteBtn" title="emotes (G)" style="position:fixed;left:14px;bottom:200px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🙂</button>
+<div id="emoteTray" style="position:fixed;left:66px;bottom:200px;z-index:6;display:none;flex-direction:row;gap:6px">
   <button class="emoteItem" data-emote="wave"  style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="wave (1)">👋</button>
   <button class="emoteItem" data-emote="cheer" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="cheer (2)">🎉</button>
   <button class="emoteItem" data-emote="dance" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="dance (3)">💃</button>
@@ -1656,6 +1656,9 @@ if(_residentPick){
     const lookTargetObj = new THREE.Object3D(); scene.add(lookTargetObj);
     let facingSource = null;
     function lookAtSource(obj){ facingSource = obj || player; }
+    function _nearestRemote(){ let best=null, bd=Infinity;      // face SOMEONE, not the spawn rig
+      for(const rr of remotes.values()){ const d=rr.group.position.distanceToSquared(vrm.scene.position);
+        if(d<bd){ bd=d; best=rr; } } return best; }
     function clearLook(){ facingSource = null; if(vrm.lookAt) vrm.lookAt.target = null; }
     // ---- address ANOTHER agent (AI↔AI): face a named occupant and/or @mention them so THEIR
     // gate fires. _addressNext is a ONE-SHOT facing-address (set by faceName, consumed by the next
@@ -1768,8 +1771,8 @@ if(_residentPick){
       if(!ping){ dbg('hear', `cached ${speaker} (${typed?'typed':'said'}): ${text.slice(0,60)}`); return 'cached from '+speaker; }
       dbg('hear', `ADDRESSED by ${speaker} (${typed?'typed':'said'}): ${text.slice(0,60)}`, 'g');
       if(stateName==='idle' && !listening){
-        const r=[...remotes.values()].find(x=>x.group.userData.name===speaker);
-        lookAtSource(r ? r.group : player);
+        const r=[...remotes.values()].find(x=>x.group.userData.name===speaker) || (typeof _nearestRemote==='function'?_nearestRemote():null);
+        lookAtSource(r ? r.group : player);   // nearest beats spawn-rig: the 180°-away bug (Nix 2026-07-09)
         respond(`${speaker}${typed?' (typed)':''}: ${text}`);
       } else {
         // #10: addressed while busy. Without this the message only cached and I'd answer
@@ -1800,7 +1803,7 @@ if(_residentPick){
       const hasFresh = backlog.some(e=>!e.delivered);
       deferredPing=false;
       if(!hasFresh){ deferredSpeaker=null; return; }             // everything aged out — nothing owed
-      const r=[...remotes.values()].find(x=>x.group.userData.name===deferredSpeaker);
+      const r=[...remotes.values()].find(x=>x.group.userData.name===deferredSpeaker) || (typeof _nearestRemote==='function'?_nearestRemote():null);
       lookAtSource(r ? r.group : player); deferredSpeaker=null;
       dbg('hear', 'draining deferred cache (was busy when addressed)', 'g');
       respond('[continuing — messages arrived while you were busy]');
@@ -1879,6 +1882,9 @@ if(_residentPick){
             resSock.send(JSON.stringify({t:'pose', x:vrm.scene.position.x, y:vrm.scene.position.y,
               z:vrm.scene.position.z, ry:vrm.scene.rotation.y, name:RESIDENT_NAME,
               color:0xffb45e, model:modelName||'ai',
+              state:stateName!=='idle'?stateName:undefined,   // thinking/listening/speaking/working — the signs
+              // Nix (2026-07-09): "didn't see the thinking/listening signs" — they were drawn on the
+              // HOSTING window's local tag only; the state never rode the wire. Now remotes render it.
               face:(function(){ const s=_faceLife.get(vrm); return (s&&s.expr)?s.expr.name:undefined; })(),
               hid:_outfitField(vrm)||'', world:'porch'}));   // the resident lives on the porch (presence world-tag)
         }, 150);
@@ -1918,7 +1924,17 @@ if(_residentPick){
         // brain SEES them. facingSource is set by hearRemote/drainDeferred to the speaker's group;
         // skip if it's me (local self-address) or capture fails — the reply still works text-only.
         let image=null;
-        try{ if(facingSource && facingSource!==player) image = capturePOV(facingSource); }
+        try{
+          let tgt = (facingSource && facingSource!==player) ? facingSource : null;
+          if(!tgt){                                       // NEVER answer blind (Nix 2026-07-10): if the
+            let best=null, bd=Infinity;                   // facing chain wobbled (deferred/busy paths),
+            for(const rr of remotes.values()){            // shoot the NEAREST occupant instead
+              const d=rr.group.position.distanceToSquared(vrm.scene.position);
+              if(d<bd){ bd=d; best=rr; } }
+            if(best) tgt = best.group;
+          }
+          if(tgt) image = capturePOV(tgt);
+        }
         catch(e){ dbg('pov','capture failed: '+(e&&e.message||e),'e'); }
         if(sock && sock.readyState === 1){
           const reqId = 'b' + (++brainSeq) + '_' + myNet;
@@ -1988,7 +2004,13 @@ const ROLE_STYLE = {
   builder:   {bg:'rgba(58,138,138,0.92)', fg:'#eafaf7'},
   architect: {bg:'rgba(200,150,60,0.94)', fg:'#1a1206'},
 };
-function drawNameplate(name, role, model){
+const REMOTE_STATE_STYLE = {                       // live-state pill (resident signs, networked 2026-07-10)
+  thinking:  {bg:'rgba(70,76,130,0.92)',  fg:'#cdd4ff', label:'💭 thinking'},
+  listening: {bg:'rgba(46,96,72,0.92)',   fg:'#bfe8d0', label:'👂 listening'},
+  speaking:  {bg:'rgba(120,86,30,0.92)',  fg:'#ffe0a8', label:'📢 speaking'},
+  working:   {bg:'rgba(96,70,40,0.92)',   fg:'#e8cfa8', label:'🛠 working'},
+};
+function drawNameplate(name, role, model, state){
   const nc = document.createElement('canvas'); nc.width = 256; nc.height = 104;
   const ng = nc.getContext('2d');
   ng.textAlign='center'; ng.textBaseline='middle';
@@ -1997,9 +2019,11 @@ function drawNameplate(name, role, model){
   ng.beginPath(); ng.roundRect(4, 2, 248, 64, 11); ng.fill();
   ng.font='bold 31px Georgia'; ng.fillStyle='#e8dcc0'; ng.fillText(name, 128, 24);
   ng.font='14px Georgia'; ng.fillStyle='#9fb4c8'; ng.fillText('◆ '+(model||'human'), 128, 50);
-  // role pill
-  const st = ROLE_STYLE[role] || ROLE_STYLE.visitor;
-  const label = (role || 'visitor').toUpperCase();
+  // pill slot: LIVE STATE takes precedence over the static role (Nix couldn't see the resident's
+  // thinking/listening signs — they were host-window-local; now they ride the pose and render here)
+  const ss = state && REMOTE_STATE_STYLE[state];
+  const st = ss || ROLE_STYLE[role] || ROLE_STYLE.visitor;
+  const label = ss ? ss.label : (role || 'visitor').toUpperCase();
   ng.font='600 19px Georgia';
   const pw = ng.measureText(label).width + 26;
   ng.fillStyle = st.bg; ng.beginPath(); ng.roundRect(128-pw/2, 74, pw, 26, 8); ng.fill();
@@ -2039,38 +2063,69 @@ function setAvatarRole(g, role, model){
   if(role) g.userData.role = role;
   if(model) g.userData.model = model;
   const old = g.userData.tag.material.map;
-  g.userData.tag.material.map = drawNameplate(g.userData.name, g.userData.role, g.userData.model);
+  g.userData.tag.material.map = drawNameplate(g.userData.name, g.userData.role, g.userData.model, g.userData.state);
+  g.userData.tag.material.needsUpdate = true;
+  if(old) old.dispose();
+}
+window.__setAvatarState = (g,s)=>setAvatarState(g,s);   // headless pill tests
+function setAvatarState(g, state){                 // live thinking/listening/speaking/working pill
+  if(!g || !g.userData || !g.userData.tag) return;
+  if(g.userData.state === state) return;
+  g.userData.state = state || null;
+  const old = g.userData.tag.material.map;
+  g.userData.tag.material.map = drawNameplate(g.userData.name, g.userData.role, g.userData.model, g.userData.state);
   g.userData.tag.material.needsUpdate = true;
   if(old) old.dispose();
 }
 // transient speech/chat bubble over any avatar group (remote players, own mirror body).
 // Re-uses one plane per avatar; auto-hides. Same visual language as the resident's bubble.
+// Full-text remote bubble (Nix 2026-07-09: "your chatbox was cut off"): the old 168px canvas hard-
+// capped at 3 wrapped lines — a three-sentence reply lost its tail. Now the box grows to its content
+// (bottom-anchored so the tail stays at the mouth) and long texts PAGE through, VN-style.
 function showBubble(group, text, secs=6){
   if(!group || !text) return;
   let b = group.userData._bubble;
+  if(b && b.canvas.height !== 288){ group.remove(b.mesh); b = group.userData._bubble = null; }  // pre-pagination bubble: rebuild
   if(!b){
-    const c = document.createElement('canvas'); c.width=512; c.height=168;
+    const c = document.createElement('canvas'); c.width=512; c.height=288;
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.377),
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 0.647),
       new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false, depthWrite:false}));
-    mesh.position.y = 2.52; mesh.renderOrder = 1000; mesh.visible = false;
+    mesh.position.y = 2.66; mesh.renderOrder = 1000; mesh.visible = false;
     mesh.onBeforeRender = (r,s,cam)=> uprightBillboard(mesh, cam);
     group.add(mesh);
-    b = group.userData._bubble = {canvas:c, tex, mesh, timer:null};
+    b = group.userData._bubble = {canvas:c, tex, mesh, timer:null, pager:null};
   }
-  const g = b.canvas.getContext('2d'); g.clearRect(0,0,512,168);
-  g.fillStyle='rgba(14,16,22,0.85)'; g.beginPath(); g.roundRect(6,6,500,128,14); g.fill();
-  g.beginPath(); g.moveTo(238,132); g.lineTo(256,160); g.lineTo(274,132); g.closePath(); g.fill();
-  g.fillStyle='#eae2d0'; g.font='24px Georgia'; g.textAlign='center'; g.textBaseline='top';
-  const words=text.split(/\s+/); let line='', y=26; const lines=[];
+  const g = b.canvas.getContext('2d');
+  g.font='24px Georgia';
+  const words=text.split(/\s+/); let line=''; const lines=[];
   for(const w of words){ const t2=line?line+' '+w:w;
     if(g.measureText(t2).width>470 && line){ lines.push(line); line=w; } else line=t2; }
   if(line) lines.push(line);
-  for(const l of lines.slice(0,3)){ g.fillText(l,256,y); y+=30; }
-  b.tex.needsUpdate = true; b.mesh.visible = true;
+  const PAGE=7, pages=[];
+  for(let i=0;i<lines.length;i+=PAGE) pages.push(lines.slice(i,i+PAGE));
+  const drawPage=(pi)=>{
+    const ls=pages[pi], boxH=20+ls.length*30+(pages.length>1?18:0);
+    const top=288-28-boxH;                                        // bottom-anchored: tail stays at the mouth
+    g.clearRect(0,0,512,288);
+    g.fillStyle='rgba(14,16,22,0.85)'; g.beginPath(); g.roundRect(6,top,500,boxH,14); g.fill();
+    g.beginPath(); g.moveTo(238,top+boxH-2); g.lineTo(256,top+boxH+24); g.lineTo(274,top+boxH-2); g.closePath(); g.fill();
+    g.fillStyle='#eae2d0'; g.font='24px Georgia'; g.textAlign='center'; g.textBaseline='top';
+    let y=top+14; for(const l of ls){ g.fillText(l,256,y); y+=30; }
+    if(pages.length>1){ g.font='15px Georgia'; g.fillStyle='#9a917d';
+      g.textAlign='right'; g.fillText((pi+1)+' / '+pages.length, 494, top+boxH-20); }
+    b.tex.needsUpdate = true;
+  };
+  if(b.pager) clearInterval(b.pager); b.pager=null;
+  drawPage(0); b.mesh.visible = true;
+  const perPage = Math.max(3.2, secs/pages.length);
+  if(pages.length>1){ let pi=0;
+    b.pager = setInterval(()=>{ pi++; if(pi>=pages.length){ clearInterval(b.pager); b.pager=null; return; } drawPage(pi); }, perPage*1000); }
   if(b.timer) clearTimeout(b.timer);
-  b.timer = setTimeout(()=>{ b.mesh.visible=false; }, secs*1000);
+  b.timer = setTimeout(()=>{ b.mesh.visible=false; if(b.pager){ clearInterval(b.pager); b.pager=null; } },
+                       Math.max(secs, perPage*pages.length)*1000);
 }
+window.__showBubble = showBubble;   // headless bubble tests
 // megaphone 📢: shown on any occupant CURRENTLY PRODUCING VOLUME (mic activity for
 // humans, TTS playback for agents). Chat/text-only speech never shows it — the icon
 // answers "where is that sound coming from?", not "who is communicating?".
@@ -2116,7 +2171,7 @@ function _remoteDeps(){
     const vl = new GLTFLoader();
     vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
     const anims = {};
-    for(const [nm,url] of [['idle','standing-idle'],['walk','walk'],
+    for(const [nm,url] of [['idle','standing-idle'],['walk','walk'],['talk','talk'],
                            ['wave','wave'],['cheer','cheer'],['dance','dance'],['raise','raise']]){
       try{ const a = await vl.loadAsync('./assets/'+url+'.vrma');
         anims[nm] = (a.userData.vrmAnimations||[])[0]; }catch(e){}
@@ -3461,6 +3516,7 @@ function cachedCreds(q){
       if(_jump > 8){ teleportFX(r.tp.x, r.tp.z, false); teleportFX(m.x, m.z, true); }  // they teleported
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
       r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
+      if((m.state||null) !== (r.state||null)){ r.state = m.state||null; setAvatarState(r.group, r.state); }  // live signs
       r.world = m.world || 'porch';                  // presence world-tag — only shown when it matches mine
       if(m.emote && m.eid && m.eid !== r._eid){ r._eid = m.eid; if(r.playEmote) r.playEmote(m.emote); }  // one-shot emote per new id
       if(r.vrm && m.hid!==undefined) _applyOutfitField(r.vrm, m.hid);   // clothes toggles travel with the pose
@@ -4450,7 +4506,10 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     if(r.vrm){                                        // claudesona remotes: walk when moving + spring bones
       const sp = Math.hypot(r.group.position.x - px, r.group.position.z - pz) / Math.max(dt, 1e-4);
       const _emoting = r.emoteUntil && performance.now() < r.emoteUntil && sp <= 0.5;  // moving cancels an emote
-      if(r.play && !_emoting) r.play(sp > 0.5 ? 'walk' : 'idle');
+      if(r.play && !_emoting) r.play(sp > 0.5 ? 'walk'
+        : (r.state==='speaking' && r.acts && r.acts.talk) ? 'talk'      // the resident's inner life, animated
+        : (r.state==='working'  && r.acts && r.acts.dance) ? 'dance'    // remotely too (2026-07-10)
+        : 'idle');
       if(r.acts && r.acts.walk && r.cur === r.acts.walk)
         r.acts.walk.setEffectiveTimeScale(THREE.MathUtils.clamp(sp/1.6, 0.7, 1.8));
       if(r.face){                                  // synced expression: pose msgs refresh the hold window
