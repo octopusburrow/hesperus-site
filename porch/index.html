@@ -3238,12 +3238,15 @@ function buildEmotePanel(){
       : ()=>{ if(window.__doEmote) window.__doEmote(name); window.__toggleEmotePanel(false); return 'emote: '+name; };
     grp.add(m); EMOTE_PANEL.buttons.push(m);
   });
-  grp.visible=false; grp.position.set(0,-0.15,-0.5);   // in front of the face, slightly down; rides the rig
-  player.add(grp); EMOTE_PANEL.group=grp; return grp;
+  grp.visible=false; grp.position.set(0,-0.18,-0.55);  // in front of the FACE: camera-parented like the loading
+  camera.add(grp); EMOTE_PANEL.group=grp; return grp;  // bar — rig-parented spawned at the FEET/rig origin, which in
+                                                       // VR can be meters from the head (Nix: 'right stick does nothing'
+                                                       // — it toggled, somewhere she wasn't)
 }
 window.__toggleEmotePanel=(f)=>{
   const g=buildEmotePanel();
   const on=(f!==undefined)?!!f:!EMOTE_PANEL.on;
+  if(typeof dbg==='function') dbg('emote','panel '+(on?'open':'closed'),'k');   // visible feedback either way
   EMOTE_PANEL.on=on; g.visible=on;
   EMOTE_PANEL.buttons.forEach(b=>{ const idx=_clickables.indexOf(b);   // only clickable while open
     if(on && idx<0) _clickables.push(b); if(!on && idx>=0) _clickables.splice(idx,1); });
