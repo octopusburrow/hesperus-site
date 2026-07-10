@@ -2474,6 +2474,20 @@ window.__wristCal=(lx=0,ly=0,lz=0,rx=0,ry=0,rz=0)=>{ const d=Math.PI/180;
   _wristCalL.setFromEuler(new THREE.Euler(lx*d,ly*d,lz*d)); _wristCalR.setFromEuler(new THREE.Euler(rx*d,ry*d,rz*d));
   return `wrist cal L(${lx},${ly},${lz}) R(${rx},${ry},${rz})`; };
 window.__wristCal(0,0,-180, 0,0,0);   // Basis OpenXR baked default: the two grips differ by a 180° roll
+// MEASURED wrist calibration (Nix's 90°-offsets verdict, 2026-07-09): stop guessing grip axes.
+// She T-poses in the headset; at T-pose the normalized rig's hand REST world quat is exactly the
+// scene quat (identity local chain), and ikHandL/R hold the live grip world quats — so
+// cal = grip⁻¹ × rest, per side, measured on HER device. Persisted; survives sessions.
+window.__calibrateWrists=()=>{
+  const vrm=window.__playerVrm; if(!vrm) return 'no body to calibrate';
+  const sceneQ=vrm.scene.getWorldQuaternion(new THREE.Quaternion());
+  _wristCalL.copy(ikHandL.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(sceneQ));
+  _wristCalR.copy(ikHandR.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(sceneQ));
+  try{ localStorage.setItem('porch.wristcal', JSON.stringify({l:_wristCalL.toArray(), r:_wristCalR.toArray()})); }catch(e){}
+  return 'wrists calibrated from T-pose (saved)';
+};
+try{ const _wc=JSON.parse(localStorage.getItem('porch.wristcal')||'null');   // a measured cal beats the baked guess
+  if(_wc && _wc.l && _wc.r){ _wristCalL.fromArray(_wc.l); _wristCalR.fromArray(_wc.r); } }catch(e){}
 // FINGER CURLS (Basis fallback-hand port): trigger→index, squeeze→middle+ring+little, thumb rests.
 // Runs between mixer and vrm.update so curls compose onto the animated pose. VRM normalized rest:
 // left fingers +X / right −X, palms −Y → curl about ∓Z respectively.
@@ -2483,16 +2497,22 @@ const _CURL_ANGLES=[1.22, 1.57, 0.96];              // proximal/intermediate/dis
 const _curlQ=new THREE.Quaternion(), _curlE=new THREE.Euler();
 function fingerTick(vrm){
   const h=vrm.humanoid; if(!h) return;
+  // ASSIGN, don't accumulate (Nix's spinning-fingertips find, 2026-07-09): multiply() composed the
+  // curl onto LAST frame's result — nothing resets finger bones in VR (the idle clip doesn't track
+  // them), so the curl integrated into spin, rate ∝ trigger pressure. Capture each bone's base
+  // quat on first touch, then always base×curl. amt=0 restores the base (release un-curls).
+  const ud=vrm.userData=vrm.userData||{};
+  const base=ud._fingerBase||(ud._fingerBase=new Map());
   for(const side of ['left','right']){
     const sgn = side==='left' ? -1 : 1;
     const cur = window.__fingerCurl[side];
     for(const [finger, amtKey] of [['Index','index'],['Middle','grip'],['Ring','grip'],['Little','grip']]){
       const amt = Math.min(1, Math.max(0, cur[amtKey]||0));
-      if(amt<=0) continue;
       ['Proximal','Intermediate','Distal'].forEach((seg,i)=>{
         const b=h.getNormalizedBoneNode(side+finger+seg); if(!b) return;
+        let b0=base.get(b); if(!b0){ b0=b.quaternion.clone(); base.set(b,b0); }
         _curlQ.setFromEuler(_curlE.set(0,0,sgn*_CURL_ANGLES[i]*amt));
-        b.quaternion.multiply(_curlQ);
+        b.quaternion.copy(b0).multiply(_curlQ);
       });
     }
   }
@@ -3205,11 +3225,17 @@ function _emojiTex(txt){
 function buildEmotePanel(){
   if(EMOTE_PANEL.group) return EMOTE_PANEL.group;
   const grp=new THREE.Group();
-  [['wave','👋'],['cheer','🎉'],['dance','💃'],['raise','🙌']].forEach(([name,emoji],i)=>{
+  [['wave','👋'],['cheer','🎉'],['dance','💃'],['raise','🙌'],['calibrate','🎯']].forEach(([name,emoji],i)=>{
     const m=new THREE.Mesh(new THREE.PlaneGeometry(0.12,0.12),
       new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
-    m.position.set((i-1.5)*0.145, 0, 0); m.renderOrder=999;
-    m.userData.action=()=>{ if(window.__doEmote) window.__doEmote(name); window.__toggleEmotePanel(false); return 'emote: '+name; };
+    m.position.set((i-2)*0.145, 0, 0); m.renderOrder=999;
+    m.userData.action = name==='calibrate'
+      ? ()=>{ window.__toggleEmotePanel(false);                 // 🎯 wrist cal: 5s to T-pose, then capture
+          if(typeof dbg==='function') dbg('cal','T-POSE now — capturing wrists in 5s…','k');
+          setTimeout(()=>{ const r=window.__calibrateWrists ? window.__calibrateWrists() : 'no cal fn';
+            if(typeof dbg==='function') dbg('cal', r, 'g'); }, 5000);
+          return 'calibrating in 5s — hold a T-pose'; }
+      : ()=>{ if(window.__doEmote) window.__doEmote(name); window.__toggleEmotePanel(false); return 'emote: '+name; };
     grp.add(m); EMOTE_PANEL.buttons.push(m);
   });
   grp.visible=false; grp.position.set(0,-0.15,-0.5);   // in front of the face, slightly down; rides the rig
