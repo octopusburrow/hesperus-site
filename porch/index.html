@@ -154,13 +154,43 @@
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/",
 "@pixiv/three-vrm":"./vendor/three-vrm.module.js",
-"@pixiv/three-vrm-animation":"./vendor/three-vrm-animation.module.js"}}
+"@pixiv/three-vrm-animation":"./vendor/three-vrm-animation.module.js",
+"troika-three-text":"./vendor/troika-three-text.module.js"}}
 </script>
 <script type="module">
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
 import {Reflector} from 'three/addons/objects/Reflector.js';
+import {Text as TroikaText, preloadFont} from 'troika-three-text';
+
+// ---- SDF vector text (troika) — crisp 3D labels at any distance, replacing the canvas-texture
+// approach that pixelated close up (Nix, repeatedly). vendored + proven: tests/troika_render_test.html.
+const PORCH_FONT = './vendor/fonts/gelasio.ttf';         // OFL Georgia-twin; matches the canvas serif we used
+let _fontReady = false;
+// ASCII-ONLY preload: any glyph Gelasio lacks (◆, ·, box-drawing…) makes troika fetch a fallback-font
+// index from jsdelivr — a hidden external dependency that dies under CSP/offline. Keep the warmup to
+// glyphs we KNOW ship in the vendored font; exotic user glyphs still render on demand (fetch only then).
+preloadFont({font: PORCH_FONT, characters: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,!?:;\'"()-@#'},
+  ()=>{ _fontReady = true; });
+// makeTextMesh: returns a troika Text (a THREE.Mesh subclass). opts: {size, color, maxWidth,
+// anchorX, anchorY, align, outline}. Call .sync(cb) — cb fires with bounds once the SDF is built.
+function makeTextMesh(str, opts={}){
+  const t = new TroikaText();
+  t.text = String(str||'');
+  t.font = PORCH_FONT;
+  t.fontSize = opts.size!=null ? opts.size : 0.14;
+  t.color = opts.color!=null ? opts.color : 0xece3cf;
+  t.anchorX = opts.anchorX || 'center';
+  t.anchorY = opts.anchorY || 'middle';
+  if(opts.maxWidth!=null) t.maxWidth = opts.maxWidth;
+  if(opts.align) t.textAlign = opts.align;
+  if(opts.outline){ t.outlineWidth = opts.outline; t.outlineColor = 0x0a0c10; t.outlineOpacity = 0.9; }
+  t.material.depthWrite = false;                          // labels overlay, like the canvas planes did
+  if(opts.renderOrder!=null) t.renderOrder = opts.renderOrder;
+  t.sync(()=>{ if(opts.onSync) opts.onSync(t); });         // pass the text obj IN — don't close over an outer const that may not be initialized yet
+  return t;
+}
 
 const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
 // ---- DISTRICTS (2026-07-09): VR-surviving porticos. Chrome 150 HARDENED navigation during
@@ -1062,18 +1092,19 @@ function addPortico(dest, x, z, label, ry=0){
     new THREE.MeshBasicMaterial({color:0x9a7fd0, transparent:true, opacity:0.16,
       side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false}));
   veil.rotation.y = Math.PI/2; veil.position.set(0, 1.19, 0); g.add(veil);
-  if(label){                                             // destination label (Nix 2026-07-09): plain text for now
-    const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96;
-    const lg = lc.getContext('2d'); lg.textAlign='center'; lg.textBaseline='middle';
-    lg.fillStyle='rgba(10,12,16,0.55)'; lg.beginPath(); lg.roundRect(26, 16, 460, 64, 14); lg.fill();
-    lg.font='italic 38px Georgia'; lg.fillStyle='#cdbde8'; lg.fillText(label, 256, 49, 440);   // maxWidth: long test-tags condense, not overflow
-    const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace; lt.anisotropy = 4;
-    // upright billboard PLANE, not a Sprite: sprites are screen-aligned so they ROLL with a tilted
-    // VR head (Nix live 2026-07-09) — planes + uprightBillboard stay level like the nameplates
-    const lbl = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.32),
-      new THREE.MeshBasicMaterial({map:lt, transparent:true, depthWrite:false}));
-    lbl.position.set(0, 2.85, 0); lbl.renderOrder=5;
+  if(label){                                             // destination label — SDF vector text (Nix: pixelated)
+    const lbl = new THREE.Group();                        // wrapper billboards; bg plane + troika text ride inside
+    const bg = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.34),
+      new THREE.MeshBasicMaterial({color:0x0a0c10, transparent:true, opacity:0.55, depthWrite:false}));
+    bg.renderOrder=5; lbl.add(bg);
+    const txt = makeTextMesh(label, {size:0.15, color:0xcdbde8, maxWidth:1.5, renderOrder:6,
+      onSync: (tm)=>{ const bb=tm.textRenderInfo&&tm.textRenderInfo.blockBounds; if(!bb) return;
+        bg.geometry.dispose(); bg.geometry=new THREE.PlaneGeometry((bb[2]-bb[0])+0.22, (bb[3]-bb[1])+0.14); } });
+    txt.position.z = 0.005; lbl.add(txt);
+    // upright billboard the WRAPPER (planes+uprightBillboard stay level; Sprites roll with a tilted VR head)
+    lbl.position.set(0, 2.85, 0);
     lbl.onBeforeRender=(r,s,cam)=>uprightBillboard(lbl,cam); g.add(lbl);
+    g.userData.labelMesh = lbl;                           // #27 will lintel-align + restyle from here
   }
   g.position.set(x, 0, z); g.rotation.y = ry; scene.add(g);
   addCollider(pL, 'portico-post'); addCollider(pR, 'portico-post');
@@ -3097,22 +3128,34 @@ function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x
   c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
 function applyText(msg){
   if(!msg.sid || textObjs.has(msg.sid) || !msg.text) return;
-  const t = drawTextTexture(msg.text);
-  const long = 1.0, aspect = t.w/t.h;                    // 1 m longest dimension, canvas aspect
-  const w = aspect>=1 ? long : long*aspect, h = aspect>=1 ? long/aspect : long;
-  const tex = new THREE.CanvasTexture(t.canvas); tex.colorSpace = THREE.SRGBColorSpace;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
-      new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true}));
+  // SDF vector text (Nix: canvas manifests looked pixelated). The grab/raycast mesh is a rounded
+  // background plane; the troika Text rides as its child and the plane resizes to fit once synced.
+  const FS = 0.09, PAD = 0.06, MAXW = 1.4;               // metres
+  const bgMat = new THREE.MeshBasicMaterial({color:0x12141b, transparent:true, opacity:0.82,
+    side:THREE.DoubleSide, depthWrite:false});
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.3), bgMat);   // placeholder size; fit on sync
   mesh.position.set(msg.x||0, msg.y!=null?msg.y:1.5, msg.z||0);
   mesh.rotation.y = msg.ry||0;
-  const g = _addProp(msg.sid, mesh, h/2);
-  g.isText = true; g.sid = msg.sid;
+  const txt = makeTextMesh(msg.text, {size:FS, color:0xece3cf, maxWidth:MAXW, align:'center',
+    renderOrder:6, onSync: (tm)=>{
+      const bb = tm.textRenderInfo && tm.textRenderInfo.blockBounds;     // [minX,minY,maxX,maxY]
+      if(!bb) return;
+      const w = (bb[2]-bb[0]) + PAD*2, h = (bb[3]-bb[1]) + PAD*2;
+      mesh.geometry.dispose(); mesh.geometry = new THREE.PlaneGeometry(Math.max(0.2,w), Math.max(0.14,h));
+      const g = grabbablesById[msg.sid]; if(g) g.hh = h/2;               // grab bounds follow the fit
+    }});
+  txt.position.z = 0.006;                                 // float text just off the bg to beat z-fighting
+  mesh.add(txt);
+  const g = _addProp(msg.sid, mesh, 0.15);
+  g.isText = true; g.sid = msg.sid; g._troika = txt;
   textObjs.set(msg.sid, mesh);
   if(msg.id === myNet) lastTextSid = msg.sid;
 }
 function removeText(sid){
   const mesh = textObjs.get(sid);
   if(mesh){ scene.remove(mesh); if(mesh.material.map) mesh.material.map.dispose();
+    const tr = mesh.children.find(c=>c.isTroikaText || c.dispose && c.textRenderInfo!==undefined);
+    if(tr && tr.dispose) tr.dispose();                   // free the SDF glyph atlas + geometry
     mesh.geometry.dispose(); mesh.material.dispose(); textObjs.delete(sid); }
   const g = grabbablesById[sid];
   if(g){ const i = grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
@@ -3158,6 +3201,7 @@ function addText(str){                                    // validate + broadcas
   return 'sent';
 }
 window.__addText = addText;
+window.__applyObj = applyObj;                              // spine entry (agents + headless tests render objects directly)
 function promptText(){                                     // NATIVE-FIRST: the real OS prompt works on desktop AND
   let s = null, threw = false;                             // desktop-in-VR (a streamed PC browser is NOT an immersive
   try { if(typeof prompt === 'function') s = prompt('Manifest text into the world:'); }  // WebXR session). Only fall
