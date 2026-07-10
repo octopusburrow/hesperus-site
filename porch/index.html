@@ -93,10 +93,20 @@
     <div style="font-size:11px;opacity:.4;margin-top:15px">🌒</div>
   </div>
 </div>
-<div id="plaque">
-  <b>WASD</b> walk · <b>Space</b> jump · drag to look (VR: left stick walks, right turns, A/X jumps)<br>
-  <b>B</b> spawn block · <b>arrows</b> nudge · <b>X</b> remove · <b>E</b> grab/drop (VR: squeeze grip)<br>
-  <b>Enter</b> chat · <b>/help</b> commands · <b>@Name</b> addresses an agent · <b>☰</b> menu (<b>M</b>) · <b>`</b> debug
+<div id="plaque"></div>
+<button id="ctlBtn" title="controls (?)" style="position:fixed;right:64px;bottom:12px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:19px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🎮</button>
+<div id="ctlPanel" style="position:fixed;right:12px;bottom:64px;z-index:7;display:none;max-width:340px;padding:14px 16px;border-radius:12px;background:rgba(14,18,25,.94);color:#cbbfa4;font-size:12.5px;line-height:1.75;box-shadow:0 4px 16px rgba(0,0,0,.5)">
+  <div style="color:#e8dcc0;font-size:13px;margin-bottom:4px">⌨️ Desktop</div>
+  <b>WASD</b> walk · <b>Space</b> jump · <b>drag</b> look · <b>click</b> world buttons<br>
+  <b>Enter</b> chat · <b>@Name</b> addresses · <b>/help</b> commands<br>
+  <b>E</b> grab/drop · <b>T</b> boop whoever you face<br>
+  <b>G</b> emotes · <b>1–4</b> 👋🎉💃🙌 · <b>M</b> menu · <b>`</b> debug<br>
+  <b>B</b> spawn block · <b>arrows</b> nudge · <b>X</b> remove<br>
+  <div style="color:#e8dcc0;font-size:13px;margin:8px 0 4px">🥽 VR</div>
+  <b>L-stick</b> walk · <b>R-stick</b> turn · <b>A/X</b> jump · <b>B/Y</b> mic<br>
+  <b>L-stick press</b> keyboard · <b>R-stick press</b> emotes<br>
+  <b>grip</b> grab/release · <b>trigger</b> press buttons / boop<br>
+  <b>“manifest …”</b> speak to make things (mic on)
 </div>
 <div id="mirrorToggle">
   <label><input type="checkbox" id="headcam" checked> VR&nbsp;Headcam&nbsp;→&nbsp;Desktop (1st&nbsp;person)</label><br>
@@ -193,7 +203,7 @@ scene.fog = new THREE.Fog(0x0d0f16, 25, 130);
 
 const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600);
 window.__cam = camera; window.__renderer = renderer;            // debug: headless render probes
-camera.position.set(0, 1.6, 0);
+camera.position.set(0, 1.6, -0.14);   // at the EYES, not the spine: z=0 sat inside the torso, so look-down showed your own back shell (Nix live 2026-07-09)
 
 // player rig: locomotion moves this; headset/mouse aims the camera inside it
 const player = new THREE.Group(); window.__player = player;
@@ -407,7 +417,7 @@ applyAA();
 // leaving VR with a tilted/pitched headset used to strand the desktop camera at that pose —
 // level it back out on exit (keep the rig yaw, zero the head roll/pitch).
 renderer.xr.addEventListener('sessionend', ()=>{
-  camera.position.set(0, 1.6, 0);
+  camera.position.set(0, 1.6, -0.14);   // at the EYES, not the spine: z=0 sat inside the torso, so look-down showed your own back shell (Nix live 2026-07-09)
   camera.rotation.set(0, 0, 0);
 });
 
@@ -907,7 +917,7 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   art.visible = false; mir.add(art);
   const btnMat = new THREE.MeshStandardMaterial({color:0x8f8f8f, roughness:0.45, metalness:0.7});
   const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.05, 20), btnMat);
-  btn.rotation.x = Math.PI/2; btn.position.set(MW/2+0.17, 1.35, 0.02);
+  btn.rotation.x = Math.PI/2; btn.position.set(MW/2+0.17, 1.0-(MH/2+0.02), 0.02);   // ≈1m off the deck (mir group sits at MH/2): Nix couldn't reach 2.6m
   mir.add(btn);
   let _mirrorOn = true;
   function setMirrorMode(on){
@@ -933,7 +943,7 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
 // navigation, so crossing in VR drops to the browser on the far side — reenter there. v1
 // candidates: same-page scene-swap (keeps the session), portal-camera render-to-texture veil.
 const _porticos = [];
-function addPortico(dest, x, z, label){
+function addPortico(dest, x, z, label, ry=0){
   const g = new THREE.Group();
   const stone = new THREE.MeshStandardMaterial({color:0x2b2438, roughness:0.6, metalness:0.2});
   const postG = new THREE.CylinderGeometry(0.10, 0.13, 2.4, 10);
@@ -948,16 +958,21 @@ function addPortico(dest, x, z, label){
   if(label){                                             // destination label (Nix 2026-07-09): plain text for now
     const lc = document.createElement('canvas'); lc.width = 512; lc.height = 96;
     const lg = lc.getContext('2d'); lg.textAlign='center'; lg.textBaseline='middle';
-    lg.fillStyle='rgba(10,12,16,0.55)'; lg.beginPath(); lg.roundRect(56, 16, 400, 64, 14); lg.fill();
-    lg.font='italic 38px Georgia'; lg.fillStyle='#cdbde8'; lg.fillText(label, 256, 49);
+    lg.fillStyle='rgba(10,12,16,0.55)'; lg.beginPath(); lg.roundRect(26, 16, 460, 64, 14); lg.fill();
+    lg.font='italic 38px Georgia'; lg.fillStyle='#cdbde8'; lg.fillText(label, 256, 49, 440);   // maxWidth: long test-tags condense, not overflow
     const lt = new THREE.CanvasTexture(lc); lt.colorSpace = THREE.SRGBColorSpace; lt.anisotropy = 4;
-    const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:lt, transparent:true, depthWrite:false}));
-    spr.scale.set(1.7, 0.32, 1); spr.position.set(0, 2.85, 0); g.add(spr);
+    // upright billboard PLANE, not a Sprite: sprites are screen-aligned so they ROLL with a tilted
+    // VR head (Nix live 2026-07-09) — planes + uprightBillboard stay level like the nameplates
+    const lbl = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.32),
+      new THREE.MeshBasicMaterial({map:lt, transparent:true, depthWrite:false}));
+    lbl.position.set(0, 2.85, 0); lbl.renderOrder=5;
+    lbl.onBeforeRender=(r,s,cam)=>uprightBillboard(lbl,cam); g.add(lbl);
   }
-  g.position.set(x, 0, z); scene.add(g);
+  g.position.set(x, 0, z); g.rotation.y = ry; scene.add(g);
   addCollider(pL, 'portico-post'); addCollider(pR, 'portico-post');
   const foreign = (typeof dest === 'string') || (typeof dest === 'object' && dest.url);
-  const rec = {dest, x, z, veil, label, foreign};
+  const rot = Math.abs(Math.sin(ry)) > 0.5;              // ~90°: passage runs along Z, zone extents swap
+  const rec = {dest, x, z, veil, label, foreign, hx: rot?0.72:0.45, hz: rot?0.45:0.72};
   if(foreign){
     const url = (typeof dest === 'string') ? dest : dest.url;
     const panel = _makeForeignPanel(url); g.add(panel); rec.panel = panel;
@@ -976,9 +991,11 @@ function _commitForeign(url){
   const back=encodeURIComponent(location.pathname+location.search);
   setTimeout(()=>{ location.href = url + (url.includes('?')?'&':'?') + 'back=' + back; }, 950);
 }
-addPortico({district:'void'}, 3.4,  0.6, 'the girih void');    // EAST — persistent district
-addPortico({district:'wake'}, -3.4,  0.6, 'the wake');        // WEST — dispose/rebuild world
-addPortico('https://moonrider.xyz', 0.0, 4.2, 'moon rider');  // FRONT — outside our walls (verified safe WebXR)
+// The test row (Nix 2026-07-09): all three off the deck onto the playa, lined up at z=8, rotated
+// 90° so you walk NORTH through them, each labeled with what it's testing.
+addPortico({district:'void'}, -3.2, 8, 'the girih void (district test)', Math.PI/2);
+addPortico({district:'wake'},  0.0, 8, 'the wake (home world test)',     Math.PI/2);
+addPortico('https://moonrider.xyz', 3.2, 8, 'moon rider (foreign world test)', Math.PI/2);
 addPortico({district:'porch'}, WAKE_X, 16, 'the porch');      // the way home, inside the wake
 window.__porticos = _porticos;                 // headless probes
 // FOREIGN THRESHOLD (Nix 2026-07-09): a portico whose dest is a URL string / {url} leaves
@@ -1026,7 +1043,7 @@ function checkPorticos(){
   if(_crossing || !player) return;
   let inForeign = null;
   for(const p of _porticos){
-    const inZone = Math.abs(player.position.x - p.x) < 0.45 && Math.abs(player.position.z - p.z) < 0.72;
+    const inZone = Math.abs(player.position.x - p.x) < (p.hx||0.45) && Math.abs(player.position.z - p.z) < (p.hz||0.72);
     if(p.foreign){                                               // foreign: ARM the warning, never auto-navigate
       if(inZone) inForeign = p;
       continue;
@@ -2117,7 +2134,7 @@ if(!new URLSearchParams(location.search).has('noembody')){
     player.add(vrm.scene);                             // rides the player rig
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt); px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
     playerMixer=new THREE.AnimationMixer(vrm.scene); const pAct={}; let pCur=null;
-    for(const [nm,url] of [['idle','standing-idle'],['walk','walk'],['cheer','cheer'],['dance','dance'],['wave','wave']]){
+    for(const [nm,url] of [['idle','standing-idle'],['walk','walk'],['cheer','cheer'],['dance','dance'],['wave','wave'],['raise','raise']]){
       try{ const a=await vl.loadAsync('./assets/'+url+'.vrma'); const va=(a.userData.vrmAnimations||[])[0];
         if(va) pAct[nm]=playerMixer.clipAction(createVRMAnimationClip(va,vrm)); }catch(e){}
     }
@@ -3660,6 +3677,27 @@ function remoteInEarshot(id){                                  // remote sender 
     if(e.code==='KeyG' && !e.metaKey && !e.ctrlKey && !e.altKey){ toggleTray(); }
     if(EMOTE_KEYS[e.code] && !e.metaKey && !e.ctrlKey && !e.altKey){ window.__doEmote(EMOTE_KEYS[e.code]); }
   });
+  // controls legend (Nix 2026-07-09: "ALL the affordances, bottom right")
+  const ctlBtn=document.getElementById('ctlBtn'), ctlPanel=document.getElementById('ctlPanel');
+  if(ctlBtn && ctlPanel) ctlBtn.addEventListener('click', ()=>{
+    ctlPanel.style.display = ctlPanel.style.display==='none' ? 'block' : 'none'; });
+  // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
+  // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
+  (function versionWatch(){
+    let baseline=null;
+    const check=async ()=>{ try{
+      const r=await fetch('./version.json', {cache:'no-store'}); if(!r.ok) return;
+      const v=(await r.json()).v; if(!v) return;
+      if(baseline===null){ baseline=v; return; }
+      if(v!==baseline && !document.getElementById('updBtn')){
+        const b=document.createElement('button'); b.id='updBtn'; b.title='a new Porch build is live — reload';
+        b.style.cssText='position:fixed;left:56px;top:12px;z-index:6;height:38px;padding:0 12px;cursor:pointer;border:0;border-radius:10px;background:rgba(20,26,34,.85);color:#e8dcc0;font-size:13px;font-family:Georgia,serif;box-shadow:0 2px 8px rgba(0,0,0,.4)';
+        b.innerHTML='new version <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e05545;margin-left:5px;vertical-align:middle"></span>';
+        b.onclick=()=>location.reload();
+        document.body.appendChild(b);
+      } }catch(e){} };
+    check(); setInterval(check, 60000);
+  })();
 }
 
 // ---- debug feed: the resident's subjective transcript, visible to everyone debugging ----
