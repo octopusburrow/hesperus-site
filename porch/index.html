@@ -208,6 +208,7 @@
 <script type="module">
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {SimplifyModifier} from 'three/addons/modifiers/SimplifyModifier.js';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
 import {Reflector} from 'three/addons/objects/Reflector.js';
 import {Text as TroikaText, preloadFont} from 'troika-three-text';
@@ -1017,7 +1018,7 @@ function sendProp(g){ const now=performance.now();
           q:[+q.x.toFixed(3),+q.y.toFixed(3),+q.z.toFixed(3),+q.w.toFixed(3)]}); }   // rotation rides along (2026-07-10)
 function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; claimProp(g); return g; }  // optimistic + claim
 function dropProp(g){ if(!g) return; g.carrying=false;               // owner stays mine; propPhysics arcs it + releases on rest
-  if(g.isImage){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;      // images don't fall — stay put + release now
+  if(g.isImage || g.isModel){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;   // images & 3D models don't fall — placed, not tossed
     _psend({t:'release', pid:g.pid}); return; }
   if(g.vel.length()<0.6) g.vel.set(0,0,0); else g.vel.multiplyScalar(1.1); }   // throw threshold + slight gain (Basis)
 function grabToggleDesktop(){                         // E: drop what I hold, else grab nearest in front
@@ -1056,8 +1057,8 @@ function _updateHover(){
         if(t>0 && t<bt && _hovRC.ray.distanceToPoint(sb.pos)<0.18){ bt=t; rayShelf=sb; } } }
   } else if(!held){ g=grabNearest(_reachPoint(),0.85); }      // unlocked keeps proximity hover (E-grab)
   if(typeof _rayShelf!=='undefined') _rayShelf=rayShelf;      // publish for the LMB handler (typeof: harness-safe)
-  if(g!==_hoverG){ if(_hoverG&&_hoverG.mat.emissive) _hoverG.mat.emissive.setHex(0x000000);
-    if(g&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; }
+  if(g!==_hoverG){ if(_hoverG&&_hoverG.mat&&_hoverG.mat.emissive) _hoverG.mat.emissive.setHex(0x000000);
+    if(g&&g.mat&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; }   // g.mat undefined for a Group (GLB model) — guard
   // clickable highlight (Nix 2026-07-09: telegraph the interaction BEFORE the click — objects only,
   // never avatars): aim = pointer-lock center, else the mouse. Same warm glow as grabbable hover.
   if(typeof _clickables==='undefined' || typeof _hovRC==='undefined') return;  // extraction harness lacks the whole hover family
@@ -3255,17 +3256,18 @@ function removeImage(sid){
   if(lastImageSid===sid) lastImageSid=null;
 }
 // desktop pipeline: file -> decode -> guardrails -> downscale -> broadcast. Split out (pure-ish) for tests.
-function addImageFile(file){
+function addImageFile(file, maxDim){
   if(!file) return 'no file';
   if(!IMG.types.includes(file.type)){ imgNote(`can't add ${file.type||'that file'} — png/jpeg/webp/gif only`); return 'bad type'; }
   if(file.size > IMG.maxFile){ imgNote(`that image is ${(file.size/1048576).toFixed(1)} MB — 10 MB max`); return 'too big'; }
+  const MD = (maxDim>0) ? maxDim : IMG.maxDim;             // panel can request a smaller longest-side; default 2048
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.onload = ()=>{
     URL.revokeObjectURL(url);
     let w=img.naturalWidth, h=img.naturalHeight;
     if(!w || !h){ imgNote('could not read that image'); return; }
-    const scale = Math.min(1, IMG.maxDim/Math.max(w,h));   // downscale longest side to <= maxDim
+    const scale = Math.min(1, MD/Math.max(w,h));           // downscale longest side to <= MD
     const cw=Math.max(1,Math.round(w*scale)), ch=Math.max(1,Math.round(h*scale));
     const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
     cv.getContext('2d').drawImage(img,0,0,cw,ch);
@@ -3360,14 +3362,247 @@ function pickVideo(){ if(!_vidInput){ _vidInput=document.createElement('input');
   _vidInput.click(); }
 window.__pickVideo = pickVideo;
 
+// ---- MODEL OBJECTS (3D mesh import, 2026-07-10): import a .glb/.gltf → an auto-fit grabbable prop.
+// glTF is DATA, not code (the loader executes no scripts — worlds-as-data, line ~251), so untrusted
+// import is safe from RCE; the only risk is a huge/degenerate mesh, guarded by a size cap. Optional
+// SimplifyModifier decimation rides in the wire msg (each client decimates on load — no re-export
+// needed, so no GLTFExporter dependency). LOCAL-first: with no relay (DEFAULT_SYNC='') a solo visitor
+// still sees the model (applyObj loopback with a client sid); when a sync socket is open it networks
+// like every other object (relay assigns sid → echo → applyModel). Sync dedup is a relay-up concern.
+const modelObjs = new Map(); let lastModelSid = null;
+const MODEL = { maxFile: 8*1024*1024, dataCap: 11*1024*1024, fit: 0.45,   // fit = target longest side, metres
+                exts:['glb','gltf'], mimes:['model/gltf-binary','model/gltf+json'] };
+const _mdlLoader = new GLTFLoader();
+function _countTris(root){ let n=0; root.traverse(o=>{ if(o.isMesh && o.geometry){ const gg=o.geometry;
+  n += gg.index ? gg.index.count/3 : (gg.attributes.position ? gg.attributes.position.count/3 : 0); } });
+  return Math.round(n); }
+// scale so the longest bbox side == target, then recenter so the GROUP ORIGIN sits at the geometric
+// centre (matches the image/plane convention: mesh.position is the centre, hh is half-height, so
+// propPhysics/grab rest maths line up). Returns {half} = half the fitted height.
+function _autoFitModel(root, target){
+  root.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(root); const size = new THREE.Vector3(); box.getSize(size);
+  const longest = Math.max(size.x, size.y, size.z) || 1;
+  root.scale.multiplyScalar(target/longest);
+  root.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(root); const c = new THREE.Vector3(); box.getCenter(c);
+  root.position.sub(c);                                    // group origin -> geometric centre
+  root.updateMatrixWorld(true);
+  return { half: (size.y*(target/longest))/2 };
+}
+function _decimateModel(root, ratio){                      // ratio 0..1 of vertices to REMOVE; optional, default off
+  if(!(ratio>0)) return;
+  const mod = new SimplifyModifier();
+  root.traverse(o=>{ if(o.isMesh && o.geometry && o.geometry.attributes.position){
+    const count = o.geometry.attributes.position.count;
+    const remove = Math.min(count-3, Math.floor(count*ratio));
+    if(remove>0){ try{ o.geometry = mod.modify(o.geometry, remove); }catch(e){ /* leave original on failure */ } }
+  }});
+}
+function applyModel(msg){
+  if(!msg.sid || modelObjs.has(msg.sid)) return;
+  _mdlLoader.load(msg.dataURL, (gltf)=>{
+    if(modelObjs.has(msg.sid)) return;                     // raced/removed while decoding
+    const root = gltf.scene;
+    if(msg.decimate>0) _decimateModel(root, msg.decimate);
+    const fit = _autoFitModel(root, msg.fit || MODEL.fit);
+    root.position.set(msg.x||0, (msg.y!=null?msg.y:0)+fit.half, msg.z||0);
+    root.rotation.y = msg.ry||0;
+    root.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; } });
+    const g = _addProp(msg.sid, root, fit.half); g.isModel = true; g.sid = msg.sid;
+    modelObjs.set(msg.sid, root);
+    if(msg.id === myNet) lastModelSid = msg.sid;
+  }, undefined, ()=> imgNote('model failed to load', 'model'));
+}
+function removeModel(sid){
+  const root = modelObjs.get(sid);
+  if(root){ scene.remove(root);
+    root.traverse(o=>{ if(o.isMesh){ if(o.geometry) o.geometry.dispose();
+      const m=o.material; if(Array.isArray(m)) m.forEach(x=>x&&x.dispose()); else if(m) m.dispose(); } });
+    modelObjs.delete(sid); }
+  const g = grabbablesById[sid];
+  if(g){ const i = grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
+    if(heldProp===g) heldProp=null; for(const hnd of ['left','right']) if(_heldHand[hnd]===g) _heldHand[hnd]=null; }
+  if(lastModelSid===sid) lastModelSid=null;
+}
+let _mdlSidSeq = 1;
+function manifestModel(file, state){                       // read → cap → send (relay) or local loopback (solo)
+  if(!file) return 'no file';
+  const fwd = new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+  const p = player.position.clone().addScaledVector(fwd, 1.6);
+  const fields = { x:p.x, y:0, z:p.z, ry:player.rotation.y, fit:MODEL.fit, decimate:(state&&state.decimate)||0 };
+  const rd = new FileReader();
+  rd.onload = ()=>{ const dataURL = rd.result;
+    if(dataURL.length > MODEL.dataCap){ imgNote('model too large after encoding — try a smaller file', 'model'); return; }
+    if(sock && sock.readyState===1){ sendObj('model', {dataURL, ...fields}); }   // relay assigns sid → echo → applyModel
+    else { applyObj({t:'obj', kind:'model', sid:'lm_'+(myNet||'me')+'_'+(_mdlSidSeq++), id:myNet, dataURL, ...fields}); }
+    imgNote('added 3D model', 'model'); };
+  rd.onerror = ()=> imgNote('could not read that model', 'model');
+  rd.readAsDataURL(file);
+  return 'loading';
+}
+window.__manifestModel = manifestModel;
+window.__modelInfo = (sid)=>{ const r=modelObjs.get(sid); if(!r) return null;
+  const b=new THREE.Box3().setFromObject(r); const s=new THREE.Vector3(); b.getSize(s);
+  return { tris:_countTris(r), pos:r.position.toArray().map(n=>+n.toFixed(2)),
+           size:s.toArray().map(n=>+n.toFixed(2)), count:modelObjs.size }; };   // headless probe
+
+// ============ ADAPTIVE ASSET IMPORTER (2026-07-10) ============
+// One picker → detect the kind → a preview + the OPTIMISE controls that fit THAT kind → Manifest.
+// The umbrella over image/video/model: ASSET_KINDS[kind] = {detect, preview, commit}. Add a kind here
+// (+ a spine row above) and it works end-to-end. Splats + video re-encode slot in later as new kinds.
+let _aiState = null, _aiPrev = null;
+function _aiClearPreview(){
+  if(_aiPrev){ try{ _aiPrev.renderer.dispose(); if(_aiPrev.renderer.forceContextLoss) _aiPrev.renderer.forceContextLoss();
+    _aiPrev.renderer.domElement.remove(); }catch(e){} _aiPrev=null; }
+  window.__aiRenderOnce = null;
+}
+function _ensureAssetModal(){
+  let m=document.getElementById('assetModal'); if(m) return m;
+  m=document.createElement('div'); m.id='assetModal';
+  m.style.cssText='position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;background:rgba(6,8,12,.62)';
+  const card=document.createElement('div');
+  card.style.cssText='width:min(420px,92vw);max-height:88vh;overflow:auto;background:#12151c;border:1px solid #2f3644;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.6);padding:16px;color:#e8dcc0;font-family:system-ui,sans-serif';
+  card.innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span id="aiIcon" style="font-size:20px">📦</span>
+      <span id="aiTitle" style="font-size:16px;font-weight:600">Import asset</span>
+      <span id="aiKind" style="margin-left:auto;font-size:12px;color:#8b93a3;text-transform:uppercase;letter-spacing:.04em"></span>
+    </div>
+    <div id="aiPreview" style="min-height:120px;display:flex;align-items:center;justify-content:center;background:#0b0d12;border-radius:10px;padding:8px;margin-bottom:10px"></div>
+    <div id="aiControls" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px"></div>
+    <div id="aiStatus" style="font-size:12px;color:#9aa2b2;min-height:16px;margin-bottom:12px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="aiCancel" style="padding:8px 14px;border:1px solid #3a4150;background:transparent;color:#cdbfa0;border-radius:9px;cursor:pointer">Cancel</button>
+      <button id="aiCommit" style="padding:8px 16px;border:0;background:#6d5ba8;color:#fff;border-radius:9px;cursor:pointer;font-weight:600">✨ Manifest</button>
+    </div>`;
+  m.appendChild(card); document.body.appendChild(m);
+  card.querySelector('#aiCancel').onclick=closeAssetPanel;
+  m.addEventListener('pointerdown', e=>{ if(e.target===m) closeAssetPanel(); });
+  return m;
+}
+function closeAssetPanel(){
+  const m=document.getElementById('assetModal'); if(m) m.style.display='none';
+  _aiClearPreview();
+  if(_aiState && _aiState._url){ try{ URL.revokeObjectURL(_aiState._url); }catch(e){} }
+  _aiState=null;
+  const pv=document.getElementById('aiPreview'), ct=document.getElementById('aiControls'), stt=document.getElementById('aiStatus');
+  if(pv) pv.innerHTML=''; if(ct) ct.innerHTML=''; if(stt) stt.textContent='';
+}
+function _aiDetect(file){ for(const k in ASSET_KINDS){ if(ASSET_KINDS[k].detect(file)) return k; } return null; }
+function openAssetPanel(file){
+  if(!file) return;
+  const kind=_aiDetect(file);
+  const m=_ensureAssetModal();
+  const pv=m.querySelector('#aiPreview'), ct=m.querySelector('#aiControls'), st=m.querySelector('#aiStatus');
+  pv.innerHTML=''; ct.innerHTML=''; st.textContent=''; _aiClearPreview();
+  if(!kind){ imgNote(`can't import ${file.type||file.name||'that file'} — image, video, or 3D model (.glb)`); return; }
+  const A=ASSET_KINDS[kind];
+  m.querySelector('#aiIcon').textContent=A.icon; m.querySelector('#aiKind').textContent=kind;
+  m.querySelector('#aiTitle').textContent='Import '+A.label;
+  _aiState={ kind, file, decimate:0, blocked:false };
+  m.querySelector('#aiCommit').onclick=()=>{ if(_aiState && _aiState.blocked) return; A.commit(file, _aiState); closeAssetPanel(); };
+  A.preview(file, pv, ct, st, _aiState);
+  m.style.display='flex';
+}
+function _aiSelect(host, label, opts, onChange){         // small labelled <select> helper
+  const row=document.createElement('label'); row.style.cssText='display:flex;gap:8px;align-items:center;font-size:13px;color:#cdbfa0';
+  row.appendChild(Object.assign(document.createElement('span'),{textContent:label}));
+  const sel=document.createElement('select'); sel.style.cssText='flex:1;background:#0b0d12;color:#e8dcc0;border:1px solid #3a4150;border-radius:7px;padding:5px';
+  opts.forEach(([t,v])=>{ const o=document.createElement('option'); o.value=v; o.textContent=t; sel.appendChild(o); });
+  sel.onchange=()=>onChange(sel.value); row.appendChild(sel); host.appendChild(row); return sel;
+}
+function _aiModelPreview(buf, pv, ct, st, state){        // a little spinning three preview + tri readout + decimate
+  const W=Math.min(380, (pv.clientWidth||360)), H=Math.round(W*0.7);
+  const renderer=new THREE.WebGLRenderer({antialias:true, alpha:true});
+  renderer.setPixelRatio(1); renderer.setSize(W,H); renderer.domElement.style.borderRadius='8px'; pv.appendChild(renderer.domElement);
+  const sc=new THREE.Scene(); const cam=new THREE.PerspectiveCamera(42, W/H, 0.01, 100);
+  sc.add(new THREE.HemisphereLight(0xfff2dd,0x223344,1.3));
+  const dl=new THREE.DirectionalLight(0xffffff,1.2); dl.position.set(2,4,3); sc.add(dl);
+  _mdlLoader.parse(buf, '', (gltf)=>{
+    const root=gltf.scene; _autoFitModel(root, 1.0); sc.add(root);
+    state.tris=_countTris(root);
+    cam.position.set(1.15,0.75,1.5); cam.lookAt(0,0,0);
+    _aiPrev={renderer, scene:sc, cam, root};
+    const readout=document.createElement('div'); readout.style.cssText='font-size:13px;color:#cdbfa0'; ct.appendChild(readout);
+    const upd=()=>{ const after=Math.round(state.tris*(1-(state.decimate||0)));
+      readout.textContent=`${state.tris.toLocaleString()} triangles`+(state.decimate>0?`  →  ~${after.toLocaleString()} after decimate`:''); };
+    upd();
+    const row=document.createElement('label'); row.style.cssText='display:flex;gap:8px;align-items:center;font-size:13px;color:#cdbfa0';
+    row.appendChild(Object.assign(document.createElement('span'),{textContent:'Decimate'}));
+    const sl=document.createElement('input'); sl.type='range'; sl.min='0'; sl.max='90'; sl.value='0'; sl.style.flex='1';
+    const pct=Object.assign(document.createElement('span'),{textContent:'0%'}); pct.style.cssText='width:34px;text-align:right';
+    sl.oninput=()=>{ state.decimate=(+sl.value)/100; pct.textContent=sl.value+'%'; upd(); };
+    row.appendChild(sl); row.appendChild(pct); ct.appendChild(row);
+    const hint=document.createElement('div'); hint.style.cssText='font-size:11px;color:#8b93a3';
+    hint.textContent='Auto-scaled to ~0.45 m, placed on the floor in front of you. Decimation applies on manifest.'; ct.appendChild(hint);
+    st.textContent='spinning preview · grab & move it once it’s in the world';
+    let a=0; const loop=()=>{ if(!_aiPrev||_aiPrev.renderer!==renderer) return; a+=0.01; root.rotation.y=a; renderer.render(sc,cam); requestAnimationFrame(loop); };
+    loop(); window.__aiRenderOnce=()=>renderer.render(sc,cam);
+  }, (e)=>{ st.textContent='could not read that model (not a valid .glb/.gltf?)'; state.blocked=true; });
+}
+const ASSET_KINDS = {
+  image: {
+    icon:'🖼', label:'image',
+    detect:f=>IMG.types.includes(f.type)||/\.(png|jpe?g|webp|gif)$/i.test(f.name||''),
+    preview(file, pv, ct, st, state){
+      const url=URL.createObjectURL(file); state._url=url;
+      const img=document.createElement('img'); img.src=url; img.style.cssText='max-width:100%;max-height:220px;border-radius:8px'; pv.appendChild(img);
+      state.maxDim=IMG.maxDim;
+      const upd=()=>{ const w=state._w||0,h=state._h||0,s=Math.min(1,state.maxDim/Math.max(w||1,h||1));
+        st.textContent=`${w}×${h} · ${(file.size/1048576).toFixed(1)} MB  →  ${Math.round(w*s)}×${Math.round(h*s)} in-world`; };
+      _aiSelect(ct,'Resolution',[['Original (≤2048)',2048],['1024 px',1024],['512 px',512],['256 px',256]],v=>{ state.maxDim=+v; upd(); });
+      img.onload=()=>{ state._w=img.naturalWidth; state._h=img.naturalHeight; upd(); };
+      if(file.size>IMG.maxFile){ st.textContent=`${(file.size/1048576).toFixed(1)} MB — 10 MB max`; state.blocked=true; }
+    },
+    commit:(file,state)=>addImageFile(file, state.maxDim),
+  },
+  video: {
+    icon:'🎬', label:'video',
+    detect:f=>VID.types.includes(f.type)||/\.(mp4|webm|ogv|ogg)$/i.test(f.name||''),
+    preview(file, pv, ct, st, state){
+      const url=URL.createObjectURL(file); state._url=url;
+      const v=document.createElement('video'); v.src=url; v.controls=true; v.muted=true; v.playsInline=true; v.loop=true;
+      v.style.cssText='max-width:100%;max-height:220px;border-radius:8px'; pv.appendChild(v);
+      const over=file.size>VID.maxFile; if(over) state.blocked=true;
+      v.onloadedmetadata=()=>{ st.textContent=`${v.videoWidth}×${v.videoHeight} · ${(file.size/1048576).toFixed(1)} MB`
+        +(over?` — over ${VID.maxFile/1048576|0} MB cap (shorten / re-encode first)`:` · loops muted in-world`); };
+      const note=document.createElement('div'); note.style.cssText='font-size:11px;color:#8b93a3';
+      note.textContent='Plays muted on a loop; click it in-world to play/pause. (In-browser re-encode is coming later.)'; ct.appendChild(note);
+    },
+    commit:(file,state)=>addVideoFile(file),
+  },
+  model: {
+    icon:'🧊', label:'3D model',
+    detect:f=>/\.(glb|gltf)$/i.test(f.name||'')||f.type==='model/gltf-binary'||f.type==='model/gltf+json',
+    preview(file, pv, ct, st, state){
+      if(file.size>MODEL.maxFile){ st.textContent=`${(file.size/1048576).toFixed(1)} MB — ${MODEL.maxFile/1048576|0} MB max`; state.blocked=true; return; }
+      st.textContent='reading model…';
+      file.arrayBuffer().then(buf=>_aiModelPreview(buf, pv, ct, st, state))
+        .catch(()=>{ st.textContent='could not read that file'; state.blocked=true; });
+    },
+    commit:(file,state)=>manifestModel(file, state),
+  },
+};
+function pickAsset(){                                     // the unified picker: image / video / .glb/.gltf → panel
+  let inp=document.getElementById('assetPick');
+  if(!inp){ inp=document.createElement('input'); inp.type='file'; inp.id='assetPick'; inp.style.display='none';
+    inp.accept=[...IMG.types, ...VID.types, '.glb','.gltf','model/gltf-binary','model/gltf+json'].join(',');
+    inp.addEventListener('change', ()=>{ if(inp.files&&inp.files[0]) openAssetPanel(inp.files[0]); inp.value=''; });
+    document.body.appendChild(inp); }
+  inp.click();
+}
+window.__pickAsset = pickAsset;
+window.__openAssetPanel = openAssetPanel;                 // headless: hand it a File, skip the OS dialog
+window.__closeAssetPanel = closeAssetPanel;
+
 // X while holding a manifested object (image / text / video) deletes it (owner-gated server-side);
 // else falls through to despawnLast.
 function deleteHeldObject(){
   const g = heldProp || _heldHand.left || _heldHand.right;
-  if(g && sock && sock.readyState===1){
-    if(g.isImage || g.isText || g.isVideo){ sendDelObj(g.sid); return true; }   // spine: one delete verb
-  }
-  return false;
+  if(!g || !(g.isImage || g.isText || g.isVideo || g.isModel)) return false;
+  if(sock && sock.readyState===1){ sendDelObj(g.sid); return true; }   // networked: owner-gated server-side
+  removeObj(g.sid); return true;                                        // solo/local (no relay): remove right here
 }
 
 // ---- object protocol, round 1 leg 3: TEXT. Manifest words in the world — the most native mark.
@@ -3445,6 +3680,7 @@ const OBJECT_TYPES = {
   image: { build: applyImage, remove: removeImage },
   video: { build: applyVideo, remove: removeVideo },
   text:  { build: applyText,  remove: removeText  },
+  model: { build: applyModel, remove: removeModel },
 };
 const objKind = {};                                       // sid -> kind (routes delobj to its remover)
 function applyObj(m){
@@ -4202,11 +4438,13 @@ const PORCH_ACTIONS = [
   // — Make (both kinds; the porch’s thesis: same affordance, not a lesser tier) —
   {id:'make.text',  cat:'Make', label:'Manifest text', icon:'✍', desc:'words on a plane (<=240 chars)', args:{text:'string'},
     human:()=>window.__openTextCompose?window.__openTextCompose():(window.__promptText&&window.__promptText()),  agent:(a,x)=>window.__addText&&window.__addText(x&&x.text)},
-  {id:'make.image', cat:'Make', label:'Add image',     icon:'🖼', desc:'an image plane (agents pass a data URL via the harness)', args:{dataURL:'string', aspect:'number'},
+  {id:'make.asset', cat:'Make', label:'Import asset',  icon:'📦', desc:'one importer for an image, video, or 3D model (.glb/.gltf) — detects the kind, previews it, then manifests', args:{},
+    human:()=>window.__pickAsset&&window.__pickAsset(),    agent:null},
+  {id:'make.image', cat:'Make', label:'Add image',     icon:'🖼', desc:'an image plane (agents pass a data URL via the harness)', args:{dataURL:'string', aspect:'number'}, menu:false,
     human:()=>window.__pickImage&&window.__pickImage(),    agent:null},
   {id:'make.spawn', cat:'Make', label:'Spawn shape',   icon:'⬛', desc:'a primitive maker block', args:{shape:'cube|sphere|cone|cylinder'},
     human:()=>window.spawn&&window.spawn('cube'),          agent:(a,x)=>window.spawn&&window.spawn((x&&x.shape)||'cube')},
-  {id:'make.video', cat:'Make', label:'Add video',      icon:'🎬', desc:'upload a looping video clip (mp4/webm, ≤8 MB) — click it to play/stop', args:{},
+  {id:'make.video', cat:'Make', label:'Add video',      icon:'🎬', desc:'upload a looping video clip (mp4/webm, ≤8 MB) — click it to play/stop', args:{}, menu:false,
     human:()=>window.__pickVideo&&window.__pickVideo(), agent:null},
   {id:'make.music', cat:'Make', label:'Manifest music',  icon:'🎵', desc:'a placeable music box — coming next', args:{url:'string', title:'string'},
     human:()=>window.__manifestMusic&&window.__manifestMusic(), agent:(a,x)=>window.__manifestMusicURL&&window.__manifestMusicURL(x&&x.url, x&&x.title)},
@@ -4498,7 +4736,7 @@ function remoteInEarshot(id){                                  // remote sender 
   // pipeline for text/image/shape/music (Nix 2026-07-10). Add a Make action → it appears here.
   const mfBtn=document.getElementById('manifestBtn'), mfMenu=document.getElementById('manifestMenu');
   if(mfBtn && mfMenu){
-    PORCH_ACTIONS.filter(a=>a.cat==='Make' && a.human).forEach(a=>{
+    PORCH_ACTIONS.filter(a=>a.cat==='Make' && a.human && a.menu!==false).forEach(a=>{
       const b=document.createElement('button'); b.className='mbtn'; b.style.margin='0'; b.style.textAlign='left';
       b.innerHTML=`${a.icon||'•'} ${a.label}`;
       b.onclick=()=>{ mfMenu.style.display='none'; doAction(a.id); };
