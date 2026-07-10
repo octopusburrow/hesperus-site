@@ -2091,7 +2091,7 @@ THREE.Cache.enabled = true;                       // one .vrm/.vrma fetch serves
 let _remoteDepsP = null;
 function _remoteDeps(){
   _remoteDepsP = _remoteDepsP || (async ()=>{
-    const [{VRMLoaderPlugin, VRMUtils}, {VRMAnimationLoaderPlugin, createVRMAnimationClip}] =
+    const [{VRMLoaderPlugin, VRMUtils}, {VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy}] =
       await Promise.all([import('@pixiv/three-vrm'), import('@pixiv/three-vrm-animation')]);
     const vl = new GLTFLoader();
     vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
@@ -2101,16 +2101,18 @@ function _remoteDeps(){
       try{ const a = await vl.loadAsync('./assets/'+url+'.vrma');
         anims[nm] = (a.userData.vrmAnimations||[])[0]; }catch(e){}
     }
-    return {vl, VRMUtils, createVRMAnimationClip, anims};
+    return {vl, VRMUtils, createVRMAnimationClip, VRMLookAtQuaternionProxy, anims};
   })();
   return _remoteDepsP;
 }
 async function upgradeAvatarToVrm(r, model){
   if(r.vrm || r._vrmLoading) return; r._vrmLoading = true;
   try{
-    const {vl, VRMUtils, createVRMAnimationClip, anims} = await _remoteDeps();
+    const {vl, VRMUtils, createVRMAnimationClip, VRMLookAtQuaternionProxy, anims} = await _remoteDeps();
     const gltf = await vl.loadAsync('./assets/claude_suit.vrm');
     const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
+    if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt);   // remote avatars lacked the proxy — the console warning Nix pasted
+      px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
     vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData (found live 2026-07-09)
     if((model||'human')==='human') recolorBloom(vrm.scene, '#4f83e8');  // blue driver; AI keeps native orange
     vrm.scene.rotation.y = Math.PI;               // match the capsule's -Z facing convention
@@ -2474,6 +2476,11 @@ window.__wristCal=(lx=0,ly=0,lz=0,rx=0,ry=0,rz=0)=>{ const d=Math.PI/180;
   _wristCalL.setFromEuler(new THREE.Euler(lx*d,ly*d,lz*d)); _wristCalR.setFromEuler(new THREE.Euler(rx*d,ry*d,rz*d));
   return `wrist cal L(${lx},${ly},${lz}) R(${rx},${ry},${rz})`; };
 window.__wristCal(0,0,-180, 0,0,0);   // Basis OpenXR baked default: the two grips differ by a 180° roll
+// MEASURED default (Nix's 🎯 T-pose capture, 2026-07-10, confirmed live: "IK HANDS ARE WORKING
+// OMGGGG"): her device's grip→bone offsets, |q|≈1.000 both sides. OpenXR grip space is
+// standardized, so this should hold across headsets; a local 🎯 run still overrides it below.
+_wristCalL.fromArray([-0.4071736147202605, 0.8824899209130146, -0.015719411966090183, 0.2348916494303031]);
+_wristCalR.fromArray([0.5812875774993174, 0.7123369384133019, 0.08586779365740962, -0.38380664895827776]);
 // MEASURED wrist calibration (Nix's 90°-offsets verdict, 2026-07-09): stop guessing grip axes.
 // She T-poses in the headset; at T-pose the normalized rig's hand REST world quat is exactly the
 // scene quat (identity local chain), and ikHandL/R hold the live grip world quats — so
@@ -4479,7 +4486,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
 });
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  if(!renderer.xr.isPresenting) renderer.setSize(innerWidth, innerHeight);   // XR owns the framebuffer while presenting (console warning cleanup)
 });
 </script>
 </body>
