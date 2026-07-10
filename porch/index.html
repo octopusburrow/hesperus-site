@@ -872,7 +872,7 @@ function _updateHover(){ const g=(heldProp||_heldHand.left||_heldHand.right)?nul
   // clickable highlight (Nix 2026-07-09: telegraph the interaction BEFORE the click — objects only,
   // never avatars): aim = pointer-lock center, else the mouse. Same warm glow as grabbable hover.
   let c=null;
-  if(!renderer.xr.isPresenting && _clickables.length){
+  if(!renderer.xr.isPresenting && typeof _clickables!=='undefined' && _clickables.length){  // typeof: extraction-harness safe
     if(document.pointerLockElement) _hovNDC.set(0,0);
     else _hovNDC.set((_hovMX/innerWidth)*2-1, -(_hovMY/innerHeight)*2+1);
     _hovRC.setFromCamera(_hovNDC, camera);
