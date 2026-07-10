@@ -4311,11 +4311,86 @@ function _audioGesture(){                                   // autoplay gate: re
 addEventListener('DOMContentLoaded', ()=>{ const cb=document.getElementById('ambientToggle');
   if(cb){ cb.checked=_ambientOn; cb.addEventListener('change', ()=>setAmbient(cb.checked)); } });
 
-// make.music: the music OBJECT (a placeable, grabbable source with positional audio off the shared
-// AudioListener) needs a spine kind + relay OBJ_CAPS row — that's the next increment. For now the
-// affordance is honest about being in progress rather than sending a message the relay would drop.
+// ---- THE MUSIC BOX (2026-07-10, Fable 5): the Porch's owned POINT SOURCE — Lanternlight fills the
+// whole room; this is a thing on the table you walk toward and start by hand. A fixed house-style
+// fixture (oak body + open lid + a brass drum & crank that turn while it plays), NOT a placeable relay
+// object (that variant is still the increment below). Click to play/stop; positional audio grows as
+// you approach. Melody: audio-lab/musicbox.py → assets/musicbox.ogg (GM 10, 16-bar 6/8 loop).
+let _mbox = null;
+(function buildMusicBox(){
+  const topY = _tableBox ? _tableBox.max.y : 0.764;
+  const BW = 6/32, BD = 4/32, BH = 2/32, LID = 1/32;       // on the PPM=32 grid → square pixels
+  const G = new THREE.Group();
+  const brass = new THREE.MeshStandardMaterial({color:0xc9a227, metalness:0.85, roughness:0.32});
+  // oak body
+  const body = _makePixelBox(BW, BH, BD, _oakPaint, {roughness:0.85});
+  body.mesh.position.set(0, BH/2, 0); G.add(body.mesh);
+  // hinged lid, opened ~115° back so the mechanism shows
+  const lid = _makePixelBox(BW, LID, BD, _oakPaint, {roughness:0.85});
+  const lidPivot = new THREE.Group();
+  lidPivot.position.set(0, BH, -BD/2);                     // hinge = back-top edge
+  lid.mesh.position.set(0, LID/2, BD/2); lidPivot.add(lid.mesh);
+  lidPivot.rotation.x = -2.0; G.add(lidPivot);
+  // the spinning group: brass barrel + pins + crank (all turn together about the barrel axis / X)
+  const spin = new THREE.Group();
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,BW*0.82,16), brass);
+  barrel.rotation.z = Math.PI/2; spin.add(barrel);
+  for(let i=0;i<7;i++) for(let k=0;k<6;k++){               // studs the comb would pluck
+    const pin = new THREE.Mesh(new THREE.BoxGeometry(0.006,0.011,0.006), brass);
+    const ang = (k/6)*Math.PI*2 + i*0.7, r = 0.024;
+    pin.position.set((i-3)*0.021, Math.cos(ang)*r, Math.sin(ang)*r); pin.rotation.x = -ang; spin.add(pin);
+  }
+  const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.005,0.005,0.024,10), brass);
+  axle.rotation.z = Math.PI/2; axle.position.set(BW/2+0.012,0,0); spin.add(axle);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.007,0.028,0.007), brass);
+  arm.position.set(BW/2+0.024,0.013,0); spin.add(arm);
+  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.007,0.007,0.014,10), brass);
+  knob.rotation.z = Math.PI/2; knob.position.set(BW/2+0.024,0.027,0); spin.add(knob);
+  spin.position.set(0, BH+0.026, 0.006); G.add(spin);
+  // fixed brass comb just in front of the drum
+  const comb = new THREE.Mesh(new THREE.BoxGeometry(BW*0.8,0.011,0.006), brass.clone());
+  comb.position.set(0, BH+0.014, 0.05); G.add(comb);
+  // a warm glow that breathes up while it plays
+  const glow = new THREE.PointLight(0xffd9a0, 0, 0.7, 2); glow.position.set(0, BH+0.05, 0.02); G.add(glow);
+  // invisible hull = the click target (covers the whole object, not just one part)
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(BW+0.03, BH+0.12, BD+0.03),
+    new THREE.MeshBasicMaterial({visible:false}));
+  hull.position.set(0, (BH+0.12)/2, 0); hull.userData.action = ()=> _mboxToggle(); G.add(hull);
+  _clickables.push(hull);
+  G.position.set(0.15, topY, -0.66); G.rotation.y = -0.32;  // free spot on the tabletop, angled to spawn
+  G.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; } });
+  scene.add(G);
+  // positional audio: a real point source — present within a few metres, faint across the room
+  const pa = new THREE.PositionalAudio(_audioListener);
+  pa.setRefDistance(1.0); pa.setRolloffFactor(1.3); pa.setDistanceModel('inverse'); pa.setMaxDistance(15);
+  G.add(pa);
+  new THREE.AudioLoader().load('./assets/musicbox.ogg', buf=>{
+    pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0); if(_mbox) _mbox.ready = true;
+  }, undefined, e=>console.warn('musicbox load failed', e));
+  _mbox = { group:G, spin, brass, comb:comb.material, audio:pa, glow, ready:false, playing:false, lvl:0 };
+})();
+window.__mbox = _mbox;                                        // debug: headless audio-graph probe
+function _mboxToggle(){
+  if(!_mbox) return 'no music box';
+  if(!_mbox.ready) return 'music box: still winding up…';
+  const pa = _mbox.audio;
+  if(pa.isPlaying){ pa.stop(); _mbox.playing=false; return 'music box: stopped'; }
+  if(_audioListener.context.state!=='running') _audioListener.context.resume().catch(()=>{});
+  pa.play(); _mbox.playing=true; return 'music box: playing ♪';
+}
+window.__toggleMusicbox = _mboxToggle;
+window.__musicboxTick = (dt)=>{                             // called from the render loop
+  if(!_mbox) return;
+  const lvl = _mbox.lvl += ((_mbox.playing?1:0) - _mbox.lvl) * Math.min(1, dt*3);
+  _mbox.glow.intensity = lvl*0.22;                           // a warm glint, not a bonfire
+  _mbox.brass.emissive.setRGB(lvl*0.10, lvl*0.07, lvl*0.02);
+  _mbox.comb.emissive.setRGB(lvl*0.10, lvl*0.07, lvl*0.02);
+  if(_mbox.playing) _mbox.spin.rotation.x += dt*2.1;        // drum + crank turn while it plays
+};
+// make.music: the PLACEABLE music object (upload/compose → grab it, positional) still needs a spine
+// kind + relay OBJ_CAPS row — that's the next increment. The fixed box above is the owned first one.
 window.__manifestMusic = function(){ if(window.__logChat)
-  window.__logChat('porch','🎵 placeable music objects (Suno / self-composed) are next — the Porch ambient bed is live now (toggle in ☰)','sys','cmd'); };
+  window.__logChat('porch','🎵 the music box is on the table — click it to play/stop. (Placeable, uploadable music objects are the next increment.)','sys','cmd'); };
 (function wireCompose(){
   const el=document.getElementById('compose'); if(!el) return;
   el.addEventListener('click', e=>{ if(e.target===el) closeTextCompose(); });   // click backdrop = cancel
@@ -4976,6 +5051,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   flame.scale.y = 0.8 + (f-3.25)*0.6;
   playaUniforms.uFlick.value = f;
   if(window.__agentUpdate) window.__agentUpdate(dt);
+  if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
   _applyTouchFx();                                    // pats: head squish envelopes (all touched VRMs)
