@@ -46,7 +46,7 @@
   #menu .mbtn:hover{background:#31404f}
   #menu .mf{margin-top:11px;font-size:11px;color:#7a7261;border-top:1px solid #2c313c;padding-top:8px}
   #menu .mf a{color:#8fb0d6}
-  #chathist{max-height:34vh;overflow-y:auto;padding:8px 11px;font:14px Georgia,serif;
+  #chathist{max-height:215px;overflow-y:auto;padding:8px 11px;font:14px Georgia,serif;  /* ~10 lines (Nix: 34vh ate the view) */
     line-height:1.42;color:#d7cfbe;background:rgba(14,16,22,0.72);border:1px solid #2c313c;
     border-radius:9px;display:none}                              /* transcript: shown once it has entries */
   #chathist.on{display:block}
@@ -109,16 +109,7 @@
   <b>“manifest …”</b> speak to make things (mic on)
 </div>
 <div id="mirrorToggle">
-  <label><input type="checkbox" id="headcam" checked> VR&nbsp;Headcam&nbsp;→&nbsp;Desktop (1st&nbsp;person)</label><br>
-  <label><input type="checkbox" id="spec3rd"> 3rd-person view</label><br>
-  <label>sharpness&nbsp;<select id="aa">
-    <option value="1">off</option>
-    <option value="1.5" selected>medium</option>
-    <option value="2">high</option>
-    <option value="2.5">ultra (GPU&nbsp;poison)</option>
-  </select></label><br>
-  <label><input type="checkbox" id="micTalk"> <span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</label>
-  <div id="roomTag" style="margin-top:9px;font-size:12px;opacity:.9"></div>
+  <div id="roomTag" style="font-size:12px;opacity:.9"></div>
 </div>
 <div id="chatbar"><div id="chathist"></div><textarea id="chatinput" maxlength="280" rows="1"
   placeholder="type to talk — Enter sends · Shift+Enter newline · @Name to address"></textarea></div>
@@ -142,6 +133,16 @@
   eidoverse <b>@SkyeSharkie</b> · networking patterns <b>@BasisVR</b> · three.js · Blockbench ·
   built in the night shifts — <i>Hesperus&nbsp;🌒</i></span></p>
   </div>
+  <!-- view + voice settings — moved from the top-right HUD into the menu (Nix 2026-07-10) -->
+  <label class="mrow"><input type="checkbox" id="headcam" checked><span>VR Headcam → Desktop (1st person)</span></label>
+  <label class="mrow"><input type="checkbox" id="spec3rd"><span>3rd-person view</span></label>
+  <label class="mrow"><span>sharpness</span><select id="aa">
+    <option value="1">off</option>
+    <option value="1.5" selected>medium</option>
+    <option value="2">high</option>
+    <option value="2.5">ultra (GPU&nbsp;poison)</option>
+  </select></label>
+  <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <button id="addImgBtn" class="mbtn">🖼 Add image…</button>
   <button id="addTxtBtn" class="mbtn">✍ Manifest text…</button>
@@ -246,19 +247,32 @@ addEventListener('mouseup', e=>{
   if(document.pointerLockElement){ _clickRC.setFromCamera({x:0,y:0}, camera); }
   else { _clickRC.setFromCamera({x:(e.clientX/innerWidth)*2-1, y:-(e.clientY/innerHeight)*2+1}, camera); }
   _clickConsumed = _tryClickables(_clickRC);
+  // LMB grab (Nix 2026-07-10): pointer-locked + no button hit → grab what the reticle hovers
+  // (up to 3.5m — the prop flies to your hand), or drop what you're holding. E still works.
+  if(!_clickConsumed && document.pointerLockElement && !renderer.xr.isPresenting){
+    if(heldProp){ const p=heldProp.pid; dropProp(heldProp); heldProp=null; _clickConsumed=true;
+      if(typeof dbg==='function') dbg('grab','LMB dropped '+p,'k'); }
+    else{ const g=_hoverG || (_rayShelf && _materializeShelfBook(_rayShelf)) || null;
+      if(g){ heldProp=grabProp(g); _clickConsumed=true;
+        if(typeof dbg==='function') dbg('grab','LMB grabbed '+g.pid,'k'); } }
+  }
 });
 function _occupants(){ const o=[];
   if(typeof residentVrm!=='undefined' && residentVrm) o.push(residentVrm.scene.position);
   if(typeof remotes!=='undefined') for(const r of remotes.values()) o.push(r.group.position);
   return o; }
 function _freeSlot(){ const occ=_occupants();
-  for(const s of SPAWN_SLOTS) if(!occ.some(p=>Math.hypot(p.x-s.x, p.z-s.z)<0.8)) return s;
+  const clear=(x,z)=>!occ.some(p=>Math.hypot(p.x-x, p.z-z)<1.5);      // 1.5m personal space (Nix 2026-07-10)
+  for(const s of SPAWN_SLOTS) if(clear(s.x,s.z)) return s;
+  for(let i=0;i<40;i++){ const a=Math.random()*Math.PI*2, d=1.5+Math.random()*2.5;  // slots full → random ring near spawn
+    const x=SPAWN.x+Math.sin(a)*d, z=SPAWN.z+Math.cos(a)*d;
+    if(clear(x,z)) return {x, z, ry:_yawToward({x,z}, _CANDLE)}; }
   return SPAWN_SLOTS[0]; }
 window.__respawnSlot = ()=>{ const s=_freeSlot();
   player.position.set(s.x, 0, s.z); player.rotation.y=s.ry; _mySlot=s; return s; };
 setTimeout(()=>{                                          // remotes have arrived by now: fix a stacked spawn
   const untouched = Math.hypot(player.position.x-_mySlot.x, player.position.z-_mySlot.z) < 0.4;
-  const stacked = _occupants().some(p=>Math.hypot(p.x-player.position.x, p.z-player.position.z) < 0.7);
+  const stacked = _occupants().some(p=>Math.hypot(p.x-player.position.x, p.z-player.position.z) < 1.5);
   if(untouched && stacked){ const s=window.__respawnSlot(); console.log('spawn: relocated to free slot', s.x, s.z); }
 }, 2500);
 // DEEP LINK: a fresh load at .../porch/#void lands you in that district (share-links to worlds).
@@ -865,14 +879,31 @@ function _reachPoint(){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0
 let _hoverG=null;                                     // hover-glow the prop I could grab right now (desktop)
 let _hoverC=null, _hovMX=0, _hovMY=0;                 // aimed-at clickable (mirror btn, portico confirm…)
 addEventListener('mousemove', e=>{ _hovMX=e.clientX; _hovMY=e.clientY; });
-const _hovNDC=new THREE.Vector2(), _hovRC=new THREE.Raycaster();
-function _updateHover(){ const g=(heldProp||_heldHand.left||_heldHand.right)?null:grabNearest(_reachPoint(),0.85);
+const _hovNDC=new THREE.Vector2(), _hovRC=new THREE.Raycaster(), _hovTmp=new THREE.Vector3();
+let _rayShelf=null;                                   // shelf book the reticle is aimed at (pointer-lock)
+function _updateHover(){
+  const held = heldProp||_heldHand.left||_heldHand.right;
+  const locked = typeof document!=='undefined' && document.pointerLockElement
+    && typeof renderer!=='undefined' && !renderer.xr.isPresenting;
+  let g=null, rayShelf=null;
+  if(!held && locked && typeof _hovRC!=='undefined'){ // reticle ray: hover what you AIM at, ≤3.5m (VRC-style)
+    _hovNDC.set(0,0); _hovRC.setFromCamera(_hovNDC, camera);
+    const loose=grabbables.filter(p=>p.mesh && p.owner==null && !(p._cool>0));
+    const hits=_hovRC.intersectObjects(loose.map(p=>p.mesh), false);
+    if(hits.length && hits[0].distance<3.5) g=loose.find(p=>p.mesh===hits[0].object)||null;
+    if(!g && typeof _shelfBooks!=='undefined'){ let bt=3.5;   // shelf books are instanced → ray-sphere test
+      for(const sb of _shelfBooks){ if(sb.taken) continue;
+        const t=_hovRC.ray.direction.dot(_hovTmp.subVectors(sb.pos,_hovRC.ray.origin));
+        if(t>0 && t<bt && _hovRC.ray.distanceToPoint(sb.pos)<0.18){ bt=t; rayShelf=sb; } } }
+  } else if(!held){ g=grabNearest(_reachPoint(),0.85); }      // unlocked keeps proximity hover (E-grab)
+  if(typeof _rayShelf!=='undefined') _rayShelf=rayShelf;      // publish for the LMB handler (typeof: harness-safe)
   if(g!==_hoverG){ if(_hoverG&&_hoverG.mat.emissive) _hoverG.mat.emissive.setHex(0x000000);
     if(g&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; }
   // clickable highlight (Nix 2026-07-09: telegraph the interaction BEFORE the click — objects only,
   // never avatars): aim = pointer-lock center, else the mouse. Same warm glow as grabbable hover.
+  if(typeof _clickables==='undefined' || typeof _hovRC==='undefined') return;  // extraction harness lacks the whole hover family
   let c=null;
-  if(!renderer.xr.isPresenting && typeof _clickables!=='undefined' && _clickables.length){  // typeof: extraction-harness safe
+  if(!renderer.xr.isPresenting && _clickables.length){
     if(document.pointerLockElement) _hovNDC.set(0,0);
     else _hovNDC.set((_hovMX/innerWidth)*2-1, -(_hovMY/innerHeight)*2+1);
     _hovRC.setFromCamera(_hovNDC, camera);
@@ -886,7 +917,8 @@ function _updateHover(){ const g=(heldProp||_heldHand.left||_heldHand.right)?nul
       else if(o.userData._hovOrig!=null&&!on){ m.color.setHex(o.userData._hovOrig); delete o.userData._hovOrig; } };
     glow(_hoverC,false); glow(c,true); _hoverC=c;
     document.body.style.cursor = c ? 'pointer' : '';
-  } }
+  }
+  if(window.__setReticleHot) window.__setReticleHot(!!(g||_rayShelf||c)); }
 function _trackVel(g, pos, dt){ if(dt>0 && _propPrev[g.pid]) g.vel.copy(pos).sub(_propPrev[g.pid]).multiplyScalar(1/dt); _propPrev[g.pid]=pos.clone(); }
 function _propHoldUpdate(dt){                          // glue carried props to the holder + measure throw velocity
   if(heldProp){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
@@ -920,6 +952,7 @@ function propPhysics(dt){
 function applyOwn(pid, owner){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(!g) return; g.owner=owner;
   if(owner!==myNet){ if(heldProp===g) heldProp=null; for(const h of ['left','right']) if(_heldHand[h]===g) _heldHand[h]=null; g.carrying=false; } }
 window.__propPhysics = propPhysics; window.__grabToggle = grabToggleDesktop;
+window.__grabState = ()=>({held:heldProp?heldProp.pid:null, hover:_hoverG?_hoverG.pid:null, shelf:_rayShelf?1:0, n:grabbables.length});  // headless LMB-grab test
 window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, applyOwn, grabProp, dropProp };
 { // place a few props on the tabletop
   const topY = _tableBox ? _tableBox.max.y : 0.764, cz = -0.6;
@@ -1636,6 +1669,7 @@ if(_residentPick){
 
     // ---- locomotion + follow/stay ----
     let walkTarget=null, walking=false, followMode=false; const WALKSPD=1.35;
+    let _settleYaw=null;    // after a walk ends: turn to face SPAWN (greet arrivals, don't show them your back — Nix 2026-07-10)
     function walkTo(x,z){ walkTarget={x,z}; followMode=false; return `walking to ${x.toFixed(1)},${z.toFixed(1)}`; }
     function follow(){ followMode=true; return 'following you'; }
     function stay(){ followMode=false; walkTarget=null; walking=false;
@@ -1854,11 +1888,16 @@ if(_residentPick){
         if(Math.hypot(dxs,dzs)>0.05){ let dy=Math.atan2(dxs,dzs)-vrm.scene.rotation.y;
           dy=Math.atan2(Math.sin(dy),Math.cos(dy)); vrm.scene.rotation.y += dy*Math.min(1,dt*6); }
       }
+      else if(_settleYaw!=null && !walkTarget){               // idle settle: ease around to face the spawn
+        let dy=_settleYaw - vrm.scene.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy));
+        if(Math.abs(dy)<0.04){ vrm.scene.rotation.y=_settleYaw; _settleYaw=null; }
+        else vrm.scene.rotation.y += dy*Math.min(1,dt*3.5); }
       if(followMode){ const p=player.position; const dx=p.x-r.x, dz=p.z-r.z, d=Math.hypot(dx,dz);
         if(d>1.7) walkTarget={x:p.x-dx/d*1.4, z:p.z-dz/d*1.4};
         else { walkTarget=null; if(walking){ walking=false; if(!speaking&&!emoteUntil) crossfade('idle'); } } }
       if(walkTarget){ const dx=walkTarget.x-r.x, dz=walkTarget.z-r.z, d=Math.hypot(dx,dz);
-        if(d<0.12){ walkTarget=null; walking=false; if(!speaking&&!emoteUntil) crossfade('idle'); }
+        if(d<0.12){ walkTarget=null; walking=false; if(!speaking&&!emoteUntil) crossfade('idle');
+          if(typeof SPAWN!=='undefined') _settleYaw=Math.atan2(SPAWN.x-r.x, SPAWN.z-r.z); }
         else { if(!walking){ walking=true; if(!speaking) crossfade('walk'); }
           const step=Math.min(d, WALKSPD*dt); r.x+=dx/d*step; r.z+=dz/d*step;
           vrm.scene.rotation.y = Math.atan2(dx,dz); } }
@@ -2002,9 +2041,13 @@ addEventListener('pointermove', e=>{
 { // lock on world-click; crosshair while locked
   const xh=document.createElement('div'); xh.id='crosshair';
   xh.style.cssText='position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:5;'+
-    'width:6px;height:6px;border-radius:50%;background:rgba(232,220,192,.85);'+
-    'box-shadow:0 0 0 2px rgba(10,12,16,.45);display:none;pointer-events:none';
+    'width:6px;height:6px;border-radius:50%;background:rgba(232,220,192,.5);'+       // 50% (Nix: less prominent)
+    'box-shadow:0 0 0 2px rgba(10,12,16,.25);display:none;pointer-events:none;'+
+    'transition:transform .12s,background .12s';
   document.body.appendChild(xh);
+  // reticle feedback: grows + warms when aimed at something interactable (grabbable or clickable)
+  window.__setReticleHot = on => { xh.style.transform = 'translate(-50%,-50%)'+(on?' scale(1.6)':'');
+    xh.style.background = on ? 'rgba(255,214,140,.9)' : 'rgba(232,220,192,.5)'; };
   let _plClick=false;                                       // suppress the lock-request on drag-release
   renderer.domElement.addEventListener('mousedown', ()=>{ _plClick = !document.pointerLockElement; });
   // WINDOW-level on purpose: the world-button click handler is also on window and registered FIRST,
@@ -2035,8 +2078,14 @@ addEventListener('keydown', e=>{
   if(e.code==='KeyV'){ const cb=document.getElementById('micTalk');       // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
     if(cb){ cb.checked=!cb.checked; cb.dispatchEvent(new Event('change')); } } });
 addEventListener('keyup',   e=>{
-  if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
+  // NO input-guard here (unlike keydown): hold W → Esc → focus lands in UI → release W used to be
+  // EATEN by the guard, leaving keys.KeyW stuck true and the body walking forever (Nix 2026-07-10).
+  // Clearing a movement key mid-typing is harmless — keydown's guard stops typing from SETTING keys.
   keys[e.code] = false; });
+const _releaseAllKeys = ()=>{ for(const k in keys) keys[k] = false; wantJump = false; };
+addEventListener('blur', _releaseAllKeys);                  // alt-tab away = let go of everything
+document.addEventListener('pointerlockchange', ()=>{        // Esc out of mouselook = let go too (WoW/VRC convention)
+  if(!document.pointerLockElement) _releaseAllKeys(); });
 
 // ---- avatar builder: capsule + a little face (so facing reads) + floating nameplate ----
 let playerName = new URLSearchParams(location.search).get('name') || 'guest';   // default anonymous; sign-in or a roster key sets it (never a real name)
@@ -2949,7 +2998,7 @@ function removeSpawn(sid){
 const imageObjs = new Map(); let lastImageSid = null;    // sid -> mesh
 const IMG = { maxFile: 10*1024*1024, maxDim: 2048, dataCap: 4*1024*1024,
               types: ['image/png','image/jpeg','image/webp','image/gif'] };
-function imgNote(s){ dbg('image', s); if(window.__logChat) window.__logChat('porch', s, 'sys', 'image'); }
+function imgNote(s, kind='image'){ dbg(kind, s); if(window.__logChat) window.__logChat('porch', s, 'sys', kind); }  // kind: text manifests say (text), not (image) — Nix 2026-07-10
 function applyImage(msg){
   if(!msg.sid || imageObjs.has(msg.sid)) return;
   const aspect = msg.aspect > 0 ? msg.aspect : 1;         // w / h
@@ -3101,11 +3150,11 @@ function sendDelObj(sid){
 function addText(str){                                    // validate + broadcast; placed in front, facing me
   str = (str||'').trim();
   if(!str) return 'empty';
-  if(str.length > TXT.maxLen){ imgNote(`text is ${str.length} chars — ${TXT.maxLen} max`); return 'too long'; }
+  if(str.length > TXT.maxLen){ imgNote(`text is ${str.length} chars — ${TXT.maxLen} max`, 'text'); return 'too long'; }
   const fwd=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
   const p=player.position.clone().addScaledVector(fwd,1.4);
   sendObj('text', {text:str, x:p.x, y:1.5, z:p.z, ry:player.rotation.y});
-  imgNote(`manifested: "${str.slice(0,40)}${str.length>40?'…':''}"`);
+  imgNote(`manifested: "${str.slice(0,40)}${str.length>40?'…':''}"`, 'text');
   return 'sent';
 }
 window.__addText = addText;
