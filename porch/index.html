@@ -828,7 +828,9 @@ function _psend(o){ if(sock && sock.readyState===1) sock.send(JSON.stringify(o))
 function claimProp(g){ _psend({t:'claim', pid:g.pid}); }
 function sendProp(g){ const now=performance.now();
   if(_propSendT[g.pid] && now-_propSendT[g.pid]<70) return; _propSendT[g.pid]=now;
-  _psend({t:'prop', pid:g.pid, x:g.mesh.position.x, y:g.mesh.position.y, z:g.mesh.position.z}); }
+  const q=g.mesh.quaternion;
+  _psend({t:'prop', pid:g.pid, x:g.mesh.position.x, y:g.mesh.position.y, z:g.mesh.position.z,
+          q:[+q.x.toFixed(3),+q.y.toFixed(3),+q.z.toFixed(3),+q.w.toFixed(3)]}); }   // rotation rides along (2026-07-10)
 function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; claimProp(g); return g; }  // optimistic + claim
 function dropProp(g){ if(!g) return; g.carrying=false;               // owner stays mine; propPhysics arcs it + releases on rest
   if(g.isImage){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;      // images don't fall — stay put + release now
@@ -840,7 +842,11 @@ function grabToggleDesktop(){                         // E: drop what I hold, el
 function tryGripGrab(hand, pressed){                  // VR grip edge → grab nearest to that controller / release
   if(pressed && !_gripDown[hand]){ try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
     const gp=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); const g=grabNearest(gp,0.2);
-    if(g){ g.offset=g.mesh.position.clone().sub(gp); _heldHand[hand]=grabProp(g); } }catch(e){} }   // pose-offset attach
+    if(g){ g.offset=g.mesh.position.clone().sub(gp); _heldHand[hand]=grabProp(g);
+      // rotation ride-along (Nix 2026-07-10: "books aren't rotating with the IK hands"):
+      // capture grip⁻¹×mesh at grab, re-compose each frame — the book keeps its in-hand attitude
+      const gq=new THREE.Quaternion().setFromRotationMatrix(grip.matrixWorld);
+      g.rotOffset=gq.clone().invert().multiply(g.mesh.quaternion); } }catch(e){} }   // pose-offset attach
   else if(!pressed && _gripDown[hand]){ if(_heldHand[hand]) dropProp(_heldHand[hand]); _heldHand[hand]=null; }
   _gripDown[hand]=pressed; }
 function _reachPoint(){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
@@ -878,7 +884,13 @@ function _propHoldUpdate(dt){                          // glue carried props to 
   for(const hand of ['left','right']){ const g=_heldHand[hand]; if(!g) continue;
     try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
       const p=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); if(g.offset) p.add(g.offset);
+      if(g.rotOffset){ const gq=new THREE.Quaternion().setFromRotationMatrix(grip.matrixWorld);
+        g.mesh.quaternion.copy(gq).multiply(g.rotOffset); }               // rotate with the hand
       _trackVel(g,p,dt); g.mesh.position.copy(p); sendProp(g); }catch(e){} } }
+const _lvlE=new THREE.Euler();
+function _levelProp(g){                               // rest flat: keep yaw, drop pitch/roll (books on corners look haunted)
+  _lvlE.setFromQuaternion(g.mesh.quaternion,'YXZ');
+  if(Math.abs(_lvlE.x)>0.02||Math.abs(_lvlE.z)>0.02) g.mesh.quaternion.setFromEuler(_lvlE.set(0,_lvlE.y,0,'YXZ')); }
 function propPhysics(dt){
   _propHoldUpdate(dt); _updateHover();
   for(const g of grabbables){ if(g._cool>0) g._cool-=dt;
@@ -889,9 +901,9 @@ function propPhysics(dt){
       const r2=groundHeight(g.mesh.position.x,g.mesh.position.z)+g.hh;
       if(g.mesh.position.y<=r2){ g.mesh.position.y=r2; g.vel.set(0,0,0);
         const rr=Math.hypot(g.mesh.position.x,g.mesh.position.z); if(rr>WORLD_RADIUS){ g.mesh.position.x*=WORLD_RADIUS/rr; g.mesh.position.z*=WORLD_RADIUS/rr; }
-        g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g); }   // rested → release ownership
+        _levelProp(g); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g); }   // rested → release ownership
       else sendProp(g);
-    } else { g.mesh.position.y=rest; g.vel.set(0,0,0); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); }  // dropped in place
+    } else { g.mesh.position.y=rest; g.vel.set(0,0,0); _levelProp(g); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g); }  // dropped in place (send final pose incl. leveled rotation)
   } }
 // authoritative owner update from the relay: grant (owner===me → keep carrying), deny/steal/free (→ let go)
 function applyOwn(pid, owner){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(!g) return; g.owner=owner;
@@ -3489,14 +3501,16 @@ function cachedCreds(q){
       // SPINE replay: one canonical list (falls back to the legacy triple for pre-spine servers).
       // Runs BEFORE propState so grabbables register first.
       (m.objects || [...(m.spawns||[]), ...(m.images||[]), ...(m.texts||[])]).forEach(applyObj);
-      if(m.propState) for(const pid in m.propState){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(g){ const p=m.propState[pid]; g.mesh.position.set(p.x, p.y, p.z); } }
+      if(m.propState) for(const pid in m.propState){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(g){ const p=m.propState[pid]; g.mesh.position.set(p.x, p.y, p.z);
+        if(p.q && p.q.length===4) g.mesh.quaternion.set(p.q[0],p.q[1],p.q[2],p.q[3]); } }
       if(m.propOwners) for(const pid in m.propOwners){ const g=grabbablesById[pid]; if(g) g.owner=m.propOwners[pid]; } }  // late-join: current holds + positions
     else if(m.t === 'join'){ dbg('join', `${m.display} (${m.role})`, 'g'); }
     else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
     else if(m.t === 'prop' && m.id !== myNet){       // a grabbable the OWNER is moving — apply as kinematic
-      const g = grabbablesById[m.pid]||_ensureBookProp(m.pid); if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z); }
+      const g = grabbablesById[m.pid]||_ensureBookProp(m.pid); if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z);
+        if(m.q && m.q.length===4) g.mesh.quaternion.set(m.q[0],m.q[1],m.q[2],m.q[3]); }
       const sp = spawnedObjs.get(m.pid); if(sp) sp.position.set(m.x, m.y||1, m.z); }   // agents carry primitives too (gym)
     else if(m.t === 'own'){                          // authoritative ownership change (grant/deny/free/steal)
       if(window.__grab) window.__grab.applyOwn(m.pid, (m.owner==null?null:m.owner)); }
