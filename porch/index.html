@@ -501,6 +501,12 @@ const sky = new THREE.Mesh(
         col += vec3(0.85, 0.90, 1.00) * smoothstep(0.99955, 0.99985, md);
         col += vec3(0.25, 0.30, 0.42) * pow(max(md, 0.0), 180.0) * 0.35;
         gl_FragColor = vec4(col, 1.0);
+        // colorspace citizenship (mirror-brightness fix, measured thread 2026-07-10): authored values
+        // are DISPLAY-space; decode to linear (exact sRGB EOTF) so the include's OETF is an identity
+        // round-trip on canvas, and the mirror's linear RT stores true linear (reflector encodes once).
+        gl_FragColor.rgb = mix(gl_FragColor.rgb/12.92, pow((gl_FragColor.rgb+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), gl_FragColor.rgb));
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`
   }));
 scene.add(sky);
@@ -576,6 +582,9 @@ const playa = new THREE.Mesh(
         col *= mix(1.5, 1.0, smoothstep(0.0, 11.0, dcam));         // lift close to you
         float dark = 1.0 - smoothstep(14.0, 95.0, dcam);           // fade to black far out
         gl_FragColor = vec4(col * dark, 1.0);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb/12.92, pow((gl_FragColor.rgb+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), gl_FragColor.rgb));   // colorspace citizenship (see sky shader)
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`
   }));
 playa.rotation.x = -Math.PI/2; playa.position.y = -0.02;
@@ -644,6 +653,9 @@ let fenceMat;
         float b = (0.35 + 0.65*vBright) * vFade;
         float a = smoothstep(0.5, 0.06, r) * b;                     // round soft lantern
         gl_FragColor = vec4(vec3(1.0, 0.706, 0.369) * (0.55 + 0.45*vBright) * vFade, a);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb/12.92, pow((gl_FragColor.rgb+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), gl_FragColor.rgb));   // colorspace citizenship (see sky shader)
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`
   });
   scene.add(new THREE.Points(g, fenceMat));
@@ -917,6 +929,14 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   const mH = _mrq || Math.max(2048, Math.min(2048, Math.round(innerHeight * devicePixelRatio)));
   const surface = new Reflector(new THREE.PlaneGeometry(MW, MH), {
     color: 0x808080, textureWidth: mW, textureHeight: mH, clipBias: 0.003 });
+  // Nix's 4×-reported "mirror sky+ground brighter": custom ShaderMaterials (sky/playa/fence) skip
+  // colorspace handling, so their display-space values get LIFTED by the Reflector's linear→sRGB
+  // output (measured 2026-07-10: mirror sky lum 43.9 vs real 12.1). RT-colorspace trick measured
+  // as a NO-OP (hw write-encode) — the real fix lives in those shaders: output linear + includes.
+  // SECOND measured find: new Color(0x808080) is COLOR-MANAGED (0.5 display → 0.214 linear), so the
+  // "identity" overlay actually multiplied dark linear values ×0.43 (mirror went 0.55× too dark once
+  // the shaders were fixed). Overlay identity needs a LITERAL linear 0.5:
+  surface.material.uniforms.color.value.setRGB(0.5, 0.5, 0.5);
   // the avatar is normally hidden; reveal it ONLY while the mirror renders its reflection
   const _obr = surface.onBeforeRender;
   surface.onBeforeRender = function(r, s, c){
