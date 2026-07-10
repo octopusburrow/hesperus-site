@@ -242,7 +242,7 @@ const scene = new THREE.Scene(); window.__scene = scene; window.__THREE = THREE;
 scene.background = new THREE.Color(0x05060d);
 scene.fog = new THREE.Fog(0x0d0f16, 25, 130);
 
-const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600);
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.05, 600); window.__camera = camera;
 window.__cam = camera; window.__renderer = renderer;            // debug: headless render probes
 camera.position.set(0, 1.6, -0.14);   // at the EYES, not the spine: z=0 sat inside the torso, so look-down showed your own back shell (Nix live 2026-07-09)
 
@@ -1080,6 +1080,27 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
 // navigation, so crossing in VR drops to the browser on the far side — reenter there. v1
 // candidates: same-page scene-swap (keeps the session), portal-camera render-to-texture veil.
 const _porticos = [];
+const _porticoMotes = [];                                 // {geo, phase, n} drifting doorway motes, animated in loop
+// STARGATE VEIL (Nix 2026-07-10: "sell 'this takes you somewhere else'"): concentric ripples that
+// travel inward + a soft event-horizon shimmer, so the doorway reads as a portal, not a pane. One
+// shared material across all porticos (same t) — cheap. Additive, kept subtle for the night porch.
+const _veilMat = new THREE.ShaderMaterial({
+  transparent:true, side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false,
+  uniforms:{ uTime:{value:0}, uColor:{value:new THREE.Color(0x9a7fd0)} },
+  vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`
+    varying vec2 vUv; uniform float uTime; uniform vec3 uColor;
+    void main(){
+      vec2 p = (vUv - 0.5) * vec2(1.0, 1.85);            // account for the tall plane so rings read round
+      float d = length(p);
+      float rings = 0.5 + 0.5*sin(d*22.0 - uTime*2.6);   // ripples travelling toward the centre
+      float horizon = smoothstep(0.55, 0.12, d);         // brighter core, fading to the frame
+      float shimmer = 0.5 + 0.5*sin(vUv.y*40.0 + uTime*1.7) * sin(uTime*0.9);
+      float a = horizon * (0.14 + 0.16*rings + 0.05*shimmer);
+      vec3 col = uColor * (0.7 + 0.6*rings) + vec3(0.10,0.06,0.16)*shimmer;
+      gl_FragColor = vec4(col, a);
+    }`
+});
 function addPortico(dest, x, z, label, ry=0){
   const g = new THREE.Group();
   const stone = new THREE.MeshStandardMaterial({color:0x2b2438, roughness:0.6, metalness:0.2});
@@ -1088,23 +1109,31 @@ function addPortico(dest, x, z, label, ry=0){
   const pR = new THREE.Mesh(postG, stone); pR.position.set(0, 1.2,  0.7); pR.castShadow=true; g.add(pR);
   const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 1.9), stone);
   lintel.position.set(0, 2.5, 0); lintel.castShadow=true; g.add(lintel);
-  const veil = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 2.36),
-    new THREE.MeshBasicMaterial({color:0x9a7fd0, transparent:true, opacity:0.16,
-      side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false}));
-  veil.rotation.y = Math.PI/2; veil.position.set(0, 1.19, 0); g.add(veil);
+  const veil = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 2.36), _veilMat);
+  veil.rotation.y = Math.PI/2; veil.position.set(0, 1.19, 0); veil.renderOrder=2; g.add(veil);
+  // a few motes drifting up through the doorway — the "little particle effect" (Nix), one small
+  // Points cloud per portico; animated in the render loop via _porticoMotes.
+  const MOTES=18; const mp=new Float32Array(MOTES*3), mph=new Float32Array(MOTES);
+  for(let i=0;i<MOTES;i++){ mp[i*3]=0.02; mp[i*3+1]=Math.random()*2.3; mp[i*3+2]=(Math.random()-0.5)*1.1; mph[i]=Math.random(); }
+  const mg=new THREE.BufferGeometry(); mg.setAttribute('position', new THREE.BufferAttribute(mp,3));
+  const motes=new THREE.Points(mg, new THREE.PointsMaterial({color:0xbfa8ea, size:0.045, transparent:true,
+    opacity:0.6, blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true}));
+  motes.rotation.y=Math.PI/2; motes.renderOrder=3; g.add(motes);
+  _porticoMotes.push({geo:mg, phase:mph, n:MOTES});
   if(label){                                             // destination label — SDF vector text (Nix: pixelated)
-    const lbl = new THREE.Group();                        // wrapper billboards; bg plane + troika text ride inside
+    // The bg plane IS the billboard mesh: onBeforeRender only fires for objects that get DRAWN, so a
+    // Group wrapper never billboards (it has no geometry) — the label kept the portico's 90° and
+    // rendered tilted. Troika text rides as the bg's child; billboarding the bg carries it along.
     const bg = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.34),
       new THREE.MeshBasicMaterial({color:0x0a0c10, transparent:true, opacity:0.55, depthWrite:false}));
-    bg.renderOrder=5; lbl.add(bg);
+    bg.renderOrder=5;
     const txt = makeTextMesh(label, {size:0.15, color:0xcdbde8, maxWidth:1.5, renderOrder:6,
       onSync: (tm)=>{ const bb=tm.textRenderInfo&&tm.textRenderInfo.blockBounds; if(!bb) return;
         bg.geometry.dispose(); bg.geometry=new THREE.PlaneGeometry((bb[2]-bb[0])+0.22, (bb[3]-bb[1])+0.14); } });
-    txt.position.z = 0.005; lbl.add(txt);
-    // upright billboard the WRAPPER (planes+uprightBillboard stay level; Sprites roll with a tilted VR head)
-    lbl.position.set(0, 2.85, 0);
-    lbl.onBeforeRender=(r,s,cam)=>uprightBillboard(lbl,cam); g.add(lbl);
-    g.userData.labelMesh = lbl;                           // #27 will lintel-align + restyle from here
+    txt.position.z = 0.005; bg.add(txt);
+    bg.position.set(0, 2.66, 0);                          // lintel-aligned (Nix): sits just on the crossbeam (lintel top ≈2.61)
+    bg.onBeforeRender=(r,s,cam)=>uprightBillboard(bg,cam); g.add(bg);
+    g.userData.labelMesh = bg;                            // #27 lintel-align hook
   }
   g.position.set(x, 0, z); g.rotation.y = ry; scene.add(g);
   addCollider(pL, 'portico-post'); addCollider(pR, 'portico-post');
@@ -4503,6 +4532,11 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   t += dt;
   sky.material.uniforms.uTime.value = t;
   fenceMat.uniforms.uTime.value = t;
+  _veilMat.uniforms.uTime.value = t;                       // portal ripple
+  for(const m of _porticoMotes){ const a=m.geo.attributes.position; // motes drift up + wrap, slight sway
+    for(let i=0;i<m.n;i++){ let y=a.array[i*3+1] + dt*(0.12+0.06*m.phase[i]); if(y>2.35) y-=2.35;
+      a.array[i*3+1]=y; a.array[i*3]=0.02+Math.sin(t*0.8+m.phase[i]*6.28)*0.05; }
+    a.needsUpdate=true; }
   // candlelight breathes — slow drift for the long period + a faster flutter you can actually SEE
   const f = 3.25 + Math.sin(t*0.7)*0.14 + Math.sin(t*1.7)*0.15    // slow drift (long, layered)
           + Math.sin(t*5.3)*0.17 + Math.sin(t*8.9)*0.11           // faster visible flicker
