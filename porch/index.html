@@ -3298,12 +3298,74 @@ function pickImage(){                                      // open the OS file p
   inp.click();
 }
 window.__pickImage = pickImage;
-// X while holding a manifested object (image OR text) deletes it (owner-gated server-side);
+
+// ---- VIDEO OBJECTS (Nix 2026-07-10): upload a clip → a looping plane you can grab; click to play/stop.
+// Upload-only (no URLs → no CORS). Muted loops (autoplay policy + a shared space shouldn't blast audio).
+const videoObjs = new Map(); let lastVideoSid = null;
+const VID = { maxFile: 8*1024*1024, dataCap: 8*1024*1024, types:['video/mp4','video/webm','video/ogg'] };
+function applyVideo(msg){
+  if(!msg.sid || videoObjs.has(msg.sid)) return;
+  const aspect = msg.aspect>0 ? msg.aspect : 16/9;        // w/h
+  const long = 1.5, w = aspect>=1 ? long : long*aspect, h = aspect>=1 ? long/aspect : long;
+  const vid = document.createElement('video');
+  vid.src = msg.dataURL; vid.loop = true; vid.muted = true; vid.playsInline = true; vid.setAttribute('playsinline','');
+  vid.play().catch(()=>{});                               // muted autoplay is allowed
+  const tex = new THREE.VideoTexture(vid); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w,h),
+      new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true}));
+  mesh.position.set(msg.x||0, msg.y!=null?msg.y:1.5, msg.z||0); mesh.rotation.y = msg.ry||0;
+  const g = _addProp(msg.sid, mesh, h/2); g.isVideo = true; g.sid = msg.sid; g._vid = vid;
+  mesh.userData.action = ()=>{ if(vid.paused){ vid.play().catch(()=>{}); return 'video playing'; } vid.pause(); return 'video paused'; };
+  _clickables.push(mesh);                                 // click toggles play/stop (grab is E / grip)
+  videoObjs.set(msg.sid, mesh);
+  if(msg.id === myNet) lastVideoSid = msg.sid;
+}
+function removeVideo(sid){
+  const mesh = videoObjs.get(sid);
+  if(mesh){ scene.remove(mesh); const i=_clickables.indexOf(mesh); if(i>=0) _clickables.splice(i,1);
+    const g=grabbablesById[sid]; if(g&&g._vid){ try{ g._vid.pause(); g._vid.src=''; }catch(e){} }
+    if(mesh.material.map) mesh.material.map.dispose(); mesh.geometry.dispose(); mesh.material.dispose();
+    videoObjs.delete(sid); }
+  const g = grabbablesById[sid];
+  if(g){ const i=grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
+    if(heldProp===g) heldProp=null; for(const hnd of ['left','right']) if(_heldHand[hnd]===g) _heldHand[hnd]=null; }
+  if(lastVideoSid===sid) lastVideoSid=null;
+}
+function addVideoFile(file){
+  if(!file) return 'no file';
+  if(!VID.types.includes(file.type)){ imgNote(`can't add ${file.type||'that file'} — mp4/webm/ogg only`, 'video'); return 'bad type'; }
+  if(file.size > VID.maxFile){ imgNote(`that video is ${(file.size/1048576).toFixed(1)} MB — ${VID.maxFile/1048576|0} MB max (keep clips short/low-res for now)`, 'video'); return 'too big'; }
+  const rd = new FileReader();
+  rd.onload = ()=>{ const dataURL = rd.result;
+    if(dataURL.length > VID.dataCap){ imgNote('video too large after encoding — try a shorter/smaller clip', 'video'); return; }
+    // read aspect from a probe element before placing
+    const probe = document.createElement('video'); probe.preload='metadata'; probe.muted=true;
+    probe.onloadedmetadata = ()=>{ const asp = (probe.videoWidth||16)/(probe.videoHeight||9);
+      const fwd=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+      const p=player.position.clone().addScaledVector(fwd,1.6);
+      sendObj('video', {dataURL, aspect:asp, x:p.x, y:1.5, z:p.z, ry:player.rotation.y});
+      imgNote(`added video (${probe.videoWidth}×${probe.videoHeight})`, 'video'); };
+    probe.onerror = ()=>{ imgNote('could not read that video', 'video'); };
+    probe.src = dataURL;
+  };
+  rd.onerror = ()=>imgNote('could not read that file', 'video');
+  rd.readAsDataURL(file);
+  return 'loading';
+}
+window.__addVideoFile = addVideoFile;
+let _vidInput = null;
+function pickVideo(){ if(!_vidInput){ _vidInput=document.createElement('input'); _vidInput.type='file';
+    _vidInput.accept='video/mp4,video/webm,video/ogg'; _vidInput.style.display='none'; document.body.appendChild(_vidInput);
+    _vidInput.addEventListener('change', ()=>{ if(_vidInput.files&&_vidInput.files[0]) addVideoFile(_vidInput.files[0]); _vidInput.value=''; }); }
+  _vidInput.click(); }
+window.__pickVideo = pickVideo;
+
+// X while holding a manifested object (image / text / video) deletes it (owner-gated server-side);
 // else falls through to despawnLast.
 function deleteHeldObject(){
   const g = heldProp || _heldHand.left || _heldHand.right;
   if(g && sock && sock.readyState===1){
-    if(g.isImage || g.isText){ sendDelObj(g.sid); return true; }   // spine: one delete verb
+    if(g.isImage || g.isText || g.isVideo){ sendDelObj(g.sid); return true; }   // spine: one delete verb
   }
   return false;
 }
@@ -3381,6 +3443,7 @@ function removeText(sid){
 const OBJECT_TYPES = {
   spawn: { build: applySpawn, remove: removeSpawn },
   image: { build: applyImage, remove: removeImage },
+  video: { build: applyVideo, remove: removeVideo },
   text:  { build: applyText,  remove: removeText  },
 };
 const objKind = {};                                       // sid -> kind (routes delobj to its remover)
@@ -4143,7 +4206,9 @@ const PORCH_ACTIONS = [
     human:()=>window.__pickImage&&window.__pickImage(),    agent:null},
   {id:'make.spawn', cat:'Make', label:'Spawn shape',   icon:'⬛', desc:'a primitive maker block', args:{shape:'cube|sphere|cone|cylinder'},
     human:()=>window.spawn&&window.spawn('cube'),          agent:(a,x)=>window.spawn&&window.spawn((x&&x.shape)||'cube')},
-  {id:'make.music', cat:'Make', label:'Manifest music',  icon:'🎵', desc:'place a music source in the world (Suno / self-composed)', args:{url:'string', title:'string'},
+  {id:'make.video', cat:'Make', label:'Add video',      icon:'🎬', desc:'upload a looping video clip (mp4/webm, ≤8 MB) — click it to play/stop', args:{},
+    human:()=>window.__pickVideo&&window.__pickVideo(), agent:null},
+  {id:'make.music', cat:'Make', label:'Manifest music',  icon:'🎵', desc:'a placeable music box — coming next', args:{url:'string', title:'string'},
     human:()=>window.__manifestMusic&&window.__manifestMusic(), agent:(a,x)=>window.__manifestMusicURL&&window.__manifestMusicURL(x&&x.url, x&&x.title)},
 ];
 const PORCH_ACTION_BY_ID = Object.fromEntries(PORCH_ACTIONS.map(a=>[a.id, a]));
