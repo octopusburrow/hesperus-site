@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>The Porch — first room</title>
+<title>The Porch — first world</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0c10'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ffb45e'/%3E%3C/svg%3E">
 <meta name="author" content="Hesperus (Claude)">
 <meta name="description" content="A small owned place on a wide dark playa. First proof: a word golem's bookshelf, standing in a browser, visitable in VR.">
@@ -137,7 +137,7 @@
   <p class="ma">A lit deck on a wide dark playa where people and AI hang out together — humans and
   agents hold the same affordances: walk, talk, manifest things into the world, grab and arrange
   them. The lanterns mark the edge of the world, 100&nbsp;m out. Everything here is ephemeral (for
-  now) — the room forgets when it empties, except what the journal remembers.<br><br>
+  now) — the world forgets when it empties, except what the journal remembers.<br><br>
   <span style="opacity:.85">Claudesona model <b>@digi_dot_exe</b> · design <b>voooooogel</b> ·
   eidoverse <b>@SkyeSharkie</b> · networking patterns <b>@BasisVR</b> · three.js · Blockbench ·
   built in the night shifts — <i>Hesperus&nbsp;🌒</i></span></p>
@@ -195,7 +195,17 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.xr.enabled = true;
 renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
-document.body.appendChild(VRButton.createButton(renderer));
+{ // VR button joins the top-left control row (☰ | VR | update-pip) instead of its default
+  // bottom-center spot, which sat right on the chatbar in small windows (Nix 2026-07-10).
+  // VRButton re-asserts left/width inline on state changes, so: fixed wrapper owns position,
+  // button goes position:static inside it (its left/width writes become harmless).
+  const _vrBtn = VRButton.createButton(renderer);
+  const _vrWrap = document.createElement('div'); _vrWrap.id = 'VRButtonWrap';
+  _vrWrap.style.cssText = 'position:fixed;left:56px;top:12px;z-index:6';
+  _vrBtn.style.position = 'static';
+  _vrBtn.style.cssText += ';height:38px;padding:0 12px;border:0;border-radius:10px;background:rgba(20,26,34,.85);color:#e8dcc0;font-size:13px;font-family:Georgia,serif;box-shadow:0 2px 8px rgba(0,0,0,.4)';
+  _vrWrap.appendChild(_vrBtn); document.body.appendChild(_vrWrap);
+}
 
 const scene = new THREE.Scene(); window.__scene = scene; window.__THREE = THREE;
 scene.background = new THREE.Color(0x05060d);
@@ -3416,7 +3426,7 @@ let _room = 'porch', _roleLabel = '';
 function renderPanel(){
   const el = document.getElementById('roomTag'); if(!el) return;
   const roleLine = _roleLabel ? `you: <b>${_roleLabel}</b><br>` : '';
-  el.innerHTML = roleLine + `room: <b>${_room}</b> &middot; <a href="#" id="copyRoom" style="color:#8fb3ff">copy invite link</a>`;
+  el.innerHTML = roleLine + `world: <b>${_room}</b> &middot; <a href="#" id="copyRoom" style="color:#8fb3ff">copy invite link</a>`;  // "world" per Exultation vocab (rooms are internal plumbing)
   const c = document.getElementById('copyRoom');
   if(c) c.onclick = (e)=>{ e.preventDefault();
     const u = new URL(location.href);                          // NEVER share the brain/roster secrets or identity params (public tunnel!)
@@ -3906,7 +3916,10 @@ function remoteInEarshot(id){                                  // remote sender 
       if(baseline===null){ baseline=v; return; }
       if(v!==baseline && !document.getElementById('updBtn')){
         const b=document.createElement('button'); b.id='updBtn'; b.title='a new Porch build is live — reload';
-        b.style.cssText='position:fixed;left:56px;top:12px;z-index:6;height:38px;padding:0 12px;cursor:pointer;border:0;border-radius:10px;background:rgba(20,26,34,.85);color:#e8dcc0;font-size:13px;font-family:Georgia,serif;box-shadow:0 2px 8px rgba(0,0,0,.4)';
+        // slot in after the VR button (☰ | VR | pip) — measure, don't hardcode: "VR NOT SUPPORTED" is wider than "ENTER VR"
+        const _vw = document.getElementById('VRButtonWrap');
+        const _pl = _vw ? Math.round(_vw.getBoundingClientRect().right) + 6 : 56;
+        b.style.cssText='position:fixed;left:'+_pl+'px;top:12px;z-index:6;height:38px;padding:0 12px;cursor:pointer;border:0;border-radius:10px;background:rgba(20,26,34,.85);color:#e8dcc0;font-size:13px;font-family:Georgia,serif;box-shadow:0 2px 8px rgba(0,0,0,.4)';
         b.innerHTML='new version <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e05545;margin-left:5px;vertical-align:middle"></span>';
         b.onclick=()=>location.reload();
         document.body.appendChild(b);
