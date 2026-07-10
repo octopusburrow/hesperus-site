@@ -2727,9 +2727,14 @@ function updatePlayerIK(dt){
     }
   }
   if(typeof fingerTick!=='undefined') fingerTick(vrm);         // curls compose onto the animated pose
-  if(window.__armIK){                                          // arm reach-IK: opt-in (?armik) — first live VR test 2026-07-08
-                                                               // showed arms-behind-back + no finger curl + POV-behind-neck;
-                                                               // OFF until the Basis-style solve lands (see notes/ik-basis-study)
+  const _armOn = window.__armIK===true ||                      // typeof-guarded: extraction harness has no renderer
+    (typeof renderer!=='undefined' && renderer.xr && renderer.xr.isPresenting && window.__armIK!==false);
+  if(_armOn){                                                  // arm reach-IK: VR DEFAULT ON (2026-07-09). History: the
+                                                               // 07-08 live test showed arms-behind-back, so it was parked
+                                                               // behind ?armik — then the morning session fixed that bug's
+                                                               // actual roots (scene-parented grips; world-frame eulers)
+                                                               // and nobody un-parked the arms: Nix's "arm IK not working
+                                                               // AT ALL" was a gate no code path opened. ?noarmik opts out.
     _solveArm(vrm, 'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
     _solveArm(vrm, 'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
   }
