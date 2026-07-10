@@ -95,8 +95,12 @@
   #compose .pill{padding:5px 11px;border-radius:8px;border:1px solid #39424f;background:#20262f;color:#cfd6df;
     font-size:13px;cursor:pointer;user-select:none}
   #compose .pill.sel{background:#3a4d63;border-color:#5a7ba8;color:#eaf2fb;box-shadow:inset 0 0 0 1px #6d8fbf}
-  #compose .sw{display:inline-block;width:24px;height:24px;border-radius:50%;border:2px solid #2a303b;cursor:pointer;margin-right:6px;vertical-align:middle}
-  #compose .sw.sel{border-color:#eaf2fb;box-shadow:0 0 0 2px #6d8fbf}
+  #compose .sel{background:#20262f;color:#dfe4ea;border:1px solid #39424f;border-radius:8px;
+    padding:6px 10px;font:13px Georgia,serif;cursor:pointer}
+  #compose .wheel{width:46px;height:30px;border:1px solid #39424f;border-radius:8px;background:#20262f;
+    cursor:pointer;padding:2px;vertical-align:middle}
+  #compose .wheel::-webkit-color-swatch{border:none;border-radius:5px}
+  #compose .wheel::-webkit-color-swatch-wrapper{padding:0}
   #compose .actions{display:flex;justify-content:flex-end;gap:9px;margin-top:13px}
   #compose .btn{padding:8px 16px;border-radius:9px;border:0;cursor:pointer;font-size:13px;font-family:Georgia,serif}
   #compose .btn.go{background:#3a6d4d;color:#eafaf0} #compose .btn.no{background:#31363f;color:#c7ccd4}
@@ -147,6 +151,8 @@
   <button class="emoteItem" data-emote="dance" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="dance (3)">💃</button>
   <button class="emoteItem" data-emote="raise" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="raise hand (4)">🙌</button>
 </div>
+<button id="manifestBtn" title="manifest (make things)" style="position:fixed;left:14px;bottom:248px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">✨</button>
+<div id="manifestMenu" style="position:fixed;left:66px;bottom:248px;z-index:7;display:none;flex-direction:column;gap:4px;background:rgba(16,19,26,0.96);border:1px solid #2f3644;border-radius:11px;padding:6px;box-shadow:0 8px 28px rgba(0,0,0,.5);min-width:170px"></div>
 <div id="menu" class="hid">
   <div class="mh">The Porch 🌒</div>
   <button id="aboutBtn" class="mbtn">ℹ About the Porch</button>
@@ -170,8 +176,7 @@
   </select></label>
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
-  <button id="addImgBtn" class="mbtn">🖼 Add image…</button>
-  <button id="addTxtBtn" class="mbtn">✍ Manifest text…</button>
+  <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
 </div>
@@ -180,13 +185,12 @@
   <div class="prev" id="cmpPrev">your words, in the world</div>
   <textarea id="cmpText" maxlength="240" placeholder="type the words to manifest…"></textarea>
   <div class="row"><span class="lbl">Font</span>
-    <span class="pill" data-font="serif">Serif</span>
-    <span class="pill" data-font="sans">Sans</span>
-    <span class="pill" data-font="mono">Mono</span></div>
-  <div class="row"><span class="lbl">Color</span><span id="cmpColors"></span></div>
+    <select id="cmpFont" class="sel"></select></div>
+  <div class="row"><span class="lbl">Text color</span>
+    <input type="color" id="cmpTextColor" class="wheel" value="#ece3cf"></div>
   <div class="row"><span class="lbl">Background</span>
     <span class="pill" id="cmpBgToggle" data-on="1">On</span>
-    <span id="cmpBgColors"></span></div>
+    <input type="color" id="cmpBgColor" class="wheel" value="#12141b"></div>
   <div class="actions">
     <button class="btn no" id="cmpCancel">Cancel</button>
     <button class="btn go" id="cmpGo">Manifest ↵</button></div>
@@ -4058,6 +4062,8 @@ const PORCH_ACTIONS = [
     human:()=>window.__pickImage&&window.__pickImage(),    agent:null},
   {id:'make.spawn', cat:'Make', label:'Spawn shape',   icon:'⬛', desc:'a primitive maker block', args:{shape:'cube|sphere|cone|cylinder'},
     human:()=>window.spawn&&window.spawn('cube'),          agent:(a,x)=>window.spawn&&window.spawn((x&&x.shape)||'cube')},
+  {id:'make.music', cat:'Make', label:'Manifest music',  icon:'🎵', desc:'place a music source in the world (Suno / self-composed)', args:{url:'string', title:'string'},
+    human:()=>window.__manifestMusic&&window.__manifestMusic(), agent:(a,x)=>window.__manifestMusicURL&&window.__manifestMusicURL(x&&x.url, x&&x.title)},
 ];
 const PORCH_ACTION_BY_ID = Object.fromEntries(PORCH_ACTIONS.map(a=>[a.id, a]));
 // which surfaces an action appears on (explicit surfaces[] wins; else inferred from its bindings)
@@ -4089,30 +4095,28 @@ window.__agentDo = agentDo; window.__agentCatalog = agentActionCatalog;
 // ---- TEXT COMPOSE PANEL (#25 preview, 2026-07-10): type → see font/color/background live → manifest.
 // Desktop first (verifiable); the VR version will reuse this state + the troika style path. The HTML
 // preview uses the SAME vendored ttf via @font-face, so what you see ≈ what troika renders in-world.
-const CMP_FONTS = { serif:'PorchSerif', sans:'PorchSans', mono:'PorchMono' };
-const CMP_TEXT_COLORS = [0xece3cf,0xffffff,0xf2ce86,0x8fd3c8,0xe6a2b8,0xb9a3e8,0x0e1014];  // cream/white/gold/teal/rose/violet/ink
-const CMP_BG_COLORS   = [0x12141b,0x000000,0x2a1d12,0xece3cf];                              // dark/black/wood/cream
-const _cmp = { font:'serif', color:CMP_TEXT_COLORS[0], bgOn:true, bgColor:CMP_BG_COLORS[0] };
+// CSS font-family per registry font key (@font-face names) — labels for the dropdown come from the key
+const CMP_FONT_CSS = { serif:'PorchSerif', sans:'PorchSans', mono:'PorchMono' };
+const CMP_FONT_LABEL = { serif:'Serif (Gelasio)', sans:'Sans (Rubik)', mono:'Mono (Space Mono)' };
+const _cmp = { font:'serif', color:0xece3cf, bgOn:true, bgColor:0x12141b };
 const _hex = n => '#'+('000000'+ (n>>>0).toString(16)).slice(-6);
-function _cmpRenderControls(){
-  const cc=document.getElementById('cmpColors'); if(cc && !cc.dataset.built){ cc.dataset.built='1';
-    CMP_TEXT_COLORS.forEach(c=>{ const s=document.createElement('span'); s.className='sw'; s.style.background=_hex(c);
-      s.onclick=()=>{ _cmp.color=c; _cmpSync(); }; s.dataset.col=c; cc.appendChild(s); }); }
-  const bc=document.getElementById('cmpBgColors'); if(bc && !bc.dataset.built){ bc.dataset.built='1';
-    CMP_BG_COLORS.forEach(c=>{ const s=document.createElement('span'); s.className='sw'; s.style.background=_hex(c);
-      s.onclick=()=>{ _cmp.bgColor=c; _cmp.bgOn=true; _cmpSync(); }; s.dataset.bg=c; bc.appendChild(s); }); }
+const _unhex = s => parseInt(String(s).replace('#',''),16)>>>0;
+function _cmpRenderControls(){                             // font dropdown auto-built from PORCH_FONTS (add a font → it appears)
+  const sel=document.getElementById('cmpFont'); if(sel && !sel.dataset.built){ sel.dataset.built='1';
+    Object.keys(PORCH_FONTS).forEach(k=>{ const o=document.createElement('option'); o.value=k;
+      o.textContent=CMP_FONT_LABEL[k]||k; sel.appendChild(o); }); }
 }
-function _cmpSync(){                                       // reflect _cmp state into the preview + selection UI
+function _cmpSync(){                                       // reflect _cmp into the live preview + controls
   const prev=document.getElementById('cmpPrev'), ta=document.getElementById('cmpText');
   if(!prev) return;
   prev.textContent = (ta && ta.value.trim()) || 'your words, in the world';
-  prev.style.fontFamily = CMP_FONTS[_cmp.font]+', Georgia, serif';
+  prev.style.fontFamily = (CMP_FONT_CSS[_cmp.font]||'PorchSerif')+', Georgia, serif';
   prev.style.color = _hex(_cmp.color);
   prev.style.background = _cmp.bgOn ? _hex(_cmp.bgColor) : 'transparent';
-  document.querySelectorAll('#compose .pill[data-font]').forEach(p=>p.classList.toggle('sel', p.dataset.font===_cmp.font));
+  const sel=document.getElementById('cmpFont'); if(sel) sel.value=_cmp.font;
+  const tc=document.getElementById('cmpTextColor'); if(tc) tc.value=_hex(_cmp.color);
+  const bc=document.getElementById('cmpBgColor'); if(bc){ bc.value=_hex(_cmp.bgColor); bc.disabled=!_cmp.bgOn; bc.style.opacity=_cmp.bgOn?'1':'0.4'; }
   const bt=document.getElementById('cmpBgToggle'); if(bt){ bt.textContent=_cmp.bgOn?'On':'Off'; bt.classList.toggle('sel',_cmp.bgOn); }
-  document.querySelectorAll('#cmpColors .sw').forEach(s=>s.classList.toggle('sel', +s.dataset.col===_cmp.color));
-  document.querySelectorAll('#cmpBgColors .sw').forEach(s=>s.classList.toggle('sel', _cmp.bgOn && +s.dataset.bg===_cmp.bgColor));
 }
 function openTextCompose(){
   const el=document.getElementById('compose'); if(!el) return;
@@ -4127,10 +4131,13 @@ function _cmpConfirm(){
   closeTextCompose();
 }
 window.__openTextCompose = openTextCompose;                // the make.text human binding + ✍ button call this
+if(!window.__manifestMusic) window.__manifestMusic = ()=>{ if(window.__logChat) window.__logChat('porch','🎵 music manifest is being wired up — coming very soon','sys','cmd'); };  // real handler installed by the audio module
 (function wireCompose(){
   const el=document.getElementById('compose'); if(!el) return;
   el.addEventListener('click', e=>{ if(e.target===el) closeTextCompose(); });   // click backdrop = cancel
-  document.querySelectorAll('#compose .pill[data-font]').forEach(p=> p.onclick=()=>{ _cmp.font=p.dataset.font; _cmpSync(); });
+  const sel=document.getElementById('cmpFont'); if(sel) sel.onchange=()=>{ _cmp.font=sel.value; _cmpSync(); };
+  const tc=document.getElementById('cmpTextColor'); if(tc) tc.oninput=()=>{ _cmp.color=_unhex(tc.value); _cmpSync(); };
+  const bc2=document.getElementById('cmpBgColor'); if(bc2) bc2.oninput=()=>{ _cmp.bgColor=_unhex(bc2.value); _cmp.bgOn=true; _cmpSync(); };
   const bt=document.getElementById('cmpBgToggle'); if(bt) bt.onclick=()=>{ _cmp.bgOn=!_cmp.bgOn; _cmpSync(); };
   const ta=document.getElementById('cmpText'); if(ta){ ta.addEventListener('input',_cmpSync);
     ta.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); _cmpConfirm(); }
@@ -4228,10 +4235,18 @@ function remoteInEarshot(id){                                  // remote sender 
   if(aboutBtn && aboutBody) aboutBtn.onclick = ()=>{ aboutBody.style.display = aboutBody.style.display==='none' ? 'block' : 'none'; };
   const toggleMenu = ()=>{ if(menu) menu.classList.toggle('hid'); };
   if(menuBtn) menuBtn.addEventListener('click', toggleMenu);
-  const addImgBtn = document.getElementById('addImgBtn');
-  if(addImgBtn) addImgBtn.addEventListener('click', ()=>{ pickImage(); menu.classList.add('hid'); });
-  const addTxtBtn = document.getElementById('addTxtBtn');
-  if(addTxtBtn) addTxtBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); openTextCompose(); });  // preview editor, not native prompt
+  // ✨ Manifest pop-out: the "Make" category of the Action Registry, rendered as a submenu — one
+  // pipeline for text/image/shape/music (Nix 2026-07-10). Add a Make action → it appears here.
+  const mfBtn=document.getElementById('manifestBtn'), mfMenu=document.getElementById('manifestMenu');
+  if(mfBtn && mfMenu){
+    PORCH_ACTIONS.filter(a=>a.cat==='Make' && a.human).forEach(a=>{
+      const b=document.createElement('button'); b.className='mbtn'; b.style.margin='0'; b.style.textAlign='left';
+      b.innerHTML=`${a.icon||'•'} ${a.label}`;
+      b.onclick=()=>{ mfMenu.style.display='none'; doAction(a.id); };
+      mfMenu.appendChild(b); });
+    mfBtn.addEventListener('click', ()=>{ mfMenu.style.display = mfMenu.style.display==='flex' ? 'none' : 'flex'; });
+    addEventListener('pointerdown', e=>{ if(mfMenu.style.display==='flex' && !mfMenu.contains(e.target) && e.target!==mfBtn) mfMenu.style.display='none'; }, true);
+  }
   const vrProbeBtn = document.getElementById('vrProbeBtn');
   if(vrProbeBtn) vrProbeBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); vrProbe(); });
   // ---- emote menu (desktop): tray toggle + click + 1-4 hotkeys. VR uses the world-space panel. ----
