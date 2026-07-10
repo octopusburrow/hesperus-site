@@ -229,12 +229,13 @@ function _tryClickables(raycaster){
 }
 let _cdX=0, _cdY=0, _cdT=0;
 addEventListener('mousedown', e=>{ _cdX=e.clientX; _cdY=e.clientY; _cdT=performance.now(); });
+let _clickConsumed=false;                                           // a world-button click shouldn't ALSO lock the pointer
 addEventListener('mouseup', e=>{
   if(e.target && e.target.tagName!=='CANVAS') return;               // UI clicks stay UI clicks
   if(Math.hypot(e.clientX-_cdX, e.clientY-_cdY)>6 || performance.now()-_cdT>400) return;  // that was a drag
   if(document.pointerLockElement){ _clickRC.setFromCamera({x:0,y:0}, camera); }
   else { _clickRC.setFromCamera({x:(e.clientX/innerWidth)*2-1, y:-(e.clientY/innerHeight)*2+1}, camera); }
-  _tryClickables(_clickRC);
+  _clickConsumed = _tryClickables(_clickRC);
 });
 function _occupants(){ const o=[];
   if(typeof residentVrm!=='undefined' && residentVrm) o.push(residentVrm.scene.position);
@@ -1975,15 +1976,38 @@ const JUMP_V = Math.sqrt(2 * GRAV * 2.0);                   // ~2 m apex
 let velY = 0, grounded = true, wantJump = false, prevJumpBtn = false;
 
 // ---- desktop controls: drag to look, WASD to walk, Space to jump ----
+// VRC-STYLE slice 1 (Nix approved the rework, 2026-07-10): pointer-lock free-look. Click the WORLD
+// → the mouse becomes the camera (no drag), a crosshair marks the interact ray, Esc frees the
+// cursor for the HUD (both click+hover paths already branch on pointerLockElement). Drag-to-look
+// still works when unlocked, so nothing is lost for trackpads / the lock-shy.
 let pitch = 0, dragging = false;
 renderer.domElement.addEventListener('pointerdown', ()=>{ dragging = true; });
 addEventListener('pointerup', ()=> dragging = false);
 addEventListener('pointermove', e=>{
-  if(!dragging || renderer.xr.isPresenting) return;
+  if((!dragging && !document.pointerLockElement) || renderer.xr.isPresenting) return;
   player.rotation.y -= e.movementX * 0.0035;
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0035));
   camera.rotation.x = pitch;
 });
+{ // lock on world-click; crosshair while locked
+  const xh=document.createElement('div'); xh.id='crosshair';
+  xh.style.cssText='position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:5;'+
+    'width:6px;height:6px;border-radius:50%;background:rgba(232,220,192,.85);'+
+    'box-shadow:0 0 0 2px rgba(10,12,16,.45);display:none;pointer-events:none';
+  document.body.appendChild(xh);
+  let _plClick=false;                                       // suppress the lock-request on drag-release
+  renderer.domElement.addEventListener('mousedown', ()=>{ _plClick = !document.pointerLockElement; });
+  // WINDOW-level on purpose: the world-button click handler is also on window and registered FIRST,
+  // so _clickConsumed is decided before we choose to lock (canvas-level would fire before it).
+  addEventListener('mouseup', e=>{
+    if(_plClick && e.target && e.target.tagName==='CANVAS'
+       && !document.pointerLockElement && !renderer.xr.isPresenting && !_clickConsumed){
+      const dx=Math.abs(e.clientX-_cdX), dy=Math.abs(e.clientY-_cdY);
+      if(dx<4 && dy<4) renderer.domElement.requestPointerLock();   // click (not drag, not a button) → lock
+    } _plClick=false; _clickConsumed=false; });
+  document.addEventListener('pointerlockchange', ()=>{
+    xh.style.display = document.pointerLockElement ? 'block' : 'none'; });
+}
 const keys = {}; window.__keys = keys;                     // exposed for headless WASD-stuck test
 let _spawnKinds = ['cube','sphere','cone','cylinder'], _spawnI = 0;
 addEventListener('keydown', e=>{
