@@ -176,6 +176,7 @@
   </select></label>
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
+  <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
@@ -4131,7 +4132,45 @@ function _cmpConfirm(){
   closeTextCompose();
 }
 window.__openTextCompose = openTextCompose;                // the make.text human binding + ✍ button call this
-if(!window.__manifestMusic) window.__manifestMusic = ()=>{ if(window.__logChat) window.__logChat('porch','🎵 music manifest is being wired up — coming very soon','sys','cmd'); };  // real handler installed by the audio module
+
+// ---- PORCH AMBIENT (2026-07-10): our owned ambient bed, "Lanternlight" (audio-lab/porch_ambient.py).
+// A seamless 2-min Cadd9 drone loop. Web-Audio loop via decodeAudioData (sample-accurate; OGG chosen
+// because MP3 encoder-padding leaves a loop gap). Autoplay policy → starts on the first user gesture.
+// The AudioListener here is the shared audio infrastructure that make.music (music objects) reuses.
+const _audioListener = new THREE.AudioListener(); camera.add(_audioListener);
+window.__audioListener = _audioListener;                   // music objects attach positional audio to this
+let _ambient=null, _ambientLoading=false;
+let _ambientOn = localStorage.getItem('porch.ambient')!=='off';   // default ON, persisted per browser
+function _startAmbient(){
+  if(_ambient || _ambientLoading || !_ambientOn) return; _ambientLoading=true;
+  new THREE.AudioLoader().load('./assets/porch_ambient.ogg', (buf)=>{
+    _ambient = new THREE.Audio(_audioListener);
+    _ambient.setBuffer(buf); _ambient.setLoop(true); _ambient.setVolume(0.0);
+    if(_ambientOn && _audioListener.context.state==='running'){ _ambient.play(); _ambientFade(0.30, 4); }
+  }, undefined, (e)=>{ _ambientLoading=false; console.warn('ambient load failed', e); });
+}
+function _ambientFade(to, secs){                            // gentle ramp instead of an abrupt start/stop
+  if(!_ambient || !_ambient.gain) return; const g=_ambient.gain.gain, now=_audioListener.context.currentTime;
+  g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(to, now+secs);
+}
+function setAmbient(on){ _ambientOn=on; localStorage.setItem('porch.ambient', on?'on':'off');
+  if(on){ if(!_ambient) _startAmbient(); else { if(!_ambient.isPlaying) _ambient.play(); _ambientFade(0.30, 3); } }
+  else if(_ambient && _ambient.isPlaying){ _ambientFade(0.0, 2); setTimeout(()=>{ if(!_ambientOn && _ambient) _ambient.pause(); }, 2100); } }
+window.__setAmbient = setAmbient;
+function _audioGesture(){                                   // autoplay gate: resume context + start on first interaction
+  if(_audioListener.context.state==='suspended') _audioListener.context.resume().catch(()=>{});
+  if(_ambientOn){ if(!_ambient) _startAmbient();
+    else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambientFade(0.30, 4); } }
+}
+['pointerdown','keydown','touchstart'].forEach(ev=>addEventListener(ev, _audioGesture));
+addEventListener('DOMContentLoaded', ()=>{ const cb=document.getElementById('ambientToggle');
+  if(cb){ cb.checked=_ambientOn; cb.addEventListener('change', ()=>setAmbient(cb.checked)); } });
+
+// make.music: the music OBJECT (a placeable, grabbable source with positional audio off the shared
+// AudioListener) needs a spine kind + relay OBJ_CAPS row — that's the next increment. For now the
+// affordance is honest about being in progress rather than sending a message the relay would drop.
+window.__manifestMusic = function(){ if(window.__logChat)
+  window.__logChat('porch','🎵 placeable music objects (Suno / self-composed) are next — the Porch ambient bed is live now (toggle in ☰)','sys','cmd'); };
 (function wireCompose(){
   const el=document.getElementById('compose'); if(!el) return;
   el.addEventListener('click', e=>{ if(e.target===el) closeTextCompose(); });   // click backdrop = cancel
