@@ -3393,6 +3393,9 @@ function cachedCreds(q){
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
     if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
       _everWelcomed = true;                                    // accepted: drop the auth veil, reveal the world
+      try{ const _wc=localStorage.getItem('porch.wristcal');   // measured wrist cal phones home (2026-07-10):
+        if(_wc && sock && sock.readyState===1)                 // the relay journals it → harvest from room logs,
+          sock.send(JSON.stringify({t:'wristcal', cal:JSON.parse(_wc)})); }catch(e){}  // no DevTools console at midnight
       _authVeil(false); { const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; }
       dbg('welcome', `#${m.id} ${m.display} (${myRole}) room=${m.room} proto=${m.proto}`, 'g');
       setAvatarRole(avatar, myRole); showRole(myRole, m.display);
