@@ -77,8 +77,11 @@
 </style>
 </head>
 <body>
-<div id="signin" style="position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 38%,#141821,#080a0e);font-family:Georgia,serif;color:#e8dcc0">
-  <div style="width:320px;max-width:88vw;text-align:center">
+<!-- Sign-in doubles as the AUTH VEIL and defaults ON (display:flex, card hidden): static HTML —
+     chatbar, buttons — paints while the module script is still fetching, so JS can only ever be
+     late to cover it. The page boots veiled; script decides what to reveal (form / world / solo). -->
+<div id="signin" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 38%,#141821,#080a0e);font-family:Georgia,serif;color:#e8dcc0">
+  <div style="width:320px;max-width:88vw;text-align:center;visibility:hidden">
     <div style="font-size:27px;letter-spacing:1px">The Porch</div>
     <div style="font-size:13px;opacity:.55;margin:4px 0 22px">a lit deck on a wide dark playa</div>
     <input id="siName" placeholder="your name" maxlength="24" autocomplete="off" spellcheck="false"
