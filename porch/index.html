@@ -94,12 +94,12 @@
   </div>
 </div>
 <div id="plaque"></div>
-<button id="ctlBtn" title="controls (?)" style="position:fixed;right:64px;bottom:12px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:19px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🎮</button>
-<div id="ctlPanel" style="position:fixed;right:12px;bottom:64px;z-index:7;display:none;max-width:340px;padding:14px 16px;border-radius:12px;background:rgba(14,18,25,.94);color:#cbbfa4;font-size:12.5px;line-height:1.75;box-shadow:0 4px 16px rgba(0,0,0,.5)">
+<button id="ctlBtn" title="controls (?)" style="position:fixed;left:14px;bottom:152px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:19px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🎮</button>
+<div id="ctlPanel" style="position:fixed;left:66px;bottom:152px;z-index:7;display:none;max-width:340px;padding:14px 16px;border-radius:12px;background:rgba(14,18,25,.94);color:#cbbfa4;font-size:12.5px;line-height:1.75;box-shadow:0 4px 16px rgba(0,0,0,.5)">
   <div style="color:#e8dcc0;font-size:13px;margin-bottom:4px">⌨️ Desktop</div>
   <b>WASD</b> walk · <b>Space</b> jump · <b>drag</b> look · <b>click</b> world buttons<br>
   <b>Enter</b> chat · <b>@Name</b> addresses · <b>/help</b> commands<br>
-  <b>E</b> grab/drop · <b>T</b> boop whoever you face<br>
+  <b>E</b> grab/drop · <b>T</b> boop whoever you face · <b>V</b> mic<br>
   <b>G</b> emotes · <b>1–4</b> 👋🎉💃🙌 · <b>M</b> menu · <b>`</b> debug<br>
   <b>B</b> spawn block · <b>arrows</b> nudge · <b>X</b> remove<br>
   <div style="color:#e8dcc0;font-size:13px;margin:8px 0 4px">🥽 VR</div>
@@ -117,14 +117,14 @@
     <option value="2">high</option>
     <option value="2.5">ultra (GPU&nbsp;poison)</option>
   </select></label><br>
-  <label><input type="checkbox" id="micTalk"> <span id="micDot" style="color:#5a6474">●</span> 🎙 talk (VR: B/Y toggles)</label>
+  <label><input type="checkbox" id="micTalk"> <span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</label>
   <div id="roomTag" style="margin-top:9px;font-size:12px;opacity:.9"></div>
 </div>
 <div id="chatbar"><div id="chathist"></div><textarea id="chatinput" maxlength="280" rows="1"
   placeholder="type to talk — Enter sends · Shift+Enter newline · @Name to address"></textarea></div>
 <button id="menuBtn" title="menu (M)">☰</button>
-<button id="emoteBtn" title="emotes (G)" style="position:fixed;right:12px;bottom:12px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🙂</button>
-<div id="emoteTray" style="position:fixed;right:12px;bottom:64px;z-index:6;display:none;flex-direction:column;gap:6px">
+<button id="emoteBtn" title="emotes (G)" style="position:fixed;left:14px;bottom:104px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🙂</button>
+<div id="emoteTray" style="position:fixed;left:66px;bottom:104px;z-index:6;display:none;flex-direction:row;gap:6px">
   <button class="emoteItem" data-emote="wave"  style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="wave (1)">👋</button>
   <button class="emoteItem" data-emote="cheer" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="cheer (2)">🎉</button>
   <button class="emoteItem" data-emote="dance" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="dance (3)">💃</button>
@@ -834,9 +834,30 @@ function tryGripGrab(hand, pressed){                  // VR grip edge → grab n
 function _reachPoint(){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
   const r=player.position.clone().addScaledVector(f,0.85); r.y=Math.max(0.55, player.position.y+0.9); return r; }
 let _hoverG=null;                                     // hover-glow the prop I could grab right now (desktop)
+let _hoverC=null, _hovMX=0, _hovMY=0;                 // aimed-at clickable (mirror btn, portico confirm…)
+addEventListener('mousemove', e=>{ _hovMX=e.clientX; _hovMY=e.clientY; });
+const _hovNDC=new THREE.Vector2(), _hovRC=new THREE.Raycaster();
 function _updateHover(){ const g=(heldProp||_heldHand.left||_heldHand.right)?null:grabNearest(_reachPoint(),0.85);
   if(g!==_hoverG){ if(_hoverG&&_hoverG.mat.emissive) _hoverG.mat.emissive.setHex(0x000000);
-    if(g&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; } }
+    if(g&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; }
+  // clickable highlight (Nix 2026-07-09: telegraph the interaction BEFORE the click — objects only,
+  // never avatars): aim = pointer-lock center, else the mouse. Same warm glow as grabbable hover.
+  let c=null;
+  if(!renderer.xr.isPresenting && _clickables.length){
+    if(document.pointerLockElement) _hovNDC.set(0,0);
+    else _hovNDC.set((_hovMX/innerWidth)*2-1, -(_hovMY/innerHeight)*2+1);
+    _hovRC.setFromCamera(_hovNDC, camera);
+    const hits=_hovRC.intersectObjects(_clickables, false);
+    if(hits.length && hits[0].distance<3.5) c=hits[0].object;
+  }
+  if(c!==_hoverC){
+    const glow=(o,on)=>{ const m=o&&o.material; if(!m) return;
+      if(m.emissive) m.emissive.setHex(on?0x4a3a18:0x000000);
+      else if(m.color&&!o.userData._hovOrig&&on){ o.userData._hovOrig=m.color.getHex(); m.color.offsetHSL(0,0,0.18); }
+      else if(o.userData._hovOrig!=null&&!on){ m.color.setHex(o.userData._hovOrig); delete o.userData._hovOrig; } };
+    glow(_hoverC,false); glow(c,true); _hoverC=c;
+    document.body.style.cursor = c ? 'pointer' : '';
+  } }
 function _trackVel(g, pos, dt){ if(dt>0 && _propPrev[g.pid]) g.vel.copy(pos).sub(_propPrev[g.pid]).multiplyScalar(1/dt); _propPrev[g.pid]=pos.clone(); }
 function _propHoldUpdate(dt){                          // glue carried props to the holder + measure throw velocity
   if(heldProp){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
@@ -1928,7 +1949,9 @@ addEventListener('keydown', e=>{
     else if(e.code==='ArrowUp') moveLast(0,0,-d); else if(e.code==='ArrowDown') moveLast(0,0,d); }
   if(e.code==='KeyX'){ if(!deleteHeldObject() && window.despawnLast) despawnLast(); }   // held image/text → delete it; else last block
   if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); }
-  if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); } });    // T = touch: pat/boop whoever you face
+  if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
+  if(e.code==='KeyV'){ const cb=document.getElementById('micTalk');       // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
+    if(cb){ cb.checked=!cb.checked; cb.dispatchEvent(new Event('change')); } } });
 addEventListener('keyup',   e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
   keys[e.code] = false; });
@@ -3823,15 +3846,20 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
   function micState(s){
     if(micDot) micDot.style.color = MIC_COL[s] || MIC_COL.off;
     const g=_micCanvas.getContext('2d'); g.clearRect(0,0,64,64);
-    g.globalAlpha = s==='live' ? 0.42 : 1;                    // armed-but-quiet: ghosted
+    g.globalAlpha = s==='live' ? 0.55 : 1;                    // armed-but-quiet: ghosted
     g.fillStyle = s==='talk' ? 'rgba(30,24,12,0.88)' : 'rgba(10,12,16,0.72)';
     g.beginPath(); g.arc(32,32,29,0,7); g.fill();
-    if(s==='talk'){ g.shadowColor='#ffc36b'; g.shadowBlur=10; }
-    g.strokeStyle=MIC_COL[s]||MIC_COL.off; g.lineWidth = s==='talk' ? 5 : 4;
-    g.beginPath(); g.arc(32,32,29,0,7); g.stroke(); g.shadowBlur=0;
-    g.font='30px serif'; g.textAlign='center'; g.textBaseline='middle';
-    g.fillText('🎙',32,34);
-    if(s==='off'){ g.strokeStyle=MIC_COL.off; g.lineWidth=5; g.beginPath(); g.moveTo(14,50); g.lineTo(50,14); g.stroke(); }
+    // a MIC-shaped mic (Nix: the emoji at HUD size read as 'just a circle'): capsule + cradle + stem + base
+    const col = MIC_COL[s]||MIC_COL.off;
+    if(s==='talk'){ g.shadowColor='#ffc36b'; g.shadowBlur=12; }
+    g.strokeStyle=col; g.fillStyle=col; g.lineWidth=4; g.lineCap='round';
+    g.beginPath(); g.roundRect(25,10,14,24,7); g.fill();       // capsule body
+    g.beginPath(); g.arc(32,32,13,0.15,Math.PI-0.15); g.stroke(); // cradle
+    g.beginPath(); g.moveTo(32,45); g.lineTo(32,52); g.stroke();  // stem
+    g.beginPath(); g.moveTo(23,53); g.lineTo(41,53); g.stroke();  // base
+    g.shadowBlur=0;
+    if(s==='off'){ g.strokeStyle=MIC_COL.off; g.lineWidth=5;
+      g.beginPath(); g.moveTo(15,51); g.lineTo(49,13); g.stroke(); }  // muted slash
     g.globalAlpha = 1;
     _micTex.needsUpdate = true;
     if(micHudImg) micHudImg.src = _micCanvas.toDataURL();     // desktop corner icon
