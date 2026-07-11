@@ -3699,16 +3699,19 @@ const OBJECT_TYPES = {
   model: { build: applyModel, remove: removeModel },
 };
 const objKind = {};                                       // sid -> kind (routes delobj to its remover)
+const _worldLedger = new Map();                           // sid -> the obj msg that built it (drives __snapshotWorld)
 function applyObj(m){
   const kind = m.kind || m.t;                             // spine records carry kind; legacy rode t
   const reg = OBJECT_TYPES[kind]; if(!reg || !m.sid) return;
   objKind[m.sid] = kind; reg.build(m);
+  const {t, id, cid, _root, ...keep} = m;                 // ledger keeps the rebuild fields, drops transport noise
+  _worldLedger.set(m.sid, {kind, ...keep});
 }
 function removeObj(sid){
   const reg = OBJECT_TYPES[objKind[sid]];
   if(reg) reg.remove(sid);
   else for(const k in OBJECT_TYPES) OBJECT_TYPES[k].remove(sid);   // unknown sid: removers are safe no-ops
-  delete objKind[sid];
+  delete objKind[sid]; _worldLedger.delete(sid);
 }
 function sendObj(kind, fields){                           // one door out — every manifest send goes through here
   if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'obj', kind, ...fields}));
@@ -3732,6 +3735,50 @@ function addText(str, style){                             // validate + broadcas
 }
 window.__addText = addText;
 window.__applyObj = applyObj;                              // spine entry (agents + headless tests render objects directly)
+
+// ---- WORLD SNAPSHOTS (2026-07-10): capture the furnished world → static files → re-serve it later, so a
+// visitor's assets persist even after they log off. Persistence with ZERO server infra: a snapshot is a
+// manifest + content-addressed asset files committed to the (free, static) Pages repo, replayed on boot.
+// __snapshotWorld() dumps the live world (patching each object's CURRENT transform); tools/save-snapshot.mjs
+// content-addresses it; __loadSnapshot() replays it. Boot auto-loads snapshots/current.json in SOLO mode
+// ONLY — a live relay is its own authority for world state, so we never double-source.
+function __snapshotWorld(){
+  const objects=[];
+  for(const [sid, base] of _worldLedger){
+    const g = grabbablesById[sid]; const o = { sid, ...base };
+    if(g && g.mesh){                                         // capture where it ended up (grab/throw moved it)
+      const isModel = base.kind==='model';                  // models store y as FLOOR; mesh.y is CENTRE (= floor + hh)
+      o.x=+g.mesh.position.x.toFixed(4); o.z=+g.mesh.position.z.toFixed(4);
+      o.y=+(g.mesh.position.y - (isModel ? (g.hh||0) : 0)).toFixed(4);
+      o.ry=+g.mesh.rotation.y.toFixed(4);
+    }
+    objects.push(o);
+  }
+  return { version:1, created:new Date().toISOString(), count:objects.length, objects };
+}
+window.__snapshotWorld = __snapshotWorld;
+function __loadSnapshot(snap, opts){                         // replay a snapshot (fat inline OR hashed-asset form)
+  opts = opts||{}; const base=(opts.base||'').replace(/\/$/,''); const prefix=opts.sidPrefix!=null?opts.sidPrefix:'snap_';
+  const objs=(snap&&snap.objects)||[]; let n=0;
+  for(const o of objs){
+    const m={ t:'obj', ...o, id:-1, sid: prefix+(o.sid||('o'+n)) };
+    if(o.asset && !m.dataURL) m.dataURL = base ? base+'/'+o.asset : o.asset;   // content-addressed file → URL
+    delete m.asset;
+    try{ applyObj(m); n++; }catch(e){ /* skip a bad row, keep the rest */ }
+  }
+  dbg('snapshot', `restored ${n} object${n===1?'':'s'}`, 'g');
+  return n;
+}
+window.__loadSnapshot = __loadSnapshot;
+async function _bootLoadSnapshot(){                          // SOLO boot: serve the persisted world from static files
+  try{
+    const r = await fetch('./snapshots/current.json', {cache:'no-store'}); if(!r.ok) return;
+    const cur = await r.json(); const name = cur && cur.current; if(!name) return;
+    const mr = await fetch(`./snapshots/${name}/manifest.json`, {cache:'no-store'}); if(!mr.ok) return;
+    __loadSnapshot(await mr.json(), { base:`./snapshots/${name}` });
+  }catch(e){ /* no persisted world yet — fine */ }
+}
+window.__bootLoadSnapshot = _bootLoadSnapshot;
 function promptText(){                                     // NATIVE-FIRST: the real OS prompt works on desktop AND
   let s = null, threw = false;                             // desktop-in-VR (a streamed PC browser is NOT an immersive
   try { if(typeof prompt === 'function') s = prompt('Manifest text into the world:'); }  // WebXR session). Only fall
@@ -4107,7 +4154,8 @@ function cachedCreds(q){
   const q = new URLSearchParams(location.search);
   const base = await resolveSyncUrl(q);
   if(!base){ dbg('sync','no server endpoint yet (no ?sync, no sync.json)','e');
-    _authVeil(false); const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; return; }  // solo mode: no gate to wait behind
+    _authVeil(false); const ov=document.getElementById('signin'); if(ov) ov.style.display='none';
+    _bootLoadSnapshot(); return; }              // solo mode: no relay authority → serve the persisted world from static files
   let room = (q.get('room')||'').trim().toLowerCase().replace(/[^a-z0-9\-]/g,'');
   if(!room){ room = 'porch';                                  // bare URL = the COMMONS (2026-07-08, Nix's
     // instance-split find: coining a room per visitor scattered guests who all opened the same
