@@ -2042,7 +2042,10 @@ if(_residentPick){
         }
         const wait = Math.max(0, 650 - (Date.now() - _t0));   // let 'thinking' read even with an instant stub brain
         setTimeout(()=>{
-          if(replyText) say(replyText);
+          if(replyText && /^\(heads-down/.test(replyText)){   // brain away-message: text-only aside, no voice (Nix 2026-07-11)
+            if(window.__logChat) __logChat(RESIDENT_NAME, replyText);
+            setState(workingOn?'working':'idle'); clearLook(); drainDeferred(); }
+          else if(replyText) say(replyText);
           else if(!wantLook){ setState(workingOn?'working':'idle'); clearLook(); drainDeferred(); }
           if(wantLook){ _povHiresNext = true;
             setTimeout(()=> respond('[system: you took a closer look — a hi-res view of who/what is in front of you is attached]', {noLook:true}), 400); }
@@ -2365,6 +2368,30 @@ addEventListener('pointermove', e=>{
 }
 const keys = {}; window.__keys = keys;                     // exposed for headless WASD-stuck test
 let _spawnKinds = ['cube','sphere','cone','cylinder'], _spawnI = 0;
+// ---- RMB object menu (Nix 2026-07-11): a friendlier affordance than the console for delete.
+// Works on the hover-glowed prop in both mouse and pointer-lock/reticule aim (that's what _hoverG
+// already is). v0: Delete (networked delobj when it has a sid) + Grab/Drop. Radial later if it earns it.
+let _objMenu = null;
+function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; } }
+addEventListener('contextmenu', e=>{
+  const g = (typeof _hoverG!=='undefined' && _hoverG) || heldProp;
+  if(!g) return;                                           // nothing aimed at → default browser menu
+  e.preventDefault(); _closeObjMenu();
+  const sid = g.sid || (spawnedObjs && [...spawnedObjs.entries()].find(([,m])=>m===g.mesh)?.[0]);
+  const m = document.createElement('div'); _objMenu = m;
+  const px = document.pointerLockElement ? innerWidth/2+14 : e.clientX;
+  const py = document.pointerLockElement ? innerHeight/2 : e.clientY;
+  m.style.cssText = `position:fixed;left:${px}px;top:${py}px;z-index:40;background:rgba(14,18,25,.96);`+
+    `border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.5);font:13px Georgia,serif;color:#e8dcc0`;
+  const row = (label, fn)=>{ const b=document.createElement('div');
+    b.textContent=label; b.style.cssText='padding:6px 14px;border-radius:7px;cursor:pointer';
+    b.onmouseenter=()=>b.style.background='rgba(90,80,60,.35)'; b.onmouseleave=()=>b.style.background='';
+    b.onclick=()=>{ _closeObjMenu(); fn(); }; m.appendChild(b); };
+  row(heldProp===g ? '⬇ Put down' : '✋ Pick up', ()=> window.__grab && __grab.grabToggleDesktop && __grab.grabToggleDesktop());
+  if(sid) row('🗑 Delete', ()=>{ if(sock && sock.readyState===1) sendDelObj(sid); else removeObj(sid); });
+  document.body.appendChild(m);
+  setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
+});
 addEventListener('keydown', e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;  // typing ≠ walking
   if(e.code==='Enter' && window.__openChat){ e.preventDefault(); window.__openChat(); return; }
@@ -2375,6 +2402,7 @@ addEventListener('keydown', e=>{
     if(e.code==='ArrowLeft') moveLast(-d,0,0); else if(e.code==='ArrowRight') moveLast(d,0,0);
     else if(e.code==='ArrowUp') moveLast(0,0,-d); else if(e.code==='ArrowDown') moveLast(0,0,d); }
   if(e.code==='KeyX'){ if(!deleteHeldObject() && window.despawnLast) despawnLast(); }   // held image/text → delete it; else last block
+  if(e.code==='Escape') _closeObjMenu();
   if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); }
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
   if(e.code==='KeyV'){ const cb=document.getElementById('micTalk');       // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
@@ -3389,12 +3417,19 @@ function applySpawn(msg){
   // spine: the primitive shape rides 'shape'; legacy records rode it on 'kind' (pre-spine form)
   const m = makePrim(msg.shape || (msg.kind !== 'spawn' ? msg.kind : undefined), msg.color);
   m.position.set(msg.x||0, msg.y||1, msg.z||0);
-  scene.add(m); spawnedObjs.set(msg.sid, m);
+  // register as a grabbable prop (Nix 2026-07-11: B-blocks couldn't be picked up — they were
+  // scene-only meshes, never in the prop system). _addProp adds to scene; hh from the bbox.
+  const bb = new THREE.Box3().setFromObject(m), sz = bb.getSize(new THREE.Vector3());
+  _addProp(msg.sid, m, sz.y/2);
+  spawnedObjs.set(msg.sid, m);
   if(msg.id === myNet) lastSpawnSid = msg.sid;               // remember my last, for nudging
 }
 function removeSpawn(sid){
   const m = spawnedObjs.get(sid);
   if(m){ scene.remove(m); m.geometry.dispose(); m.material.dispose(); spawnedObjs.delete(sid); }
+  const g = grabbablesById[sid];
+  if(g){ const i = grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
+    if(heldProp===g) heldProp=null; for(const hnd of ['left','right']) if(_heldHand[hnd]===g) _heldHand[hnd]=null; }
 }
 
 // ---- object protocol, round 1: IMAGES. A person loads an image from their desktop; it becomes a
