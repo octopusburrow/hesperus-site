@@ -3505,8 +3505,11 @@ function pickImage(){                                      // open the OS file p
 }
 window.__pickImage = pickImage;
 
-// ---- VIDEO OBJECTS (Nix 2026-07-10): upload a clip → a looping plane you can grab; click to play/stop.
-// Upload-only (no URLs → no CORS). Muted loops (autoplay policy + a shared space shouldn't blast audio).
+// ---- VIDEO OBJECTS (Nix 2026-07-10): upload a clip → a looping plane you can grab.
+// Upload-only (no URLs → no CORS). Manifests as a MUTED loop (autoplay policy + a shared space
+// shouldn't blast audio on spawn); clicking cycles muted-loop → SOUND ON (positional — the click is
+// the gesture that unlocks the AudioContext) → paused → muted-loop. Audio wired 2026-07-11
+// (Nix's second test asset was the first clip with a soundtrack).
 const videoObjs = new Map(); let lastVideoSid = null;
 const VID = { maxFile: 8*1024*1024, dataCap: 8*1024*1024, types:['video/mp4','video/webm','video/ogg'] };
 function applyVideo(msg){
@@ -3521,8 +3524,24 @@ function applyVideo(msg){
       new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true}));
   mesh.position.set(msg.x||0, msg.y!=null?msg.y:1.5, msg.z||0); mesh.rotation.y = msg.ry||0;
   const g = _addProp(msg.sid, mesh, h/2); g.isVideo = true; g.sid = msg.sid; g._vid = vid;
-  mesh.userData.action = ()=>{ if(vid.paused){ vid.play().catch(()=>{}); return 'video playing'; } vid.pause(); return 'video paused'; };
-  _clickables.push(mesh);                                 // click toggles play/stop (grab is E / grip)
+  mesh.userData.action = ()=>{                            // cycle: muted loop → sound on → paused → muted loop
+    if(vid.paused){ vid.muted = true; vid.play().catch(()=>{}); return 'video looping (muted)'; }
+    if(vid.muted){
+      try{
+        if(!g._pa && window.__audioListener && THREE.PositionalAudio){
+          const pa = new THREE.PositionalAudio(window.__audioListener);
+          pa.setMediaElementSource(vid);                  // element output now routes through the 3D panner
+          pa.setRefDistance(2.2); pa.setRolloffFactor(1.6); pa.setDistanceModel('inverse');
+          mesh.add(pa); g._pa = pa;
+        }
+        if(window.__audioListener && window.__audioListener.context.state === 'suspended')
+          window.__audioListener.context.resume().catch(()=>{});
+        vid.muted = false; return 'sound on';
+      }catch(e){ console.warn('video audio failed', e); vid.muted = false; return 'sound on (flat)'; }
+    }
+    vid.pause(); vid.muted = true; return 'video paused';
+  };
+  _clickables.push(mesh);                                 // click cycles loop/sound/pause (grab is E / grip)
   videoObjs.set(msg.sid, mesh);
   if(msg.id === myNet) lastVideoSid = msg.sid;
 }
@@ -3530,6 +3549,7 @@ function removeVideo(sid){
   const mesh = videoObjs.get(sid);
   if(mesh){ scene.remove(mesh); const i=_clickables.indexOf(mesh); if(i>=0) _clickables.splice(i,1);
     const g=grabbablesById[sid]; if(g&&g._vid){ try{ g._vid.pause(); g._vid.src=''; }catch(e){} }
+    if(g&&g._pa){ try{ g._pa.disconnect(); }catch(e){} g._pa=null; }
     if(mesh.material.map) mesh.material.map.dispose(); mesh.geometry.dispose(); mesh.material.dispose();
     videoObjs.delete(sid); }
   const g = grabbablesById[sid];
@@ -3783,7 +3803,7 @@ const ASSET_KINDS = {
       v.onloadedmetadata=()=>{ st.textContent=`${v.videoWidth}×${v.videoHeight} · ${(file.size/1048576).toFixed(1)} MB`
         +(over?` — over ${VID.maxFile/1048576|0} MB cap (shorten / re-encode first)`:` · loops muted in-world`); };
       const note=document.createElement('div'); note.style.cssText='font-size:11px;color:#8b93a3';
-      note.textContent='Plays muted on a loop; click it in-world to play/pause. (In-browser re-encode is coming later.)'; ct.appendChild(note);
+      note.textContent='Manifests as a muted loop; click it in-world for sound (positional), click again to pause. (In-browser re-encode is coming later.)'; ct.appendChild(note);
     },
     commit:(file,state)=>addVideoFile(file),
   },
