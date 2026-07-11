@@ -3279,11 +3279,16 @@ function addImageFile(file, maxDim){
     // optimistic local placeholder: covers the send→relay→echo round-trip (applyImage can't — it only
     // runs once the echo lands). cid round-trips through the relay (it rebroadcasts the whole msg) so
     // my own echo clears it. Removed on cid match, or by a 20s safety sweep if the echo never comes.
-    const cid = 'ic'+(_imgCidSeq++);
-    const ph = new THREE.Mesh(new THREE.PlaneGeometry(cw>=ch?1.0:cw/ch, cw>=ch?ch/cw:1.0), _imgLoadMat);
-    ph.position.set(p.x, 1.4, p.z); ph.rotation.y = player.rotation.y; ph.userData._loading=true;
-    _imgLoaders++; scene.add(ph); _pendingImg.set(cid, {mesh:ph, t0:performance.now()});
-    sendObj('image', {dataURL, aspect:cw/ch, x:p.x, y:1.4, z:p.z, ry:player.rotation.y, cid});
+    if(sock && sock.readyState===1){
+      const cid = 'ic'+(_imgCidSeq++);
+      const ph = new THREE.Mesh(new THREE.PlaneGeometry(cw>=ch?1.0:cw/ch, cw>=ch?ch/cw:1.0), _imgLoadMat);
+      ph.position.set(p.x, 1.4, p.z); ph.rotation.y = player.rotation.y; ph.userData._loading=true;
+      _imgLoaders++; scene.add(ph); _pendingImg.set(cid, {mesh:ph, t0:performance.now()});
+      sendObj('image', {dataURL, aspect:cw/ch, x:p.x, y:1.4, z:p.z, ry:player.rotation.y, cid});
+    } else {   // solo/no relay: build it right here so a lone visitor sees their image (applyImage draws its own placeholder→swap)
+      applyObj({t:'obj', kind:'image', sid:'li_'+(myNet||'me')+'_'+(_imgCidSeq++), id:myNet,
+                dataURL, aspect:cw/ch, x:p.x, y:1.4, z:p.z, ry:player.rotation.y});
+    }
     imgNote(`added image (${cw}×${ch})`);
   };
   img.onerror = ()=>{ URL.revokeObjectURL(url); imgNote('could not decode that image'); };
@@ -3345,7 +3350,9 @@ function addVideoFile(file){
     probe.onloadedmetadata = ()=>{ const asp = (probe.videoWidth||16)/(probe.videoHeight||9);
       const fwd=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
       const p=player.position.clone().addScaledVector(fwd,1.6);
-      sendObj('video', {dataURL, aspect:asp, x:p.x, y:1.5, z:p.z, ry:player.rotation.y});
+      const vf = {dataURL, aspect:asp, x:p.x, y:1.5, z:p.z, ry:player.rotation.y};
+      if(sock && sock.readyState===1){ sendObj('video', vf); }
+      else { applyObj({t:'obj', kind:'video', sid:'lv_'+(myNet||'me')+'_'+(_imgCidSeq++), id:myNet, ...vf}); }   // solo/no relay
       imgNote(`added video (${probe.videoWidth}×${probe.videoHeight})`, 'video'); };
     probe.onerror = ()=>{ imgNote('could not read that video', 'video'); };
     probe.src = dataURL;
@@ -3379,16 +3386,17 @@ function _countTris(root){ let n=0; root.traverse(o=>{ if(o.isMesh && o.geometry
 // scale so the longest bbox side == target, then recenter so the GROUP ORIGIN sits at the geometric
 // centre (matches the image/plane convention: mesh.position is the centre, hh is half-height, so
 // propPhysics/grab rest maths line up). Returns {half} = half the fitted height.
-function _autoFitModel(root, target){
+function _autoFitModel(root, target){                     // target = metres for longest side, or null = keep AUTHORED scale
   root.updateMatrixWorld(true);
   let box = new THREE.Box3().setFromObject(root); const size = new THREE.Vector3(); box.getSize(size);
   const longest = Math.max(size.x, size.y, size.z) || 1;
-  root.scale.multiplyScalar(target/longest);
+  const k = (target>0) ? target/longest : 1;              // glTF units are metres, so k=1 keeps the author's real-world size
+  if(k!==1) root.scale.multiplyScalar(k);
   root.updateMatrixWorld(true);
   box = new THREE.Box3().setFromObject(root); const c = new THREE.Vector3(); box.getCenter(c);
   root.position.sub(c);                                    // group origin -> geometric centre
   root.updateMatrixWorld(true);
-  return { half: (size.y*(target/longest))/2 };
+  return { half: (size.y*k)/2, size: size.clone().multiplyScalar(k) };   // final size, metres
 }
 function _decimateModel(root, ratio){                      // ratio 0..1 of vertices to REMOVE; optional, default off
   if(!(ratio>0)) return;
@@ -3405,7 +3413,8 @@ function applyModel(msg){
     if(modelObjs.has(msg.sid)) return;                     // raced/removed while decoding
     const root = gltf.scene;
     if(msg.decimate>0) _decimateModel(root, msg.decimate);
-    const fit = _autoFitModel(root, msg.fit || MODEL.fit);
+    const target = (msg.fit==='keep') ? null : (msg.fit>0 ? msg.fit : MODEL.fit);   // 'keep' = authored glTF metres
+    const fit = _autoFitModel(root, target);
     root.position.set(msg.x||0, (msg.y!=null?msg.y:0)+fit.half, msg.z||0);
     root.rotation.y = msg.ry||0;
     root.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; } });
@@ -3430,7 +3439,7 @@ function manifestModel(file, state){                       // read → cap → s
   if(!file) return 'no file';
   const fwd = new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
   const p = player.position.clone().addScaledVector(fwd, 1.6);
-  const fields = { x:p.x, y:0, z:p.z, ry:player.rotation.y, fit:MODEL.fit, decimate:(state&&state.decimate)||0 };
+  const fields = { x:p.x, y:0, z:p.z, ry:player.rotation.y, fit:(state&&state.fit)||MODEL.fit, decimate:(state&&state.decimate)||0 };
   const rd = new FileReader();
   rd.onload = ()=>{ const dataURL = rd.result;
     if(dataURL.length > MODEL.dataCap){ imgNote('model too large after encoding — try a smaller file', 'model'); return; }
@@ -3520,14 +3529,21 @@ function _aiModelPreview(buf, pv, ct, st, state){        // a little spinning th
   sc.add(new THREE.HemisphereLight(0xfff2dd,0x223344,1.3));
   const dl=new THREE.DirectionalLight(0xffffff,1.2); dl.position.set(2,4,3); sc.add(dl);
   _mdlLoader.parse(buf, '', (gltf)=>{
-    const root=gltf.scene; _autoFitModel(root, 1.0); sc.add(root);
-    state.tris=_countTris(root);
+    const root=gltf.scene;
+    root.updateMatrixWorld(true);                          // measure AUTHORED size (glTF units = metres) before any framing rescale
+    const rawBox=new THREE.Box3().setFromObject(root); const raw=new THREE.Vector3(); rawBox.getSize(raw);
+    const authoredLong=Math.max(raw.x,raw.y,raw.z)||1; state.authored=raw.clone();
+    _autoFitModel(root, 1.0); sc.add(root);                // preview always frames to ~1 unit (preview scale ≠ in-world scale)
+    state.tris=_countTris(root); state.fit=MODEL.fit;      // default: auto-fit
     cam.position.set(1.15,0.75,1.5); cam.lookAt(0,0,0);
     _aiPrev={renderer, scene:sc, cam, root};
     const readout=document.createElement('div'); readout.style.cssText='font-size:13px;color:#cdbfa0'; ct.appendChild(readout);
     const upd=()=>{ const after=Math.round(state.tris*(1-(state.decimate||0)));
       readout.textContent=`${state.tris.toLocaleString()} triangles`+(state.decimate>0?`  →  ~${after.toLocaleString()} after decimate`:''); };
     upd();
+    // Scale: honour the author's real-world size (glTF metres) or normalise unknown-scale downloads
+    _aiSelect(ct,'Scale',[[`Auto-fit (${MODEL.fit} m)`, MODEL.fit], [`Original (${authoredLong.toFixed(2)} m)`, 'keep']],
+      v=>{ state.fit = (v==='keep') ? 'keep' : +v; });
     const row=document.createElement('label'); row.style.cssText='display:flex;gap:8px;align-items:center;font-size:13px;color:#cdbfa0';
     row.appendChild(Object.assign(document.createElement('span'),{textContent:'Decimate'}));
     const sl=document.createElement('input'); sl.type='range'; sl.min='0'; sl.max='90'; sl.value='0'; sl.style.flex='1';
@@ -3535,7 +3551,7 @@ function _aiModelPreview(buf, pv, ct, st, state){        // a little spinning th
     sl.oninput=()=>{ state.decimate=(+sl.value)/100; pct.textContent=sl.value+'%'; upd(); };
     row.appendChild(sl); row.appendChild(pct); ct.appendChild(row);
     const hint=document.createElement('div'); hint.style.cssText='font-size:11px;color:#8b93a3';
-    hint.textContent='Auto-scaled to ~0.45 m, placed on the floor in front of you. Decimation applies on manifest.'; ct.appendChild(hint);
+    hint.textContent=`authored ${raw.x.toFixed(2)}×${raw.y.toFixed(2)}×${raw.z.toFixed(2)} m · placed on the floor in front of you · decimation applies on manifest`; ct.appendChild(hint);
     st.textContent='spinning preview · grab & move it once it’s in the world';
     let a=0; const loop=()=>{ if(!_aiPrev||_aiPrev.renderer!==renderer) return; a+=0.01; root.rotation.y=a; renderer.render(sc,cam); requestAnimationFrame(loop); };
     loop(); window.__aiRenderOnce=()=>renderer.render(sc,cam);
