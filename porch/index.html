@@ -1253,7 +1253,7 @@ const _veilMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(col, a);
     }`
 });
-function addPortico(dest, x, z, label, ry=0){
+function addPortico(dest, x, z, label, kind, ry=0){
   const g = new THREE.Group();
   const stone = new THREE.MeshStandardMaterial({color:0x2b2438, roughness:0.6, metalness:0.2});
   const postG = new THREE.CylinderGeometry(0.10, 0.13, 2.4, 10);
@@ -1272,18 +1272,27 @@ function addPortico(dest, x, z, label, ry=0){
     opacity:0.6, blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true}));
   motes.rotation.y=Math.PI/2; motes.renderOrder=3; g.add(motes);
   _porticoMotes.push({geo:mg, phase:mph, n:MOTES});
-  if(label){                                             // destination label — SDF vector text (Nix: pixelated)
+  if(label){                                             // destination plate: NAME (one line) + world-type tag beneath
+    // (Nix 2026-07-11: the old single-string label — 'moon rider (foreign world test)' — wrapped at
+    // maxWidth and the second line vanished behind the lintel. Name and taxonomy are separate now.)
     // The bg plane IS the billboard mesh: onBeforeRender only fires for objects that get DRAWN, so a
     // Group wrapper never billboards (it has no geometry) — the label kept the portico's 90° and
     // rendered tilted. Troika text rides as the bg's child; billboarding the bg carries it along.
-    const bg = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.34),
+    const H = kind ? 0.44 : 0.30;
+    const bg = new THREE.Mesh(new THREE.PlaneGeometry(1.7, H),
       new THREE.MeshBasicMaterial({color:0x0a0c10, transparent:true, opacity:0.55, depthWrite:false}));
     bg.renderOrder=5;
-    const txt = makeTextMesh(label, {size:0.15, color:0xcdbde8, maxWidth:1.5, renderOrder:6,
-      onSync: (tm)=>{ const bb=tm.textRenderInfo&&tm.textRenderInfo.blockBounds; if(!bb) return;
-        bg.geometry.dispose(); bg.geometry=new THREE.PlaneGeometry((bb[2]-bb[0])+0.22, (bb[3]-bb[1])+0.14); } });
-    txt.position.z = 0.005; bg.add(txt);
-    bg.position.set(0, 2.66, 0);                          // lintel-aligned (Nix): sits just on the crossbeam (lintel top ≈2.61)
+    let _w = 0.9;                                        // widest synced line wins; height is fixed by design
+    const _fit = (tm)=>{ const bb=tm.textRenderInfo&&tm.textRenderInfo.blockBounds; if(!bb) return;
+      _w = Math.max(_w, (bb[2]-bb[0])+0.26);
+      bg.geometry.dispose(); bg.geometry = new THREE.PlaneGeometry(_w, H); };
+    const nameTxt = makeTextMesh(label, {size:0.16, color:0xe2d7ea, maxWidth:6, renderOrder:6, onSync:_fit});
+    nameTxt.position.set(0, kind ? 0.075 : 0, 0.005); bg.add(nameTxt);   // maxWidth 6: names never wrap — the plate grows instead
+    if(kind){
+      const kindTxt = makeTextMesh('( '+kind+' )', {size:0.085, color:0x9d8fc0, maxWidth:6, renderOrder:6, onSync:_fit});
+      kindTxt.position.set(0, -0.105, 0.005); bg.add(kindTxt);           // ASCII parens, not ◆ — exotic glyphs trigger troika's CSP-blocked fallback fetch
+    }
+    bg.position.set(0, 2.61 + H/2 + 0.04, 0);            // bottom edge rides just above the lintel top (≈2.61) whatever the plate height
     bg.onBeforeRender=(r,s,cam)=>uprightBillboard(bg,cam); g.add(bg);
     g.userData.labelMesh = bg;                            // #27 lintel-align hook
   }
@@ -1312,10 +1321,10 @@ function _commitForeign(url){
 }
 // The test row (Nix 2026-07-09): all three off the deck onto the playa, lined up at z=8, rotated
 // 90° so you walk NORTH through them, each labeled with what it's testing.
-addPortico({district:'void'}, -3.2, 8, 'the girih void (district test)', Math.PI/2);
-addPortico({district:'wake'},  0.0, 8, 'the wake (home world test)',     Math.PI/2);
-addPortico('https://moonrider.xyz', 3.2, 8, 'moon rider (foreign world test)', Math.PI/2);
-addPortico({district:'porch'}, WAKE_X, 16, 'the porch');      // the way home, inside the wake
+addPortico({district:'void'}, -3.2, 8, 'The Girih Void', 'district', Math.PI/2);
+addPortico({district:'wake'},  0.0, 8, 'The Wake', 'home world', Math.PI/2);
+addPortico('https://moonrider.xyz', 3.2, 8, 'Moon Rider', 'foreign world', Math.PI/2);
+addPortico({district:'porch'}, WAKE_X, 16, 'The Porch', 'home');      // the way home, inside the wake
 window.__porticos = _porticos;                 // headless probes
 // FOREIGN THRESHOLD (Nix 2026-07-09): a portico whose dest is a URL string / {url} leaves
 // Exultation. We CAN'T keep VR across origins (Chrome policy) — so instead of silently dropping
@@ -1435,7 +1444,7 @@ function _ensureVoidDistrict(){
     _voidGlow.intensity = 6 + ((0.30*d[0]+0.55*d[1]+0.15*d[2])/255)*26;
     _voidGlow.color.setRGB(0.35+d[0]/510, 0.30+d[1]/510, 0.45+d[2]/510);
   }catch(e){} }, 400);
-  const home = addPortico({district:'porch'}, VX+6, 6, 'the porch');   // walk +x from spawn to go home
+  const home = addPortico({district:'porch'}, VX+6, 6, 'The Porch', 'home');   // walk +x from spawn to go home
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
 }
 const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
