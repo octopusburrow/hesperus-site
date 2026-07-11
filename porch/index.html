@@ -5752,14 +5752,23 @@ function capturePOV(targetObj, opts){
     _povCam = new THREE.PerspectiveCamera(46, W/H, 0.03, 120);
     _pov2d = document.createElement('canvas'); _pov2d.width=W; _pov2d.height=H;
     _povW=W; _povH=H;
+    if(window.__povHelper){ scene.remove(window.__povHelper); window.__povHelper=null; }  // cam was recreated — stale helper
   }
   const head = residentVrm.humanoid && residentVrm.humanoid.getNormalizedBoneNode('head');
   const eye = head ? head.getWorldPosition(new THREE.Vector3())
                    : residentVrm.scene.getWorldPosition(new THREE.Vector3()).setY(1.4);
   const tgt = targetObj.getWorldPosition(new THREE.Vector3());
   tgt.y += 1.35;                                            // aim at their head height, not their feet
+  // eye sits ON the head bone = inside the skull mesh → near-plane sees skull interior (the
+  // all-red POVs, Nix 2026-07-11). Step 0.14m out of the head along the view direction.
+  const fwd = tgt.clone().sub(eye).normalize();
+  eye.addScaledVector(fwd, 0.14);
   _povCam.position.copy(eye); _povCam.up.set(0,1,0);
   _povCam.lookAt(tgt); _povCam.updateMatrixWorld(true);
+  // debug-mode frustum (Nix's ask): ` shows exactly where my eyes are and what they cover
+  if(!window.__povHelper){ window.__povHelper = new THREE.CameraHelper(_povCam); scene.add(window.__povHelper); }
+  window.__povHelper.update();
+  window.__povHelper.visible = document.getElementById('dbgfeed')?.style.display === 'block';
   const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
   const old = renderer.getRenderTarget();
   renderer.setRenderTarget(_povRT);
