@@ -2228,7 +2228,8 @@ if(_residentPick){
         if(q.get('key')) rurl += '&key=' + encodeURIComponent(q.get('key'));
         const resConnect = ()=>{                       // reconnect: survive server restarts
           try{ resSock = new WebSocket(rurl); }catch(e){ console.warn('resident occupant socket failed', e); return; }
-          resSock.onclose = ()=> setTimeout(resConnect, 2500);
+          resSock.onclose = (ev)=>{ if(ev && ev.code===4002) return;   // replaced — stand down (takeover)
+            setTimeout(resConnect, 2500); };
         };
         resConnect();
         setInterval(()=>{
@@ -4589,6 +4590,10 @@ function cachedCreds(q){
       _authVeil(false);                                        // veil → form (backdrop stays: no world glimpse)
       signIn(credsTyped ? 'that password didn’t work — check with your host' : '')
         .then(c=>{ credsTyped=true; creds=c; window.__setMyName(c.name); url=buildUrl(); retryMs=1000; connect(); });
+      return; }
+    if(ev && ev.code===4002){                                  // replaced by a newer window of me — do NOT reconnect (takeover, 2026-07-11)
+      dbg('sync','this window was REPLACED by a newer session — not reconnecting','e');
+      if(window.__logChat) __logChat('porch','this window was replaced by a newer one — close it','sys');
       return; }
     if(!_everWelcomed){ _veilOff=true; _authVeil(false); const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; }  // server unreachable ≠ veil-lock: show the world, keep retrying
     dbg('sync', `disconnected — retrying in ${retryMs/1000}s`, 'e');
