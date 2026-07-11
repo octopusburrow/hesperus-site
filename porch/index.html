@@ -651,9 +651,9 @@ let _starMat = null;
       vertexShader:`attribute vec3 scolor; attribute float ssize; attribute float sphase;
         varying vec3 vC; uniform float uTime; uniform float uPx;
         void main(){ float tw = 0.82 + 0.18*sin(uTime*1.3 + sphase*7.0);
-          vC = scolor * tw;
+          vC = scolor * tw * 1.6;                        // brightness ↑ (Nix 2026-07-11: "VERY small" — 2x size+brightness)
           vec4 mv = modelViewMatrix*vec4(position,1.0);
-          gl_PointSize = max(1.3, ssize * uPx * 2.3);    // floor so faint stars still register; ?starsize= to retune
+          gl_PointSize = max(1.8, ssize * uPx * 4.6);    // 2x (was 2.3); floor so faint stars still register; ?starsize= to retune
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r = length(d);
@@ -698,8 +698,13 @@ function _buildStarLabels(){
 }
 function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
 window.__setStarNames = setStarNames;
-addEventListener('DOMContentLoaded', ()=>{ const cb=document.getElementById('starNamesToggle');
-  if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked)); });
+{ // module scripts run AFTER DOMContentLoaded has often already fired → the old
+  // addEventListener('DOMContentLoaded') never ran and the toggle was dead (Nix 2026-07-11).
+  const _wireStars = ()=>{ const cb=document.getElementById('starNamesToggle');
+    if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked)); };
+  if(document.readyState==='loading') addEventListener('DOMContentLoaded', _wireStars);
+  else _wireStars();
+}
 
 // ---- the playa: cracked-earth PHOTO texture (First Light's CC0 ground, Nix's ask
 // 2026-07-07) modulated by the original procedural layers — fades, spill, crests kept ----
@@ -1621,7 +1626,7 @@ if(_residentPick){
     const vb = new THREE.Box3().setFromObject(vrm.scene);
     const vs = vb.getSize(new THREE.Vector3());
     vrm.scene.position.set(1.7, 0, -1.15);           // by the candle, host's spot
-    vrm.scene.rotation.y = -0.35;                    // facing spawn, slight angle
+    vrm.scene.rotation.y = Math.PI - 0.35;           // facing spawn (forward = −sin/−cos, same as _yawToward), slight angle
     scene.add(vrm.scene);
     if(vrm.lookAt && VRMLookAtQuaternionProxy){      // silences the vrma lookAt warning
       const proxy = new VRMLookAtQuaternionProxy(vrm.lookAt);
@@ -2129,22 +2134,34 @@ if(_residentPick){
         lookTargetObj.position.set(facingSource.position.x, 1.45, facingSource.position.z);
         if(vrm.lookAt) vrm.lookAt.target = lookTargetObj;
         const dxs=facingSource.position.x-r.x, dzs=facingSource.position.z-r.z;
-        if(Math.hypot(dxs,dzs)>0.05){ let dy=Math.atan2(dxs,dzs)-vrm.scene.rotation.y;
+        // yaw convention: forward = (−sin ry, −cos ry) — same as _yawToward. atan2(dx,dz) was
+        // 180° off (Nix live, 2026-07-11: "you turned *away* from me").
+        if(Math.hypot(dxs,dzs)>0.05){ let dy=Math.atan2(-dxs,-dzs)-vrm.scene.rotation.y;
           dy=Math.atan2(Math.sin(dy),Math.cos(dy)); vrm.scene.rotation.y += dy*Math.min(1,dt*6); }
       }
-      else if(_settleYaw!=null && !walkTarget){               // idle settle: ease around to face the spawn
-        let dy=_settleYaw - vrm.scene.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy));
-        if(Math.abs(dy)<0.04){ vrm.scene.rotation.y=_settleYaw; _settleYaw=null; }
-        else vrm.scene.rotation.y += dy*Math.min(1,dt*3.5); }
+      else if(!walkTarget && !walking){
+        // social idle (Nix 2026-07-11): if someone is within 5m, face THEM — presence beats
+        // any parked heading. Falls back to the one-time spawn settle (face spawn) when alone.
+        const nr = _nearestRemote();
+        const nd = nr ? Math.hypot(nr.group.position.x-r.x, nr.group.position.z-r.z) : Infinity;
+        if(nd < 5){
+          const dxn=nr.group.position.x-r.x, dzn=nr.group.position.z-r.z;
+          let dy=Math.atan2(-dxn,-dzn)-vrm.scene.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy));
+          if(Math.abs(dy)>0.06) vrm.scene.rotation.y += dy*Math.min(1,dt*3);
+        }
+        else if(_settleYaw!=null){               // idle settle: ease around to face the spawn
+          let dy=_settleYaw - vrm.scene.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy));
+          if(Math.abs(dy)<0.04){ vrm.scene.rotation.y=_settleYaw; _settleYaw=null; }
+          else vrm.scene.rotation.y += dy*Math.min(1,dt*3.5); } }
       if(followMode){ const p=player.position; const dx=p.x-r.x, dz=p.z-r.z, d=Math.hypot(dx,dz);
         if(d>1.7) walkTarget={x:p.x-dx/d*1.4, z:p.z-dz/d*1.4};
         else { walkTarget=null; if(walking){ walking=false; if(!speaking&&!emoteUntil) crossfade('idle'); } } }
       if(walkTarget){ const dx=walkTarget.x-r.x, dz=walkTarget.z-r.z, d=Math.hypot(dx,dz);
         if(d<0.12){ walkTarget=null; walking=false; if(!speaking&&!emoteUntil) crossfade('idle');
-          if(!_spawnSettleDone && typeof SPAWN!=='undefined'){ _spawnSettleDone=true; _settleYaw=Math.atan2(SPAWN.x-r.x, SPAWN.z-r.z); } }
+          if(!_spawnSettleDone && typeof SPAWN!=='undefined'){ _spawnSettleDone=true; _settleYaw=Math.atan2(-(SPAWN.x-r.x), -(SPAWN.z-r.z)); } }
         else { if(!walking){ walking=true; if(!speaking) crossfade('walk'); }
           const step=Math.min(d, WALKSPD*dt); r.x+=dx/d*step; r.z+=dz/d*step;
-          vrm.scene.rotation.y = Math.atan2(dx,dz); } }
+          vrm.scene.rotation.y = Math.atan2(-dx,-dz); } }   // same −sin/−cos forward as all facing paths
       if(speaking && vrm.expressionManager){                     // per-word pulse: open on each word, fall closed between → looks like talking, not a hum
         const em=vrm.expressionManager, now=performance.now();
         if(now > nextPulseT) mouthPulse();                       // synthetic word cadence (also covers no-onboundary voices)
@@ -5013,6 +5030,10 @@ let _mbox = null;
   // positional audio: a real point source — present within a few metres, faint across the room
   const pa = new THREE.PositionalAudio(_audioListener);
   pa.setRefDistance(1.0); pa.setRolloffFactor(1.3); pa.setDistanceModel('inverse'); pa.setMaxDistance(15);
+  // "choppy / sample-rate-off" (Nix 2026-07-11): the ogg measured clean (0 hard jumps, full-band
+  // spectrum) — the artifact is the panner. Default HRTF re-convolves on every per-frame position
+  // write and audibly stutters when the render loop hiccups; equalpower is smooth + cheap.
+  pa.panner.panningModel = 'equalpower';
   G.add(pa);
   new THREE.AudioLoader().load('./assets/musicbox.ogg', buf=>{
     pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0); if(_mbox) _mbox.ready = true;
