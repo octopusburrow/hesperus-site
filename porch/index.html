@@ -1024,10 +1024,22 @@ function dropProp(g){ if(!g) return; g.carrying=false;               // owner st
 function grabToggleDesktop(){                         // E: drop what I hold, else grab nearest in front
   if(heldProp){ const p=heldProp.pid; dropProp(heldProp); heldProp=null; return 'dropped '+p; }
   const g=grabNearest(_reachPoint(),0.85); if(!g) return 'nothing in reach'; heldProp=grabProp(g); return 'grabbing '+g.pid; }
+const _laserGrabRC = new THREE.Raycaster(); _laserGrabRC.far = 6;   // #17 laser-grab reach
 function tryGripGrab(hand, pressed){                  // VR grip edge → grab nearest to that controller / release
   if(pressed && !_gripDown[hand]){ try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
-    const gp=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); const g=grabNearest(gp,0.2);
-    if(g){ g.offset=g.mesh.position.clone().sub(gp); _heldHand[hand]=grabProp(g);
+    const gp=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); let g=grabNearest(gp,0.2);
+    if(!g){                                           // #17: nothing in reach — take AIM (VRC-style force pull)
+      const c=renderer.xr.getController(hand==='left'?0:1);
+      const o=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+      const d=new THREE.Vector3(0,0,-1).applyQuaternion(c.getWorldQuaternion(new THREE.Quaternion()));
+      _laserGrabRC.set(o, d);
+      const loose = grabbables.filter(p=>!p.carrying);
+      const hits = _laserGrabRC.intersectObjects(loose.map(p=>p.mesh), false);
+      if(hits.length){ g = loose.find(p=>p.mesh===hits[0].object)||null;
+        if(g){ g._fly = true; if(typeof dbg==='function') dbg('grab', `laser-grab ${g.pid} @${hits[0].distance.toFixed(1)}m`, 'k'); } }
+    }
+    if(g){ g.offset = g._fly ? null : g.mesh.position.clone().sub(gp);   // laser grabs land IN the hand
+      _heldHand[hand]=grabProp(g);
       // rotation ride-along (Nix 2026-07-10: "books aren't rotating with the IK hands"):
       // capture grip⁻¹×mesh at grab, re-compose each frame — the book keeps its in-hand attitude
       const gq=new THREE.Quaternion().setFromRotationMatrix(grip.matrixWorld);
@@ -1089,7 +1101,12 @@ function _propHoldUpdate(dt){                          // glue carried props to 
       const p=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); if(g.offset) p.add(g.offset);
       if(g.rotOffset){ const gq=new THREE.Quaternion().setFromRotationMatrix(grip.matrixWorld);
         g.mesh.quaternion.copy(gq).multiply(g.rotOffset); }               // rotate with the hand
-      _trackVel(g,p,dt); g.mesh.position.copy(p); sendProp(g); }catch(e){} } }
+      _trackVel(g,p,dt);
+      if(g._fly){                                     // #17: glide the laser-grabbed prop into the hand
+        g.mesh.position.lerp(p, Math.min(1, dt*8));
+        if(g.mesh.position.distanceToSquared(p) < 0.0025) g._fly = false;
+      } else g.mesh.position.copy(p);
+      sendProp(g); }catch(e){} } }
 const _lvlE=new THREE.Euler();
 function _levelProp(g){                               // rest flat: keep yaw, drop pitch/roll (books on corners look haunted)
   _lvlE.setFromQuaternion(g.mesh.quaternion,'YXZ');
@@ -2159,6 +2176,8 @@ if(_residentPick){
     }
     residentVrm = vrm;
     window.__residentVrm = vrm;                                  // debug: headless viseme A/B
+    window.__residentMixer = residentMixer;                      // debug: deterministic clip stepping (shoot_dance)
+    window.__residentPlay = (n)=>{ crossfade(n); return n; };    // debug: drive clips headless
     // head world-position for the facing-gate sphere (falls back to scene pos + eye height)
     const _headBone = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode('head') : null;
     const _headV = new THREE.Vector3();
