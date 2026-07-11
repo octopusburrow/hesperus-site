@@ -294,6 +294,7 @@ document.body.appendChild(renderer.domElement);
   _vrWrap.appendChild(_vrBtn); document.body.appendChild(_vrWrap);
 }
 
+window.__porchInst = Math.random().toString(36).slice(2,10);   // per-page-load instance token (takeover sibling guard)
 const scene = new THREE.Scene(); window.__scene = scene; window.__THREE = THREE;
 scene.background = new THREE.Color(0x05060d);
 scene.fog = new THREE.Fog(0x0d0f16, 25, 130);
@@ -2226,6 +2227,7 @@ if(_residentPick){
         // password gate 4001'd the resident's body — orange Hesperus existed only in the host window
         if(q.get('pw'))  rurl += '&pw='  + encodeURIComponent(q.get('pw'));
         if(q.get('key')) rurl += '&key=' + encodeURIComponent(q.get('key'));
+        rurl += '&inst=' + window.__porchInst;         // same page = same instance: takeover must not bump siblings
         const resConnect = ()=>{                       // reconnect: survive server restarts
           try{ resSock = new WebSocket(rurl); }catch(e){ console.warn('resident occupant socket failed', e); return; }
           resSock.onclose = (ev)=>{ if(ev && ev.code===4002) return;   // replaced — stand down (takeover)
@@ -4574,7 +4576,8 @@ function cachedCreds(q){
   const key = (q.get('key')||creds.key||'').trim();
   function buildUrl(){ let u = base + (base.includes('?')?'&':'?') + 'room=' + encodeURIComponent(room) + '&name=' + encodeURIComponent(creds.name);
     if(key) u += '&key=' + encodeURIComponent(key);
-    if(creds.pw) u += '&pw=' + encodeURIComponent(creds.pw); return u; }
+    if(creds.pw) u += '&pw=' + encodeURIComponent(creds.pw);
+    u += '&inst=' + window.__porchInst; return u; }
   let url = buildUrl();
   // RECONNECT (2026-07-07): server restarts used to silently kill everyone's socket for the rest
   // of the session. Backoff 1s→10s forever. Auth reject (4001) → re-prompt instead of spin-retry.
