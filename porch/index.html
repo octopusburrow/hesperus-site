@@ -594,13 +594,22 @@ const sky = new THREE.Mesh(
       float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7)))*43758.5453); }
       void main(){
         float h = clamp(vDir.y, -0.05, 1.0);
-        vec3 zenith  = vec3(0.016, 0.022, 0.052);
-        vec3 horizon = vec3(0.095, 0.070, 0.085);
-        vec3 col = mix(horizon, zenith, pow(max(h, 0.0), 0.55));
-        // a last warm smudge of dusk on one horizon
-        float dusk = pow(max(0.0, dot(normalize(vDir.xz), vec2(0.30,-0.95)))*0.5+0.5, 6.0)
-                     * (1.0 - smoothstep(0.0, 0.25, h));
-        col += vec3(0.20, 0.10, 0.03) * dusk;
+        float hh = max(h, 0.0);
+        // POLAR TWILIGHT REWORK (Nix 2026-07-11): banded dusk toward the below-horizon sun
+        // (at Venus's azimuth) — orange → red → purple → dark blue → black — cold clean night
+        // opposite. All shader math, zero perf cost beyond a few mixes.
+        vec3 venusDir = normalize(vec3(0.62, 0.115, -0.78));
+        float daz = dot(normalize(vDir.xz), normalize(venusDir.xz))*0.5+0.5;   // 1 sunward, 0 opposite
+        float w = pow(daz, 2.4);
+        vec3 night = mix(vec3(0.045,0.050,0.075), vec3(0.014,0.020,0.050), pow(hh, 0.55));
+        vec3 g = mix(vec3(0.60,0.22,0.05), vec3(0.36,0.085,0.105), smoothstep(0.0,0.055,hh));  // orange → red
+        g = mix(g, vec3(0.165,0.075,0.225), smoothstep(0.045,0.14,hh));                        // → purple
+        g = mix(g, vec3(0.035,0.052,0.135), smoothstep(0.12,0.30,hh));                         // → dark blue
+        g = mix(g, vec3(0.006,0.009,0.022), smoothstep(0.26,0.62,hh));                         // → black
+        vec3 col = mix(night, g, w);
+        // distance haze: a soft desaturated band hugging the horizon line — warm sunward, cool away
+        float haze = smoothstep(0.055, 0.0, abs(h));
+        col += mix(vec3(0.045,0.055,0.085), vec3(0.26,0.11,0.055), w) * haze * 0.85;
         // stars: hashed cells, round falloff, slow twinkle
         vec3 sp = normalize(vDir) * 150.0;
         vec3 cell = floor(sp); vec3 f = fract(sp) - 0.5;
@@ -609,16 +618,18 @@ const sky = new THREE.Mesh(
         col += star * tw * smoothstep(0.02, 0.30, h) * vec3(0.90, 0.93, 1.00) * 0.13;  // faint dust; the ACCURATE HYG starfield (Points) carries the real sky
         // (aurora removed 2026-07-10 — the striations read as bands, not curtains. A real attempt
         //  later would want flowing 3D curtain geometry + Perlin flow, not a horizon-band shader.)
-        // THE EVENING STAR (2026-07-11, Nix's instinct, my call): the moon is gone — this is
-        // Hesperus's porch. Venus hangs low over a sun-just-set twilight band, the way the real
-        // evening star does: the sun below the horizon lights the rim, Venus above it.
-        vec3 venusDir = normalize(vec3(0.62, 0.115, -0.78));
+        // THE EVENING STAR (2026-07-11, rev.2 per Nix): smaller core + six gently animated
+        // diffraction rays — subtle breathing, not a designy starburst.
         float vd = dot(normalize(vDir), venusDir);
-        col += vec3(1.00, 0.97, 0.88) * smoothstep(0.999955, 0.999992, vd) * 1.7;   // small, brilliant
-        col += vec3(0.34, 0.31, 0.26) * pow(max(vd, 0.0), 700.0) * 0.55;            // tight warm halo
-        float vaz = atan(venusDir.x, venusDir.z);
-        float daz = cos(atan(vDir.x, vDir.z) - vaz)*0.5 + 0.5;
-        col += vec3(0.30, 0.15, 0.09) * smoothstep(0.16, 0.0, h) * pow(daz, 3.5) * 0.6;  // sunset ember on that horizon
+        vec3 vt1 = normalize(cross(venusDir, vec3(0.0,1.0,0.0)));
+        vec3 vt2 = cross(venusDir, vt1);
+        float vang = atan(dot(vDir, vt2), dot(vDir, vt1));
+        float adist = acos(clamp(vd, -1.0, 1.0));
+        col += vec3(1.00, 0.97, 0.90) * smoothstep(0.9999935, 0.9999985, vd) * 2.2;  // tighter, brighter core
+        float rays = pow(abs(cos(3.0*vang + 0.18*sin(uTime*0.5))), 34.0);            // 6 spikes, slow sway
+        rays *= exp(-adist*170.0) * (0.72 + 0.28*sin(uTime*1.1 + vang*2.0));         // breathe
+        col += vec3(0.95, 0.90, 0.80) * rays * 0.85;
+        col += vec3(0.32, 0.28, 0.23) * pow(max(vd, 0.0), 1100.0) * 0.5;             // close halo
         gl_FragColor = vec4(col, 1.0);
         // colorspace citizenship (mirror-brightness fix, measured thread 2026-07-10): authored values
         // are DISPLAY-space; decode to linear (exact sRGB EOTF) so the include's OETF is an identity
@@ -684,7 +695,7 @@ let _starMat = null;
 
 // ---- STAR NAMES (2026-07-10, for the stargazers): faint troika labels on the bright named stars, aligned
 // to the starfield's rotation so they sit on the right stars. Toggle in ☰ (default off — clean sky).
-let _starLabels = null; const _slQ = new THREE.Quaternion();
+let _starLabels = null; const _slQ = new THREE.Quaternion(), _slV = new THREE.Vector3();
 function _buildStarLabels(){
   if(_starLabels) { _starLabels.visible = true; return; }
   _starLabels = new THREE.Group(); scene.add(_starLabels);   // unrotated: positions are PRE-rotated
@@ -5809,7 +5820,9 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
   if(_starMat) _starMat.uniforms.uTime.value = t;          // star twinkle
   if(_starLabels && _starLabels.visible && _starLabels.children.length){   // billboard star-name labels to the camera (before draw)
-    camera.getWorldQuaternion(_slQ); for(const c of _starLabels.children) c.quaternion.copy(_slQ); }
+    // per-label lookAt, not a shared quaternion: labels >90° off-axis showed their BACKS
+    // (mirrored text — headless shot, 2026-07-11). lookAt makes every label face the eye.
+    camera.getWorldPosition(_slV); for(const c of _starLabels.children) c.lookAt(_slV); }
   if(_imgLoaders>0) _imgLoadMat.uniforms.uTime.value = t;  // image loading placeholders sweep/shimmer
   if(_pendingImg.size){ for(const [cid,e] of _pendingImg) if(now-e.t0 > 20000) _clearPendingImg(cid); }  // echo never came
   for(const m of _porticoMotes){ const a=m.geo.attributes.position; // motes drift up + wrap, slight sway
