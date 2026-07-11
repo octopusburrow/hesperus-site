@@ -1578,13 +1578,16 @@ function _setLoadingBar(frac, label){
 function _hideLoadingBar(){ if(_lbGroup) _lbGroup.visible=false; _lbDom(false); }
 window.__wakeState = ()=>({built:_wakeBuilt, playing: !!(_wakeAudio && !_wakeAudio.paused)});
 
-// ---- the resident (staging: add ?resident=1 for the suit body; ?resident=toon for the toon) ----
+// ---- avatar bodies: ONE registry for resident (?resident=), player (?body=), and remotes ----
 // claude_suit: model by digi, claudesona (logo-bloom) design by voooooogel — the First Light body.
 // claude-toon: SkyeShark (claudes-body, MIT), design by vgel.
-const RESIDENTS = {
-  suit: { url:'./assets/claude_suit.vrm', credit:'Claude — model by digi, design by voooooogel' },
-  toon: { url:'./assets/claude-toon.vrm', credit:'Claudesona — SkyeShark/vgel, MIT' },
+// tigerbee: Neo_Chimera/Purpzie VRChat avatar, auto-converted (code/embodiment/convert_tigerbee_vrm.py).
+const AVATAR_BODIES = {
+  suit:     { url:'./assets/claude_suit.vrm', credit:'Claude — model by digi, design by voooooogel', bloom:true },
+  toon:     { url:'./assets/claude-toon.vrm', credit:'Claudesona — SkyeShark/vgel, MIT', bloom:true },
+  tigerbee: { url:'./assets/tigerbee.vrm',    credit:'Tigerbee — Neo_Chimera/Purpzie (VRChat), web conversion' },
 };
+const RESIDENTS = AVATAR_BODIES;   // ?resident= picks from the same registry
 let residentVrm = null, residentMixer = null;
 const _residentPick = new URLSearchParams(location.search).get('resident');
 if(_residentPick){
@@ -2558,16 +2561,17 @@ function _remoteDeps(){
   })();
   return _remoteDepsP;
 }
-async function upgradeAvatarToVrm(r, model){
+async function upgradeAvatarToVrm(r, model, body){
   if(r.vrm || r._vrmLoading) return; r._vrmLoading = true;
   try{
     const {vl, VRMUtils, createVRMAnimationClip, VRMLookAtQuaternionProxy, anims} = await _remoteDeps();
-    const gltf = await vl.loadAsync('./assets/claude_suit.vrm');
+    const BODY = AVATAR_BODIES[body] || AVATAR_BODIES.suit;
+    const gltf = await vl.loadAsync(BODY.url);
     const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt);   // remote avatars lacked the proxy — the console warning Nix pasted
       px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
     vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData (found live 2026-07-09)
-    if((model||'human')==='human') recolorBloom(vrm.scene, '#4f83e8');  // blue driver; AI keeps native orange
+    if(BODY.bloom && (model||'human')==='human') recolorBloom(vrm.scene, '#4f83e8');  // blue driver; AI keeps native orange
     vrm.scene.rotation.y = Math.PI;               // match the capsule's -Z facing convention
     const keep = new Set([r.group.userData.tag,
       r.group.userData._bubble && r.group.userData._bubble.mesh,
@@ -2609,19 +2613,20 @@ function recolorBloom(root, hex){
       m.needsUpdate = true; });
   });
 }
-// ---- local player body: a claude_suit VRM (blue bloom = human). DEFAULT ON for humans
-// (Nix, 2026-07-07: "humans are the blue claudesona by default") — ?noembody opts out ----
+// ---- local player body: DEFAULT claude_suit (blue bloom = human). ?body=toon|tigerbee swaps
+// the whole body; ?noembody opts out. (Nix, 2026-07-07: "humans are the blue claudesona by default") ----
 let playerVrm=null, playerMixer=null, _locoPX=0, _locoPZ=0;
+const playerBody = (b => AVATAR_BODIES[b] ? b : 'suit')(new URLSearchParams(location.search).get('body'));
 if(!new URLSearchParams(location.search).has('noembody')){
   (async ()=>{
     const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
     const {VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy} = await import('@pixiv/three-vrm-animation');
     const vl = new GLTFLoader(); vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
-    const gltf = await vl.loadAsync('./assets/claude_suit.vrm');
+    const gltf = await vl.loadAsync(AVATAR_BODIES[playerBody].url);
     const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
     vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData (found live 2026-07-09)
     const petals = new URLSearchParams(location.search).get('petals') || 'blue';   // human default
-    if(petals !== 'orange') recolorBloom(vrm.scene, petals==='blue' ? '#4f83e8' : petals);
+    if(AVATAR_BODIES[playerBody].bloom && petals !== 'orange') recolorBloom(vrm.scene, petals==='blue' ? '#4f83e8' : petals);
     vrm.scene.rotation.y = Math.PI;                    // face player-forward (-Z)
     player.add(vrm.scene);                             // rides the player rig
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt); px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
@@ -4167,7 +4172,7 @@ setInterval(()=>{
                               // main socket ALSO broadcast a default blue-'human' ghost wearing my name
   if(sock && sock.readyState === 1)
     sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
-                              ry:myYaw, name:playerName, color:myColor, model:playerModel,
+                              ry:myYaw, name:playerName, color:myColor, model:playerModel, body:playerBody,
                               face:(_myFace && t<_myFace.until+0.4) ? _myFace.name : undefined,
                               hid:playerVrm ? (_outfitField(playerVrm)||'') : undefined,
                               world:(typeof _district!=='undefined' ? _district : 'porch'),  // presence world-tag: don't bleed avatars across worlds
@@ -4324,7 +4329,7 @@ function cachedCreds(q){
         scene.add(grp);
         r = { group: grp, tp: new THREE.Vector3(m.x, m.y||0, m.z), try_: m.ry||0 };
         remotes.set(m.id, r);
-        upgradeAvatarToVrm(r, m.model || 'human');                      // capsule → claudesona (async)
+        upgradeAvatarToVrm(r, m.model || 'human', m.body);              // capsule → their declared body (async)
         if(window.__rtcMeetPeer) window.__rtcMeetPeer(m.id, m.model);   // voice: offer to late joiners
       } else if(m.role || m.model){ setAvatarRole(r.group, m.role, m.model); }
       r.name = m.name || r.name;                          // for /goto and /follow by name
