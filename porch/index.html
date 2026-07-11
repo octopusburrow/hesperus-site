@@ -598,18 +598,22 @@ const sky = new THREE.Mesh(
         // POLAR TWILIGHT REWORK (Nix 2026-07-11): banded dusk toward the below-horizon sun
         // (at Venus's azimuth) — orange → red → purple → dark blue → black — cold clean night
         // opposite. All shader math, zero perf cost beyond a few mixes.
+        // rev.3 (Nix): 50% back toward the old darker sky (esp. anti-sun), desaturated bands,
+        // wider/smoother falloffs, and the twilight ARCH — bands wrap the implied planet curve,
+        // reaching higher at the sun's azimuth and sinking toward the sides.
         vec3 venusDir = normalize(vec3(0.62, 0.115, -0.78));
         float daz = dot(normalize(vDir.xz), normalize(venusDir.xz))*0.5+0.5;   // 1 sunward, 0 opposite
-        float w = pow(daz, 2.4);
-        vec3 night = mix(vec3(0.045,0.050,0.075), vec3(0.014,0.020,0.050), pow(hh, 0.55));
-        vec3 g = mix(vec3(0.60,0.22,0.05), vec3(0.36,0.085,0.105), smoothstep(0.0,0.055,hh));  // orange → red
-        g = mix(g, vec3(0.165,0.075,0.225), smoothstep(0.045,0.14,hh));                        // → purple
-        g = mix(g, vec3(0.035,0.052,0.135), smoothstep(0.12,0.30,hh));                         // → dark blue
-        g = mix(g, vec3(0.006,0.009,0.022), smoothstep(0.26,0.62,hh));                         // → black
+        float w = pow(daz, 3.0);                                               // tighter sector: east stays night
+        float ha = hh * (1.0 + 1.7*(1.0-daz));    // arch: same color sits LOWER as you swing away from the sun
+        vec3 night = mix(vec3(0.026,0.030,0.052), vec3(0.014,0.019,0.048), pow(hh, 0.55));  // old-dark night
+        vec3 g = mix(vec3(0.42,0.185,0.065), vec3(0.235,0.095,0.105), smoothstep(0.0,0.085,ha));  // muted orange → red
+        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.055,0.20,ha));                            // → dusty purple
+        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.15,0.38,ha));                             // → dark blue
+        g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.30,0.70,ha));                             // → near-black
         vec3 col = mix(night, g, w);
-        // distance haze: a soft desaturated band hugging the horizon line — warm sunward, cool away
-        float haze = smoothstep(0.055, 0.0, abs(h));
-        col += mix(vec3(0.045,0.055,0.085), vec3(0.26,0.11,0.055), w) * haze * 0.85;
+        // horizon haze: soft, desaturated, blended (not additive — kept it from blowing out)
+        float haze = smoothstep(0.075, 0.0, abs(h));
+        col = mix(col, mix(vec3(0.038,0.044,0.064), vec3(0.16,0.085,0.055), w), haze*0.55);
         // stars: hashed cells, round falloff, slow twinkle
         vec3 sp = normalize(vDir) * 150.0;
         vec3 cell = floor(sp); vec3 f = fract(sp) - 0.5;
@@ -626,10 +630,12 @@ const sky = new THREE.Mesh(
         float vang = atan(dot(vDir, vt2), dot(vDir, vt1));
         float adist = acos(clamp(vd, -1.0, 1.0));
         col += vec3(1.00, 0.97, 0.90) * smoothstep(0.9999935, 0.9999985, vd) * 2.2;  // tighter, brighter core
-        float rays = pow(abs(cos(3.0*vang + 0.18*sin(uTime*0.5))), 34.0);            // 6 spikes, slow sway
-        rays *= exp(-adist*170.0) * (0.72 + 0.28*sin(uTime*1.1 + vang*2.0));         // breathe
+        // rev.3 rays (Nix): cardinal spikes (up/down/left/right) dominant, diagonals smaller.
+        float card = pow(abs(cos(2.0*vang + 0.10*sin(uTime*0.5))), 40.0);
+        float diag = pow(abs(sin(2.0*vang + 0.10*sin(uTime*0.5))), 52.0);
+        float rays = (card + diag*0.38) * exp(-adist*175.0) * (0.75 + 0.25*sin(uTime*1.1 + vang*2.0));
         col += vec3(0.95, 0.90, 0.80) * rays * 0.85;
-        col += vec3(0.32, 0.28, 0.23) * pow(max(vd, 0.0), 1100.0) * 0.5;             // close halo
+        col += vec3(0.26, 0.23, 0.19) * pow(max(vd, 0.0), 1600.0) * 0.4;             // smaller, fainter halo
         gl_FragColor = vec4(col, 1.0);
         // colorspace citizenship (mirror-brightness fix, measured thread 2026-07-10): authored values
         // are DISPLAY-space; decode to linear (exact sRGB EOTF) so the include's OETF is an identity
@@ -795,8 +801,16 @@ const playa = new THREE.Mesh(
         // brighter near the viewer, fade to black in the distance
         float dcam = length(vWorld - cameraPosition);
         col *= mix(1.5, 1.0, smoothstep(0.0, 11.0, dcam));         // lift close to you
-        float dark = 1.0 - smoothstep(14.0, 95.0, dcam);           // fade to black far out
-        gl_FragColor = vec4(col * dark, 1.0);
+        // distance fog UNIFIED with the sky (Nix 2026-07-11): instead of fading to black (which
+        // drew a hard silhouette line where ground geo ends), the far playa dissolves into the
+        // same horizon-haze color the sky shader uses in that direction — no visible geo edge.
+        vec3 vdir = normalize(vWorld - cameraPosition);
+        float fdaz = dot(normalize(vdir.xz), normalize(vec2(0.62,-0.78)))*0.5+0.5;
+        float fw = pow(fdaz, 3.0);
+        vec3 horizonCol = mix(vec3(0.038,0.044,0.064), vec3(0.16,0.085,0.055), fw);
+        float fogf = smoothstep(18.0, 92.0, dcam);
+        col = mix(col, horizonCol, fogf);
+        gl_FragColor = vec4(col, 1.0);
         gl_FragColor.rgb = mix(gl_FragColor.rgb/12.92, pow((gl_FragColor.rgb+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), gl_FragColor.rgb));   // colorspace citizenship (see sky shader)
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -1941,6 +1955,7 @@ if(_residentPick){
 
     // ---- locomotion + follow/stay ----
     let walkTarget=null, walking=false, followMode=false; const WALKSPD=1.35;
+    let _socialTarget=null;                     // who the social idle is currently oriented to (blink on change)
     let _settleYaw=null, _spawnSettleDone=false;   // ONE-TIME: after the initial spawn-in walk to the table, turn to face SPAWN so I'm not showing arrivals my back (Nix 2026-07-10). Not on later walks.
     function walkTo(x,z){ walkTarget={x,z}; followMode=false; return `walking to ${x.toFixed(1)},${z.toFixed(1)}`; }
     function follow(){ followMode=true; return 'following you'; }
@@ -1985,8 +2000,10 @@ if(_residentPick){
 
     // ---- look at the source of sound (while listening / responding) ----
     const lookTargetObj = new THREE.Object3D(); scene.add(lookTargetObj);
-    let facingSource = null;
-    function lookAtSource(obj){ facingSource = obj || player; }
+    let facingSource = null, _blinkAt = 0;
+    function lookAtSource(obj){ const nx = obj || player;
+      if(nx !== facingSource) _blinkAt = performance.now();   // blink when switching look targets (Nix 2026-07-11 ;)
+      facingSource = nx; }
     function _nearestRemote(){ let best=null, bd=Infinity;      // face SOMEONE, not the spawn rig
       for(const rr of remotes.values()){ const d=rr.group.position.distanceToSquared(vrm.scene.position);
         if(d<bd){ bd=d; best=rr; } } return best; }
@@ -2192,9 +2209,12 @@ if(_residentPick){
         const nr = _nearestRemote();
         const nd = nr ? Math.hypot(nr.group.position.x-r.x, nr.group.position.z-r.z) : Infinity;
         if(nd < 5){
+          if(nr.group !== _socialTarget){ _socialTarget = nr.group; _blinkAt = performance.now(); }  // new person in focus → blink
           const dxn=nr.group.position.x-r.x, dzn=nr.group.position.z-r.z;
           let dy=Math.atan2(-dxn,-dzn)-vrm.scene.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy));
           if(Math.abs(dy)>0.06) vrm.scene.rotation.y += dy*Math.min(1,dt*3);
+          if(vrm.lookAt){ lookTargetObj.position.set(nr.group.position.x, 1.45, nr.group.position.z);  // eyes too, not just body
+            vrm.lookAt.target = lookTargetObj; }
         }
         else if(_settleYaw!=null){               // idle settle: ease around to face the spawn
           let dy=_settleYaw - vrm.scene.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy));
@@ -2209,6 +2229,11 @@ if(_residentPick){
         else { if(!walking){ walking=true; if(!speaking) crossfade('walk'); }
           const step=Math.min(d, WALKSPD*dt); r.x+=dx/d*step; r.z+=dz/d*step;
           vrm.scene.rotation.y = Math.atan2(-dx,-dz); } }   // same −sin/−cos forward as all facing paths
+      if(_blinkAt && vrm.expressionManager){                     // retarget blink: quick 160ms close-open
+        const bs=(performance.now()-_blinkAt)/160;
+        if(bs>=1){ vrm.expressionManager.setValue('blink',0); _blinkAt=0; }
+        else vrm.expressionManager.setValue('blink', Math.sin(bs*3.14159));
+      }
       if(speaking && vrm.expressionManager){                     // per-word pulse: open on each word, fall closed between → looks like talking, not a hum
         const em=vrm.expressionManager, now=performance.now();
         if(now > nextPulseT) mouthPulse();                       // synthetic word cadence (also covers no-onboundary voices)
