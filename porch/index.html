@@ -2336,6 +2336,63 @@ function drawNameplate(name, role, model, state){
   const nt = new THREE.CanvasTexture(nc); nt.colorSpace = THREE.SRGBColorSpace; nt.anisotropy = 4;
   return nt;
 }
+// ---- #22 endgame: SDF nameplate (troika) behind ?sdfplates=1 — text stays razor at any
+// distance; only the rounded-rect FILLS stay canvas (flat fills don't pixelate). Same layout
+// coordinates as drawNameplate, mapped px→m on the 0.9x0.366 plane (1px = 0.9/256 m).
+const SDFPLATES = new URLSearchParams(location.search).get('sdfplates') === '1';
+const _PX = 0.9/256, _plateY = py => (52 - py) * (0.366/104);
+function drawPlateFills(name, role, model, state){         // drawNameplate minus every fillText
+  const SS = 2.5;
+  const nc = document.createElement('canvas'); nc.width = 256*SS; nc.height = 104*SS;
+  const ng = nc.getContext('2d'); ng.scale(SS, SS);
+  ng.fillStyle='rgba(10,12,16,0.62)';
+  ng.beginPath(); ng.roundRect(4, 2, 248, 64, 11); ng.fill();
+  const ss = state && REMOTE_STATE_STYLE[state];
+  const st = ss || ROLE_STYLE[role] || ROLE_STYLE.visitor;
+  const label = ss ? ss.label : (role || 'visitor').toUpperCase();
+  ng.textAlign='center'; ng.textBaseline='middle';
+  ng.font='600 19px Georgia';
+  const pw = ng.measureText(label).width + 26;
+  ng.fillStyle = st.bg; ng.beginPath(); ng.roundRect(128-pw/2, 74, pw, 26, 8); ng.fill();
+  // pill LABEL stays canvas: state labels carry emoji (💭/👂/📢/🛠) which SDF-from-one-serif
+  // can't shape; system-font fallback here renders them fine, and the pill is small anyway.
+  ng.fillStyle = st.fg; ng.fillText(label, 128, 87);
+  const nt = new THREE.CanvasTexture(nc); nt.colorSpace = THREE.SRGBColorSpace; nt.anisotropy = 4;
+  return {tex: nt, label, fg: st.fg};
+}
+function buildPlateSDF(name, role, model, state){
+  const g = new THREE.Group();
+  const fills = drawPlateFills(name, role, model, state);
+  const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.366),
+    new THREE.MeshBasicMaterial({map:fills.tex, transparent:true, depthTest:false, depthWrite:false}));
+  bg.renderOrder = 999; g.add(bg);
+  const mkText = (px, py, color, opts) => {
+    const t = new TroikaText();
+    t.font = './vendor/fonts/gelasio.ttf'; t.anchorX = 'center'; t.anchorY = 'middle';
+    t.fontSize = px * _PX; t.color = color; t.position.set(0, _plateY(py), 0.003);
+    Object.assign(t, opts||{});
+    t.material.depthTest = false; t.material.depthWrite = false; t.renderOrder = 1000;
+    t.sync(); g.add(t); return t;
+  };
+  const tName  = mkText(29, 24, '#e8dcc0', {font:'./vendor/fonts/gelasio-bold.ttf'});  tName.text = name; tName.sync();   // wght=700 instance (troika ignores fontWeight on direct URLs)
+  const tModel = mkText(14, 50, '#9fb4c8'); tModel.text = '◆ ' + (model||'human'); tModel.sync();
+  g.userData._sdf = {bg, tName, tModel};
+  return g;
+}
+// unified re-badge for both plate flavors — call sites stop caring which is live
+function replotTag(tag, name, role, model, state){
+  if(tag.userData._sdf){
+    const s = tag.userData._sdf, fills = drawPlateFills(name, role, model, state);
+    const old = s.bg.material.map; s.bg.material.map = fills.tex; s.bg.material.needsUpdate = true;
+    if(old) old.dispose();
+    s.tModel.text = '◆ ' + (model||'human'); s.tModel.sync();
+  } else {
+    const old = tag.material.map;
+    tag.material.map = drawNameplate(name, role, model, state);
+    tag.material.needsUpdate = true;
+    if(old) old.dispose();
+  }
+}
 function makeAvatar(color, name, role, model){
   role = role || 'visitor'; model = model || 'human';
   const g = new THREE.Group();
@@ -2353,10 +2410,13 @@ function makeAvatar(color, name, role, model){
     eye.position.set(sx*0.05, 1.34, -0.245); g.add(eye);
   }
   // upright billboard nameplate (name + role pill); NOT a Sprite — this never tilts
-  const tag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.366),
-    new THREE.MeshBasicMaterial({map:drawNameplate(name, role, model), transparent:true, depthTest:false, depthWrite:false}));
+  const tag = SDFPLATES ? buildPlateSDF(name, role, model)
+    : new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.366),
+        new THREE.MeshBasicMaterial({map:drawNameplate(name, role, model), transparent:true, depthTest:false, depthWrite:false}));
   tag.position.y = 2.16; tag.renderOrder = 999;
-  tag.onBeforeRender = (r,s,cam)=> uprightBillboard(tag, cam);
+  // Groups never fire onBeforeRender — for SDF plates the hook rides the bg MESH but orients the group
+  if(tag.userData._sdf) tag.userData._sdf.bg.onBeforeRender = (r,s,cam)=> uprightBillboard(tag, cam);
+  else tag.onBeforeRender = (r,s,cam)=> uprightBillboard(tag, cam);
   g.add(tag);
   g.userData = {name, role, model, tag};
   return g;
@@ -2367,20 +2427,14 @@ function setAvatarRole(g, role, model){
   if((role===undefined || g.userData.role===role) && (model===undefined || g.userData.model===model)) return;
   if(role) g.userData.role = role;
   if(model) g.userData.model = model;
-  const old = g.userData.tag.material.map;
-  g.userData.tag.material.map = drawNameplate(g.userData.name, g.userData.role, g.userData.model, g.userData.state);
-  g.userData.tag.material.needsUpdate = true;
-  if(old) old.dispose();
+  replotTag(g.userData.tag, g.userData.name, g.userData.role, g.userData.model, g.userData.state);
 }
 window.__setAvatarState = (g,s)=>setAvatarState(g,s);   // headless pill tests
 function setAvatarState(g, state){                 // live thinking/listening/speaking/working pill
   if(!g || !g.userData || !g.userData.tag) return;
   if(g.userData.state === state) return;
   g.userData.state = state || null;
-  const old = g.userData.tag.material.map;
-  g.userData.tag.material.map = drawNameplate(g.userData.name, g.userData.role, g.userData.model, g.userData.state);
-  g.userData.tag.material.needsUpdate = true;
-  if(old) old.dispose();
+  replotTag(g.userData.tag, g.userData.name, g.userData.role, g.userData.model, g.userData.state);
 }
 // transient speech/chat bubble over any avatar group (remote players, own mirror body).
 // Re-uses one plane per avatar; auto-hides. Same visual language as the resident's bubble.
@@ -2573,14 +2627,18 @@ if(!new URLSearchParams(location.search).has('noembody')){
       pPlay(moving ? 'walk' : 'idle', 0.22);
       if(pCur===pAct.walk && pAct.walk) pAct.walk.setEffectiveTimeScale(THREE.MathUtils.clamp(speed/1.6, 0.7, 1.8));
     };
-    const tag=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.366),
-      new THREE.MeshBasicMaterial({map:drawNameplate(playerName, myRole||'visitor', playerModel),transparent:true,depthTest:false,depthWrite:false}));
-    window.__onNameChange && window.__onNameChange(()=>{ tag.material.map = drawNameplate(playerName, myRole||'visitor', playerModel); tag.material.needsUpdate = true; });
+    const tag = SDFPLATES ? buildPlateSDF(playerName, myRole||'visitor', playerModel)
+      : new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.366),
+          new THREE.MeshBasicMaterial({map:drawNameplate(playerName, myRole||'visitor', playerModel),transparent:true,depthTest:false,depthWrite:false}));
+    const _ownReplot = ()=>{ if(tag.userData._sdf){ tag.userData._sdf.tName.text = playerName; tag.userData._sdf.tName.sync(); }
+      replotTag(tag, playerName, myRole||'visitor', playerModel); };
+    window.__onNameChange && window.__onNameChange(_ownReplot);
     // role arrives via welcome (often AFTER this async embody) — let the handler re-badge us
-    window.__refreshOwnTag = ()=>{ const old=tag.material.map;
-      tag.material.map = drawNameplate(playerName, myRole||'visitor', playerModel);
-      tag.material.needsUpdate = true; if(old) old.dispose(); };
-    tag.position.set(0,2.16,0); tag.renderOrder=999; tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam); vrm.scene.add(tag);
+    window.__refreshOwnTag = _ownReplot;
+    tag.position.set(0,2.16,0); tag.renderOrder=999;
+    if(tag.userData._sdf) tag.userData._sdf.bg.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam);
+    else tag.onBeforeRender=(r,s,cam)=>uprightBillboard(tag,cam);
+    vrm.scene.add(tag);
     // first-person head hiding (VRChat's shrunken-head trick, Nix's ask): scale the head
     // bone to ~0 for YOUR eyes; mirror + 3rd-person renders restore it around their pass.
     // head hide rev.3 (weight-map probe, 2026-07-07): the claudesona's "head" is the
