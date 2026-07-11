@@ -2075,7 +2075,11 @@ if(_residentPick){
             if(window.__logChat) __logChat(RESIDENT_NAME, replyText);
             setState(workingOn?'working':'idle'); clearLook(); drainDeferred(); }
           else if(replyText) say(replyText);
-          else if(!wantLook){ setState(workingOn?'working':'idle'); clearLook(); drainDeferred(); }
+          else if(!wantLook){
+            // empty reply = a deliberate silent close. If 'working' was only the >12s auto-state,
+            // clear it — silence isn't work, and the badge was sticking forever (Nix 2026-07-11).
+            if(workingOn) working(false);
+            setState('idle'); clearLook(); drainDeferred(); }
           if(wantLook){ _povHiresNext = true;
             setTimeout(()=> respond('[system: you took a closer look — a hi-res view of who/what is in front of you is attached]', {noLook:true}), 400); }
         }, wait);
