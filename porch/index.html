@@ -615,14 +615,17 @@ const sky = new THREE.Mesh(
         vec3 night = mix(vec3(0.026,0.030,0.052), vec3(0.014,0.019,0.048), pow(hh, 0.55));  // old-dark night
         // rev.4 (Nix): brighter orange kissing the horizon, red band thinner + pushed orange-red,
         // haze reduced to a whisper (esp. east).
-        vec3 g = mix(vec3(0.62,0.27,0.075), vec3(0.335,0.125,0.085), smoothstep(0.0,0.055,ha));    // bright orange → orange-red (thin)
-        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.045,0.16,ha));                            // → dusty purple (sooner: red stays thin)
-        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.13,0.36,ha));                             // → dark blue
-        g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.30,0.70,ha));                             // → near-black
+        // rev.5 (Nix): brightest EXACTLY at the horizon line, one long smooth ramp — the
+        // orange→red seam was band-y because the stops barely overlapped. Now each mix spans
+        // ~2x the previous stop's range (heavy overlap = no visible seams).
+        vec3 g = mix(vec3(0.68,0.30,0.085), vec3(0.30,0.115,0.095), smoothstep(0.0,0.13,ha));      // orange → orange-red, long soft ramp
+        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.06,0.26,ha));                             // → dusty purple, overlapping
+        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.16,0.42,ha));                             // → dark blue
+        g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.32,0.72,ha));                             // → near-black
         vec3 col = mix(night, g, w);
-        // horizon haze: just a kiss at the seam line (was a glowing band, worst in the east)
-        float haze = smoothstep(0.022, 0.0, abs(h));
-        col = mix(col, mix(vec3(0.020,0.024,0.038), vec3(0.14,0.075,0.05), w), haze*0.35);
+        // haze: EAST ONLY (Nix rev.5 — it was dimming the sunward horizon's brightest line)
+        float haze = smoothstep(0.022, 0.0, abs(h)) * (1.0 - w);
+        col = mix(col, vec3(0.020,0.024,0.038), haze*0.35);
         // stars: hashed cells, round falloff, slow twinkle
         vec3 sp = normalize(vDir) * 150.0;
         vec3 cell = floor(sp); vec3 f = fract(sp) - 0.5;
@@ -781,6 +784,7 @@ const playa = new THREE.Mesh(
         float mottle = noise(p*0.07);
         vec3 base = mix(vec3(0.018,0.017,0.022), vec3(0.046,0.041,0.050), mottle);
         vec3 col = base * (0.6 + 0.55*n);
+        float specMask = smoothstep(0.55, 0.95, n);   // procedural fallback; photo path overwrites from crack luminance
         if(uHasMap > 0.5){
           // photo albedo (rev.2 — Nix: 'very orange, very rough'): desaturated hard toward
           // the night-basalt palette, gentler gamma, and BLENDED with the procedural base
@@ -793,6 +797,7 @@ const playa = new THREE.Mesh(
           tex = pow(tex, vec3(0.9));                               // even LESS contrast — lift the crack darks (Nix rev.4)
           vec3 texCol = tex * (0.16 + 0.05*n) * (0.9 + 0.2*mottle) * vec3(0.94, 0.96, 1.04);
           col = mix(col, texCol, 0.6);                             // PHOTO_MIX: dialed down so cracks read as soft detail, not lines
+          specMask = smoothstep(0.30, 0.62, lum);                  // spec follows the PHOTO: raised plates glint, cracks stay dead (Nix 2026-07-11)
         } else {
         // procedural-only path keeps its crack/fine/crest layers; the photo has its OWN
         // cracks — stacking both was the 'ropy overlay' (Nix rev.3)
@@ -827,8 +832,7 @@ const playa = new THREE.Mesh(
         vec3 sL = uSpecPos - vWorld; float sD = length(sL); sL /= max(sD, 0.001);
         vec3 sV = normalize(cameraPosition - vWorld);
         float sSpec = pow(max(dot(normalize(sL + sV), vec3(0.0,1.0,0.0)), 0.0), 90.0);
-        float sMask = smoothstep(0.55, 0.95, n);                     // only the lighter/raised grain glints
-        col += vec3(0.85,0.80,0.70) * sSpec * sMask * 2.2 / (1.0 + sD*sD*0.05);
+        col += vec3(0.85,0.80,0.70) * sSpec * specMask * 2.2 / (1.0 + sD*sD*0.05);   // mask = photo luminance (cracks stay dead)
         gl_FragColor = vec4(col, 1.0);
         gl_FragColor.rgb = mix(gl_FragColor.rgb/12.92, pow((gl_FragColor.rgb+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), gl_FragColor.rgb));   // colorspace citizenship (see sky shader)
         #include <tonemapping_fragment>
