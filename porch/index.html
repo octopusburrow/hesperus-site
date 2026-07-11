@@ -3907,15 +3907,109 @@ function removeText(sid){
   if(lastTextSid===sid) lastTextSid=null;
 }
 
+// ---- THE SCREEN (2026-07-11, Nix's movie-night ask): a big framed screen that STREAMS a URL —
+// by-reference like VRChat video players, so length is unbounded and nothing transits the relay
+// but {url, play-state}. Playback is SYNCED: any click broadcasts screenctl {playing, time};
+// everyone (sender included) applies it, snapping if >1.5s adrift. Whoever pressed play keeps a
+// 10s keepalive going so late joiners and drifters converge. Audio is positional but WIDE
+// (refDistance 8) — a cinema, not a whisper. CORS is the source's problem: our media server
+// (server/media.py, Range+CORS) and archive.org both work; screening files live in media/
+// (gitignored — NEVER in git or on the public site).
+const screenObjs = new Map();                             // sid -> {mesh, vid, group}
+window.__screenObjs = screenObjs;                         // headless/test introspection
+function applyScreen(msg){
+  if(!msg.sid || screenObjs.has(msg.sid)) return;
+  const W = msg.w || 6.4, H = W * 9/16;
+  const group = new THREE.Group();
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(W+0.24, H+0.24, 0.12),
+    new THREE.MeshStandardMaterial({color:0x1a1620, roughness:0.8}));
+  const vid = document.createElement('video');
+  vid.crossOrigin = 'anonymous'; vid.src = msg.url; vid.playsInline = true; vid.preload = 'metadata';
+  vid.muted = true;                                       // silent until the first synced play (a gesture, somewhere)
+  const tex = new THREE.VideoTexture(vid); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, H),
+    new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide}));
+  mesh.position.z = 0.075;
+  const back = new THREE.Mesh(new THREE.PlaneGeometry(W, H),   // matte back so the reverse isn't a mirror image
+    new THREE.MeshStandardMaterial({color:0x0c0a10, roughness:1, side:THREE.BackSide}));
+  back.position.z = 0.074;
+  group.add(frame, mesh, back);
+  for(const sx of [-1,1]){                                // drive-in posts
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.09, 2.2, 8),
+      new THREE.MeshStandardMaterial({color:0x241e2c, roughness:0.7}));
+    post.position.set(sx*(W/2-0.3), -(H/2)-1.1+0.1, 0); group.add(post);
+  }
+  group.position.set(msg.x||0, (msg.y!=null?msg.y:H/2+2.2), msg.z||0);
+  group.rotation.y = msg.ry||0;
+  scene.add(group);
+  const rec = {mesh, vid, group, sid:msg.sid, _pa:null, _keep:null};
+  vid.onerror = ()=> imgNote('screen stream failed — CORS or bad URL? ('+String(msg.url).slice(0,60)+')', 'video');
+  const ensureAudio = ()=>{                               // wide positional audio, built on the click gesture
+    if(rec._pa || !window.__audioListener || !THREE.PositionalAudio) return;
+    try{ const pa = new THREE.PositionalAudio(window.__audioListener);
+      pa.setMediaElementSource(vid); pa.setRefDistance(8); pa.setRolloffFactor(0.8);
+      mesh.add(pa); rec._pa = pa;
+      if(window.__audioListener.context.state==='suspended') window.__audioListener.context.resume().catch(()=>{});
+    }catch(e){ console.warn('screen audio node failed (flat audio)', e); }
+  };
+  const applyCtl = (playing, time)=>{                     // one law for everyone, sender included
+    ensureAudio();
+    if(time!=null && Math.abs((vid.currentTime||0) - time) > 1.5){ try{ vid.currentTime = time; }catch(e){} }
+    if(playing){ vid.muted = false; vid.play().catch(()=>{ vid.muted = true; vid.play().catch(()=>{}); }); }
+    else vid.pause();
+    clearInterval(rec._keep); rec._keep = null;
+  };
+  rec.applyCtl = applyCtl;
+  mesh.userData.action = ()=>{                            // click = shared play/pause for the whole room
+    const playing = vid.paused;                           // target state
+    const time = vid.currentTime || 0;
+    if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'screenctl', sid:msg.sid, playing, time}));
+    applyCtl(playing, time);
+    if(playing){                                          // I pressed play → I keep the room converged
+      rec._keep = setInterval(()=>{
+        if(vid.paused){ clearInterval(rec._keep); rec._keep=null; return; }
+        if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'screenctl', sid:msg.sid, playing:true, time:vid.currentTime||0, keep:1}));
+      }, 10000);
+    }
+    return playing ? 'screen playing (synced)' : 'screen paused (synced)';
+  };
+  _clickables.push(mesh);
+  screenObjs.set(msg.sid, rec);
+}
+function removeScreen(sid){
+  const rec = screenObjs.get(sid); if(!rec) return;
+  clearInterval(rec._keep);
+  try{ rec.vid.pause(); rec.vid.src=''; }catch(e){}
+  if(rec._pa){ try{ rec._pa.disconnect(); }catch(e){} }
+  const i=_clickables.indexOf(rec.mesh); if(i>=0) _clickables.splice(i,1);
+  scene.remove(rec.group);
+  rec.group.traverse(o=>{ if(o.geometry&&o.geometry.dispose) o.geometry.dispose();
+    if(o.material){ if(o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+  screenObjs.delete(sid);
+}
+window.__screen = (url)=>{                                // /screen <url> | /screen off — one screen per coining
+  if(!url) return 'usage: /screen <url> | /screen off';
+  if(url === 'off'){ for(const sid of [...screenObjs.keys()]){ sendDelObj(sid); removeObj(sid); } return 'screen down'; }
+  if(!/^(https?:\/\/|\.\/|\/)/.test(url)) return 'need an http(s) or local URL';
+  for(const sid of [...screenObjs.keys()]){ sendDelObj(sid); removeObj(sid); }   // replace, don't stack
+  const fwd = new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+  const p = player.position.clone().addScaledVector(fwd, 7.5);
+  const vf = {url, x:p.x, z:p.z, ry:player.rotation.y, w:6.4};
+  if(sock && sock.readyState===1) sendObj('screen', vf);   // relay assigns the sid; the echo builds it here too
+  else applyObj({t:'obj', kind:'screen', sid:'scr_local_'+Date.now().toString(36), id:myNet, ...vf});
+  return 'screen up — click it to start the show (synced for everyone)';
+};
+
 // ---- THE OBJECT SPINE (client half, 2026-07-08 — notes/object-spine-spec.md). One registry,
 // one apply path, one remove path. A new modality = one row here + a build/remove pair.
 // Canonical wire form {t:'obj', kind}/{t:'delobj', sid}; legacy verbs normalized at this boundary.
 const OBJECT_TYPES = {
-  spawn: { build: applySpawn, remove: removeSpawn },
-  image: { build: applyImage, remove: removeImage },
-  video: { build: applyVideo, remove: removeVideo },
-  text:  { build: applyText,  remove: removeText  },
-  model: { build: applyModel, remove: removeModel },
+  spawn:  { build: applySpawn,  remove: removeSpawn  },
+  image:  { build: applyImage,  remove: removeImage  },
+  video:  { build: applyVideo,  remove: removeVideo  },
+  text:   { build: applyText,   remove: removeText   },
+  model:  { build: applyModel,  remove: removeModel  },
+  screen: { build: applyScreen, remove: removeScreen },
 };
 const objKind = {};                                       // sid -> kind (routes delobj to its remover)
 const _worldLedger = new Map();                           // sid -> the obj msg that built it (drives __snapshotWorld)
@@ -4443,6 +4537,8 @@ function cachedCreds(q){
       const sp = spawnedObjs.get(m.pid); if(sp) sp.position.set(m.x, m.y||1, m.z); }   // agents carry primitives too (gym)
     else if(m.t === 'own'){                          // authoritative ownership change (grant/deny/free/steal)
       if(window.__grab) window.__grab.applyOwn(m.pid, (m.owner==null?null:m.owner)); }
+    else if(m.t === 'screenctl' && m.id !== myNet){  // synced movie controls (own echo skipped: it would kill my keepalive)
+      const rec = screenObjs.get(m.sid); if(rec) rec.applyCtl(m.playing, m.time); }
     else if(m.t === 'pose' && m.id !== myNet){
       if(window.agent && m.name === window.agent.name) return;   // my own resident's echo — the VRM is already here
       let r = remotes.get(m.id);
@@ -4697,6 +4793,7 @@ function runCommand(raw){
     case 'pat': case 'boop': case 'touch': cmdNote(String(window.__tryTouch())); break;
     case 'body': cmdNote(window.__setBody ? String(window.__setBody((rest[0]||'').toLowerCase()))
                                           : 'no body system'); break;
+    case 'screen': cmdNote(String(window.__screen(rest[0]||''))); break;
     case 'actions': { const forAgent = (rest[0]||'').toLowerCase()==='agent';
       cmdNote('— things you can do here'+(forAgent?' (agent catalog)':'')+' —');
       actionCatalogText(forAgent).split('\n').forEach(cmdNote); break; }
