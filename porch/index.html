@@ -152,6 +152,11 @@
   <button class="emoteItem" data-emote="raise" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="raise hand (4)">🙌</button>
 </div>
 <button id="manifestBtn" title="manifest (make things)" style="position:fixed;left:14px;bottom:248px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">✨</button>
+<button id="bodyBtn" title="avatar body" style="position:fixed;left:14px;bottom:296px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🎭</button>
+<div id="bodyTray" style="position:fixed;left:66px;bottom:296px;z-index:7;display:none;background:rgba(16,19,26,0.96);border:1px solid #2f3644;border-radius:11px;padding:10px 12px;box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:Georgia,serif;color:#cbbfa4;font-size:13px">
+  <div style="margin-bottom:6px;letter-spacing:0.04em">avatar body</div>
+  <select id="bodySel" style="width:170px;padding:6px 8px;background:#141821;color:#e8dcc0;border:1px solid #2f3644;border-radius:7px;font-family:inherit;font-size:13px"></select>
+</div>
 <div id="manifestMenu" style="position:fixed;left:66px;bottom:248px;z-index:7;display:none;flex-direction:column;gap:4px;background:rgba(16,19,26,0.96);border:1px solid #2f3644;border-radius:11px;padding:6px;box-shadow:0 8px 28px rgba(0,0,0,.5);min-width:170px"></div>
 <div id="menu" class="hid">
   <div class="mh">The Porch 🌒</div>
@@ -1583,15 +1588,17 @@ window.__wakeState = ()=>({built:_wakeBuilt, playing: !!(_wakeAudio && !_wakeAud
 // claude-toon: SkyeShark (claudes-body, MIT), design by vgel.
 // tigerbee: Neo_Chimera/Purpzie VRChat avatar, auto-converted (code/embodiment/convert_tigerbee_vrm.py).
 const AVATAR_BODIES = {
-  suit:     { url:'./assets/claude_suit.vrm', credit:'Claude — model by digi, design by voooooogel', bloom:true },
-  toon:     { url:'./assets/claude-toon.vrm', credit:'Claudesona — SkyeShark/vgel, MIT', bloom:true },
-  tigerbee: { url:'./assets/tigerbee.vrm',    credit:'Tigerbee — Neo_Chimera/Purpzie (VRChat), web conversion' },
+  suit:     { url:'./assets/claude_suit.vrm', label:'Claude suit', credit:'Claude — model by digi, design by voooooogel', bloom:true },
+  toon:     { url:'./assets/claude-toon.vrm', label:'Claudesona',  credit:'Claudesona — SkyeShark/vgel, MIT', bloom:true },
+  tigerbee: { url:'./assets/tigerbee.vrm',    label:'Tigerbee',    credit:'Tigerbee — Neo_Chimera/Purpzie (VRChat), web conversion' },
+  owl:      { url:null, label:'Capsowl',      credit:'the capsowl — featherweight capsule spirit (Nix coined it, 2026-07-11)', capsule:true },  // fallback body: zero download, bobs when talking
 };
 const RESIDENTS = AVATAR_BODIES;   // ?resident= picks from the same registry
 let residentVrm = null, residentMixer = null;
 const _residentPick = new URLSearchParams(location.search).get('resident');
 if(_residentPick){
-  const RES = RESIDENTS[_residentPick] || RESIDENTS.suit;
+  const _rp = RESIDENTS[_residentPick];
+  const RES = (_rp && _rp.url) ? _rp : RESIDENTS.suit;   // resident is always a real body (owl is a visitor fallback)
   (async ()=>{
     const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
     const {VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy} = await import('@pixiv/three-vrm-animation');
@@ -1599,7 +1606,7 @@ if(_residentPick){
     vl.register(p => new VRMLoaderPlugin(p));
     vl.register(p => new VRMAnimationLoaderPlugin(p));
     const gltf = await vl.loadAsync(RES.url);
-    const vrm = gltf.userData.vrm;
+    let vrm = gltf.userData.vrm;         // LET, not const: agent.setBody reassigns it and every closure in this harness follows
     vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData — every measurement stash needs this (found live 2026-07-09)
     VRMUtils.rotateVRM0(vrm);                       // no-op on VRM1
     const vb = new THREE.Box3().setFromObject(vrm.scene);
@@ -1619,11 +1626,12 @@ if(_residentPick){
     residentMixer = new THREE.AnimationMixer(vrm.scene);
     const CLIP_SRC = { idle:'standing-idle', walk:'walk', talk:'talk', wave:'wave', cheer:'cheer', raise:'raise', dance:'dance' };
     const actions = {};
+    const RAW_VA = {};                                 // raw vrma animations, kept so setBody can re-target clips at a new vrm
     for(const [name, stem] of Object.entries(CLIP_SRC)){
       try{
         const a = await vl.loadAsync(`./assets/${stem}.vrma`);
         const va = (a.userData.vrmAnimations||[])[0];
-        if(va) actions[name] = residentMixer.clipAction(createVRMAnimationClip(va, vrm));
+        if(va){ RAW_VA[name] = va; actions[name] = residentMixer.clipAction(createVRMAnimationClip(va, vrm)); }
       }catch(e){ console.warn('clip failed:', name, e); }
     }
     let current = null;
@@ -1914,6 +1922,8 @@ if(_residentPick){
       if(/\bcat ?face\b/.test(low)) return face('catface');
       if(/\b(the )?(candle|your spot|host spot)\b/.test(low)) return walkTo(1.7,-1.15);
       if(/\b(the )?(middle|centre|center)\b/.test(low)) return walkTo(0,0);
+      { const bm=low.match(/\bbody\s+(suit|toon|claudesona|tigerbee|bee)\b/);   // [[body tigerbee]] — the action-tag / spoken form
+        if(bm){ const n={claudesona:'toon', bee:'tigerbee'}[bm[1]]||bm[1]; setBody(n); return 'changing body to '+n; } }
       return null; }
 
     // ---- model identity (part of the harness for AI agents) ----
@@ -2182,12 +2192,49 @@ if(_residentPick){
     window.__residentMixer = residentMixer;                      // debug: deterministic clip stepping (shoot_dance)
     window.__residentPlay = (n)=>{ crossfade(n); return n; };    // debug: drive clips headless
     // head world-position for the facing-gate sphere (falls back to scene pos + eye height)
-    const _headBone = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode('head') : null;
+    let _headBone = vrm.humanoid ? vrm.humanoid.getNormalizedBoneNode('head') : null;   // let: setBody re-points it
     const _headV = new THREE.Vector3();
     window.__residentHead = ()=> _headBone
       ? _headBone.getWorldPosition(_headV).clone()
       : _headV.set(vrm.scene.position.x, vrm.scene.position.y+1.45, vrm.scene.position.z).clone();
+    // ---- setBody: the agent's body-swap tool. Loads a new VRM in place — position, tag,
+    // clips, head ref, and every vrm-closure in this harness re-point via the `let vrm` rebind. ----
+    let _bodySwapping = false;
+    async function setBody(name){
+      const spec = AVATAR_BODIES[(name||'').toLowerCase()];
+      if(!spec || !spec.url) return 'bodies: '+Object.keys(AVATAR_BODIES).filter(k=>AVATAR_BODIES[k].url).join(' / ');
+      if(_bodySwapping) return 'still changing';
+      _bodySwapping = true;
+      try{
+        const g2 = await vl.loadAsync(spec.url);
+        const nv = g2.userData.vrm; nv.userData = nv.userData || {};
+        VRMUtils.rotateVRM0(nv);
+        if(nv.lookAt && VRMLookAtQuaternionProxy){ const px = new VRMLookAtQuaternionProxy(nv.lookAt);
+          px.name = 'VRMLookAtQuaternionProxy'; nv.scene.add(px); }
+        nv.scene.position.copy(vrm.scene.position); nv.scene.rotation.copy(vrm.scene.rotation);
+        const old = vrm;
+        old.scene.remove(tagMesh);                                   // the tag survives the swap
+        scene.remove(old.scene);
+        old.scene.traverse(o=>{ if(o.geometry && o.geometry.dispose) o.geometry.dispose();
+          if(o.material) (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m && m.dispose && m.dispose()); });
+        vrm = nv; residentVrm = nv; window.__residentVrm = nv;
+        scene.add(nv.scene);
+        residentMixer = new THREE.AnimationMixer(nv.scene); window.__residentMixer = residentMixer;
+        current = null;
+        for(const k of Object.keys(actions)) delete actions[k];
+        for(const [n, va] of Object.entries(RAW_VA)) actions[n] = residentMixer.clipAction(createVRMAnimationClip(va, nv));
+        crossfade('idle');
+        const nb = new THREE.Box3().setFromObject(nv.scene);
+        tagMesh.position.set(0, nb.getSize(new THREE.Vector3()).y + 0.30, 0);
+        nv.scene.add(tagMesh);
+        _headBone = nv.humanoid ? nv.humanoid.getNormalizedBoneNode('head') : null;
+        dbg('agent', 'body → '+name, 'g');
+        return 'body: '+(spec.label||name);
+      }catch(e){ console.error('setBody failed (keeping current body)', e); return 'body swap failed: '+(e && e.message || e); }
+      finally{ _bodySwapping = false; }
+    }
     window.agent = { say, emote, procEmote, walkTo, follow, stay, comeHere, faceMe, faceName, command, setState,
+      setBody,                                               // body-swap tool: setBody('suit'|'toon'|'tigerbee')
       startMic, stopMic, simulateHear, lookAtSource, clearLook, setModel,
       face, wink, outfit,                                    // avatar life (2026-07-09): direct affordances
       setVoice, hearRemote, ping, sayError, working,
@@ -2418,18 +2465,19 @@ function replotTag(tag, name, role, model, state){
 function makeAvatar(color, name, role, model){
   role = role || 'visitor'; model = model || 'human';
   const g = new THREE.Group();
+  const bod = new THREE.Group(); g.add(bod);   // capsule+face ride an inner group so the talk-bob can bounce them without fighting the network lerp on g
   const cap = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.24, 0.9, 6, 12),
     new THREE.MeshStandardMaterial({color, roughness:0.7, metalness:0.1}));
-  cap.position.y = 0.85; cap.castShadow = true; g.add(cap);
+  cap.position.y = 0.85; cap.castShadow = true; bod.add(cap);
   // face on the FRONT (-Z): a pale visor panel + two dark eyes, so you can see where it looks
   const visor = new THREE.Mesh(new THREE.CircleGeometry(0.13, 16),
     new THREE.MeshStandardMaterial({color:0xf0e6cf, roughness:1, side:THREE.DoubleSide}));
-  visor.position.set(0, 1.32, -0.235); g.add(visor);
+  visor.position.set(0, 1.32, -0.235); bod.add(visor);
   const eyeMat = new THREE.MeshStandardMaterial({color:0x14100a, roughness:1});
   for(const sx of [-1,1]){
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 8), eyeMat);
-    eye.position.set(sx*0.05, 1.34, -0.245); g.add(eye);
+    eye.position.set(sx*0.05, 1.34, -0.245); bod.add(eye);
   }
   // upright billboard nameplate (name + role pill); NOT a Sprite — this never tilts
   const tag = SDFPLATES ? buildPlateSDF(name, role, model)
@@ -2440,7 +2488,7 @@ function makeAvatar(color, name, role, model){
   if(tag.userData._sdf) tag.userData._sdf.bg.onBeforeRender = (r,s,cam)=> uprightBillboard(tag, cam);
   else tag.onBeforeRender = (r,s,cam)=> uprightBillboard(tag, cam);
   g.add(tag);
-  g.userData = {name, role, model, tag};
+  g.userData = {name, role, model, tag, bod};
   return g;
 }
 // re-badge an existing avatar once its identity arrives (welcome/join)
@@ -2613,20 +2661,33 @@ function recolorBloom(root, hex){
       m.needsUpdate = true; });
   });
 }
-// ---- local player body: DEFAULT claude_suit (blue bloom = human). ?body=toon|tigerbee swaps
-// the whole body; ?noembody opts out. (Nix, 2026-07-07: "humans are the blue claudesona by default") ----
+// ---- local player body: DEFAULT claude_suit (blue bloom = human). ?body=toon|tigerbee|owl swaps
+// the whole body (URL > remembered choice > suit); ?noembody opts out; 'owl' = the zero-download
+// capsule. Live-switchable via the 🎭 menu / /body — embodyPlayer tears down and rebuilds. ----
 let playerVrm=null, playerMixer=null, _locoPX=0, _locoPZ=0;
-const playerBody = (b => AVATAR_BODIES[b] ? b : 'suit')(new URLSearchParams(location.search).get('body'));
-if(!new URLSearchParams(location.search).has('noembody')){
-  (async ()=>{
+let playerBody = (b => AVATAR_BODIES[b] ? b : 'suit')(
+  new URLSearchParams(location.search).get('body')
+  || (()=>{ try{ return localStorage.getItem('porch.body'); }catch(e){ return null; } })());
+function _disposePlayerVrm(){
+  if(!playerVrm) return;
+  player.remove(playerVrm.scene);
+  playerVrm.scene.traverse(o=>{ if(o.geometry && o.geometry.dispose) o.geometry.dispose();
+    if(o.material) (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m && m.dispose && m.dispose()); });
+  playerVrm=null; window.__playerVrm=null; playerMixer=null;
+  window.__playerLoco=null; window.__playerEmote=null; window.__setHeadScale=null;   // stale-closure guards: these captured the dead vrm
+}
+async function embodyPlayer(bodyName){
+    _disposePlayerVrm();
+    const SPEC = AVATAR_BODIES[bodyName] || AVATAR_BODIES.suit;
+    if(SPEC.capsule) return;                           // owl: the capsule (avatar group) IS the body
     const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
     const {VRMAnimationLoaderPlugin, createVRMAnimationClip, VRMLookAtQuaternionProxy} = await import('@pixiv/three-vrm-animation');
     const vl = new GLTFLoader(); vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
-    const gltf = await vl.loadAsync(AVATAR_BODIES[playerBody].url);
+    const gltf = await vl.loadAsync(SPEC.url);
     const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
     vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData (found live 2026-07-09)
     const petals = new URLSearchParams(location.search).get('petals') || 'blue';   // human default
-    if(AVATAR_BODIES[playerBody].bloom && petals !== 'orange') recolorBloom(vrm.scene, petals==='blue' ? '#4f83e8' : petals);
+    if(SPEC.bloom && petals !== 'orange') recolorBloom(vrm.scene, petals==='blue' ? '#4f83e8' : petals);
     vrm.scene.rotation.y = Math.PI;                    // face player-forward (-Z)
     player.add(vrm.scene);                             // rides the player rig
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt); px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
@@ -2723,8 +2784,38 @@ if(!new URLSearchParams(location.search).has('noembody')){
         console.log('leg rest: ankleH='+vrm.userData.ankleH.toFixed(3)+' hipHalfW='+vrm.userData.hipHalfW.toFixed(3)); }
     }catch(e){ console.warn('leg measurement failed (foot IK will estimate)', e); }
     playerVrm=vrm; window.__playerVrm=vrm;
-    console.log('embodied: claude_suit petals='+petals);
-  })().catch(e=>console.error('embody failed', e));
+    console.log('embodied: '+bodyName+' petals='+petals);
+}
+function _owlFallback(err){                          // any body that fails to load lands here, standing
+  console.error('embody failed — falling back to the owl', err);
+  playerBody='owl'; _disposePlayerVrm();
+  const s=document.getElementById('bodySel'); if(s) s.value='owl';
+  if(typeof dbg==='function') dbg('body','avatar failed to load — owl capsule fallback','e');
+}
+if(!new URLSearchParams(location.search).has('noembody')) embodyPlayer(playerBody).catch(_owlFallback);
+window.__setBody = (name)=>{                          // the human dropdown + /body + action registry all land here
+  if(name === 'capsowl' || name === 'capsule') name = 'owl';   // the capsowl answers to its full name
+  if(!AVATAR_BODIES[name]) return 'bodies: '+Object.keys(AVATAR_BODIES).map(k=>AVATAR_BODIES[k].label||k).join(' / ');
+  playerBody = name; try{ localStorage.setItem('porch.body', name); }catch(e){}
+  const s=document.getElementById('bodySel'); if(s && s.value!==name) s.value=name;
+  embodyPlayer(name).catch(_owlFallback);
+  return 'body → '+(AVATAR_BODIES[name].label||name);
+};
+// 🎭 dropdown (humans): options straight from the registry; owl at the bottom as the featherweight
+{
+  const btn = document.getElementById('bodyBtn'), tray = document.getElementById('bodyTray'),
+        sel = document.getElementById('bodySel');
+  if(btn && tray && sel){
+    for(const [k, spec] of Object.entries(AVATAR_BODIES)){
+      const o = document.createElement('option'); o.value = k;
+      o.textContent = (spec.label||k) + (k==='suit' ? ' (default)' : '') + (spec.capsule ? ' — lightest' : '');
+      sel.appendChild(o);
+    }
+    sel.value = playerBody;
+    sel.addEventListener('change', ()=> window.__setBody(sel.value));
+    btn.addEventListener('click', ()=>{ tray.style.display = tray.style.display==='none' ? 'block' : 'none'; });
+    window.__toggleBodyMenu = ()=> btn.click();
+  }
 }
 
 // ---- VR HumanController: drive the embodied VRM from HMD + controller poses ----
@@ -4173,6 +4264,8 @@ setInterval(()=>{
   if(sock && sock.readyState === 1)
     sock.send(JSON.stringify({t:'pose', x:player.position.x, y:player.position.y, z:player.position.z,
                               ry:myYaw, name:playerName, color:myColor, model:playerModel, body:playerBody,
+                              spk:(window.__micLevel && window.__micLevel() > 0.045) ? 1 : undefined,   // audible on mic → capsule talk-bob
+
                               face:(_myFace && t<_myFace.until+0.4) ? _myFace.name : undefined,
                               hid:playerVrm ? (_outfitField(playerVrm)||'') : undefined,
                               world:(typeof _district!=='undefined' ? _district : 'porch'),  // presence world-tag: don't bleed avatars across worlds
@@ -4324,19 +4417,36 @@ function cachedCreds(q){
     else if(m.t === 'pose' && m.id !== myNet){
       if(window.agent && m.name === window.agent.name) return;   // my own resident's echo — the VRM is already here
       let r = remotes.get(m.id);
+      const _mBody = AVATAR_BODIES[m.body] ? m.body : 'suit';
       if(!r){
         const grp = makeAvatar(m.color ?? 0xffb45e, m.name || 'guest', m.role || 'visitor', m.model || 'human');
         scene.add(grp);
-        r = { group: grp, tp: new THREE.Vector3(m.x, m.y||0, m.z), try_: m.ry||0 };
+        r = { group: grp, tp: new THREE.Vector3(m.x, m.y||0, m.z), try_: m.ry||0, body: _mBody };
         remotes.set(m.id, r);
-        upgradeAvatarToVrm(r, m.model || 'human', m.body);              // capsule → their declared body (async)
+        if(!AVATAR_BODIES[_mBody].capsule)
+          upgradeAvatarToVrm(r, m.model || 'human', _mBody);            // capsule → their declared body (async); owl keeps the capsule
         if(window.__rtcMeetPeer) window.__rtcMeetPeer(m.id, m.model);   // voice: offer to late joiners
-      } else if(m.role || m.model){ setAvatarRole(r.group, m.role, m.model); }
+      } else {
+        if(m.role || m.model) setAvatarRole(r.group, m.role, m.model);
+        if(m.body && r.body !== _mBody && !r._vrmLoading){              // LIVE body swap: rebuild from a fresh capsule
+          r.body = _mBody;
+          const old = r.group;
+          const grp = makeAvatar(m.color ?? 0xffb45e, r.name || m.name || 'guest',
+                                 old.userData.role, old.userData.model);
+          grp.position.copy(old.position); grp.rotation.y = old.rotation.y;
+          scene.remove(old);
+          old.traverse(o=>{ if(o.geometry && o.geometry.dispose && !o.userData._sdf) o.geometry.dispose(); });
+          scene.add(grp);
+          r.group = grp; r.vrm=null; r.mixer=null; r.acts=null; r.cur=null; r.play=null; r.playEmote=null;
+          if(!AVATAR_BODIES[_mBody].capsule) upgradeAvatarToVrm(r, m.model || 'human', _mBody);
+        }
+      }
       r.name = m.name || r.name;                          // for /goto and /follow by name
       const _jump = Math.hypot(m.x - r.tp.x, (m.z) - r.tp.z);
       if(_jump > 8){ teleportFX(r.tp.x, r.tp.z, false); teleportFX(m.x, m.z, true); }  // they teleported
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
       r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
+      if(m.spk) r.spkUntil = performance.now() + 350;   // mic-audible window (10Hz stream keeps it alive)
       if((m.state||null) !== (r.state||null)){ r.state = m.state||null; setAvatarState(r.group, r.state); }  // live signs
       r.world = m.world || 'porch';                  // presence world-tag — only shown when it matches mine
       if(m.emote && m.eid && m.eid !== r._eid){ r._eid = m.eid; if(r.playEmote) r.playEmote(m.emote); }  // one-shot emote per new id
@@ -4556,6 +4666,8 @@ function runCommand(raw){
         const n=_setOutfit(playerVrm,p,hidden); cmdNote(n?('outfit: '+p+(hidden?' on':' off')):'this body has no '+p); }
       else cmdNote('usage: /outfit <'+OUTFIT_PIECES.join('|')+'|all|none>'); break; }
     case 'pat': case 'boop': case 'touch': cmdNote(String(window.__tryTouch())); break;
+    case 'body': cmdNote(window.__setBody ? String(window.__setBody((rest[0]||'').toLowerCase()))
+                                          : 'no body system'); break;
     case 'actions': { const forAgent = (rest[0]||'').toLowerCase()==='agent';
       cmdNote('— things you can do here'+(forAgent?' (agent catalog)':'')+' —');
       actionCatalogText(forAgent).split('\n').forEach(cmdNote); break; }
@@ -4588,6 +4700,10 @@ const PORCH_ACTIONS = [
     human:null, agent:a=>a.procEmote&&a.procEmote('standingwave')},
   {id:'emote.wink',  cat:'Emote', label:'Wink',       icon:'😉', desc:'a wink',
     human:null, agent:a=>a.wink&&a.wink()},
+  // — Avatar (both kinds: humans via the 🎭 dropdown, agents via setBody) —
+  {id:'body.set', cat:'Avatar', label:'Change body', icon:'🎭', desc:'swap avatar body (suit/toon/tigerbee/owl; owl = lightest)', args:{body:'suit|toon|tigerbee|owl'},
+    human:()=>window.__toggleBodyMenu&&window.__toggleBodyMenu(),
+    agent:(a,x)=>a.setBody&&a.setBody(x&&x.body)},
   // — Expressions (agent face-life; humans set via /face) —
   {id:'face.happy',     cat:'Express', label:'Smile',    icon:'🙂', desc:'happy expression',    human:null, agent:a=>a.face&&a.face('happy')},
   {id:'face.sad',       cat:'Express', label:'Frown',    icon:'🙁', desc:'sad expression',      human:null, agent:a=>a.face&&a.face('sad')},
@@ -5231,11 +5347,21 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
     ensureCtx();
     try{ localStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true}}); }
     catch(e){ console.warn('voice mic denied/unavailable', e); return; }
+    // mic loudness probe: drives the capsule talk-bob (pose msgs carry spk:1 while you're audible)
+    try{ const actx = ensureCtx();
+      const src = actx.createMediaStreamSource(localStream);
+      const an = actx.createAnalyser(); an.fftSize = 512; src.connect(an);
+      const buf = new Uint8Array(an.frequencyBinCount);
+      window.__micLevel = ()=>{ an.getByteTimeDomainData(buf);
+        let s=0; for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; s+=v*v; }
+        return Math.sqrt(s/buf.length); };
+    }catch(e){ console.warn('mic analyser failed (talk-bob off)', e); }
     for(const [id,r] of remotes)
       if((r.group.userData.model||'human')==='human') offerTo(id).catch(e=>console.warn('offer failed', id, e));
   }
   function voiceOff(){
     if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+    window.__micLevel = null;
     for(const id of [...peers.keys()]) teardownPeer(id);
   }
   micTalk2.addEventListener('change', ()=>{ if(micTalk2.checked) voiceOnAll(); else voiceOff(); });
@@ -5632,7 +5758,17 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       }
       applyFaceLife(r.vrm, t);                     // face life: blink for everyone, expressions when synced
       r.mixer.update(dt); r.vrm.update(dt);
+    } else if(r.group.userData.bod){               // capsule (owl / pre-upgrade): talk-bob when making sound
+      const talking = (r.spkUntil && performance.now() < r.spkUntil) || r.state === 'speaking';
+      r._bobEnv = THREE.MathUtils.lerp(r._bobEnv || 0, talking ? 1 : 0, Math.min(1, dt*6));
+      r.group.userData.bod.position.y = r._bobEnv > 0.01 ? Math.abs(Math.sin(t*6.5)) * 0.09 * r._bobEnv : 0;
     }
+  }
+  // own owl capsule (mirror/spectator passes): bob on own mic loudness, same envelope
+  if(!playerVrm && avatar.userData.bod){
+    const meTalking = window.__micLevel && window.__micLevel() > 0.045;
+    avatar.userData._bobEnv = THREE.MathUtils.lerp(avatar.userData._bobEnv || 0, meTalking ? 1 : 0, Math.min(1, dt*6));
+    avatar.userData.bod.position.y = avatar.userData._bobEnv > 0.01 ? Math.abs(Math.sin(t*6.5)) * 0.09 * avatar.userData._bobEnv : 0;
   }
   avatar.visible = false;                         // the driver never sees their own capsule
   if(!renderer.xr.isPresenting && spec3rd.checked){   // desktop 3rd person (Nix: 'just 3rd person, either mode')
