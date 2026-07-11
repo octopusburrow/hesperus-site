@@ -3942,7 +3942,8 @@ function applyScreen(msg){
   group.position.set(msg.x||0, (msg.y!=null?msg.y:H/2+2.2), msg.z||0);
   group.rotation.y = msg.ry||0;
   scene.add(group);
-  const rec = {mesh, vid, group, sid:msg.sid, _pa:null, _keep:null};
+  const rec = {mesh, vid, group, sid:msg.sid, _pa:null, _keep:null,
+               hostOnly: msg.ctl==='host', ownerId: msg.id};   // placer's choice: universal vs one-controller (Nix 2026-07-11)
   vid.onerror = ()=> imgNote('screen stream failed — CORS or bad URL? ('+String(msg.url).slice(0,60)+')', 'video');
   const ensureAudio = ()=>{                               // wide positional audio, built on the click gesture
     if(rec._pa || !window.__audioListener || !THREE.PositionalAudio) return;
@@ -3961,6 +3962,7 @@ function applyScreen(msg){
   };
   rec.applyCtl = applyCtl;
   mesh.userData.action = ()=>{                            // click = shared play/pause for the whole room
+    if(rec.hostOnly && myNet !== rec.ownerId) return 'the host runs this screen';
     const playing = vid.paused;                           // target state
     const time = vid.currentTime || 0;
     if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'screenctl', sid:msg.sid, playing, time}));
@@ -3987,17 +3989,18 @@ function removeScreen(sid){
     if(o.material){ if(o.material.map) o.material.map.dispose(); o.material.dispose(); } });
   screenObjs.delete(sid);
 }
-window.__screen = (url)=>{                                // /screen <url> | /screen off — one screen per coining
-  if(!url) return 'usage: /screen <url> | /screen off';
+window.__screen = (url, mode)=>{                          // /screen <url> [host] | /screen off — one screen per coining
+  if(!url) return 'usage: /screen <url> [host] | /screen off  (host = only you control playback)';
   if(url === 'off'){ for(const sid of [...screenObjs.keys()]){ sendDelObj(sid); removeObj(sid); } return 'screen down'; }
   if(!/^(https?:\/\/|\.\/|\/)/.test(url)) return 'need an http(s) or local URL';
   for(const sid of [...screenObjs.keys()]){ sendDelObj(sid); removeObj(sid); }   // replace, don't stack
   const fwd = new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
   const p = player.position.clone().addScaledVector(fwd, 7.5);
-  const vf = {url, x:p.x, z:p.z, ry:player.rotation.y, w:6.4};
+  const vf = {url, x:p.x, z:p.z, ry:player.rotation.y, w:6.4, ctl:(mode==='host'?'host':'any')};
   if(sock && sock.readyState===1) sendObj('screen', vf);   // relay assigns the sid; the echo builds it here too
   else applyObj({t:'obj', kind:'screen', sid:'scr_local_'+Date.now().toString(36), id:myNet, ...vf});
-  return 'screen up — click it to start the show (synced for everyone)';
+  return mode==='host' ? 'screen up — HOST mode: only you run playback'
+                       : 'screen up — click it to start the show (anyone can play/pause)';
 };
 
 // ---- THE OBJECT SPINE (client half, 2026-07-08 — notes/object-spine-spec.md). One registry,
@@ -4378,6 +4381,7 @@ window.__toggleEmotePanel=(f)=>{
 };
 
 let myColor = 0x2b8a8a, sock = null, myNet = null, myYaw = 0, myRole = 'visitor';
+window.__sockInfo = ()=> sock ? {state:sock.readyState, url:sock.url, net:myNet} : 'no socket';   // debug: which socket am I actually on
 // broadcast my last pose on a TIMER (not the render loop) so I stay present when the
 // headset is off / SteamVR is in standby (the XR animation loop pauses, this doesn't).
 setInterval(()=>{
@@ -4508,6 +4512,8 @@ function cachedCreds(q){
     setTimeout(connect, retryMs); retryMs = Math.min(retryMs*2, 10000); };
   sock.onmessage = (ev)=>{
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
+    window.__msgTally = window.__msgTally || {};             // headless/live debug: what actually arrives
+    window.__msgTally[m.t] = (window.__msgTally[m.t]||0) + 1;
     if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
       _everWelcomed = true;                                    // accepted: drop the auth veil, reveal the world
       try{ const _wc=localStorage.getItem('porch.wristcal');   // measured wrist cal phones home (2026-07-10):
@@ -4538,7 +4544,8 @@ function cachedCreds(q){
     else if(m.t === 'own'){                          // authoritative ownership change (grant/deny/free/steal)
       if(window.__grab) window.__grab.applyOwn(m.pid, (m.owner==null?null:m.owner)); }
     else if(m.t === 'screenctl' && m.id !== myNet){  // synced movie controls (own echo skipped: it would kill my keepalive)
-      const rec = screenObjs.get(m.sid); if(rec) rec.applyCtl(m.playing, m.time); }
+      const rec = screenObjs.get(m.sid);
+      if(rec && !(rec.hostOnly && m.id !== rec.ownerId)) rec.applyCtl(m.playing, m.time); }   // host-mode: only the placer's ctl is law
     else if(m.t === 'pose' && m.id !== myNet){
       if(window.agent && m.name === window.agent.name) return;   // my own resident's echo — the VRM is already here
       let r = remotes.get(m.id);
@@ -4793,7 +4800,7 @@ function runCommand(raw){
     case 'pat': case 'boop': case 'touch': cmdNote(String(window.__tryTouch())); break;
     case 'body': cmdNote(window.__setBody ? String(window.__setBody((rest[0]||'').toLowerCase()))
                                           : 'no body system'); break;
-    case 'screen': cmdNote(String(window.__screen(rest[0]||''))); break;
+    case 'screen': cmdNote(String(window.__screen(rest[0]||'', (rest[1]||'').toLowerCase()))); break;
     case 'actions': { const forAgent = (rest[0]||'').toLowerCase()==='agent';
       cmdNote('— things you can do here'+(forAgent?' (agent catalog)':'')+' —');
       actionCatalogText(forAgent).split('\n').forEach(cmdNote); break; }
