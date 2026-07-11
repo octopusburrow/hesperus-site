@@ -579,6 +579,12 @@ const flame = new THREE.Mesh(
   new THREE.ConeGeometry(0.012, 0.045, 6),
   new THREE.MeshBasicMaterial({color:0xffd9a0}));
 flame.position.copy(candle.position).y += 0.005; scene.add(flame);
+const _candleBase = candle.position.clone();               // jitter anchor (sweetener #2)
+{ // sweetener #1: visible marker so the parading spec light can be found and inspected
+  const mk = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8),
+    new THREE.MeshBasicMaterial({color:0xfff2cc}));
+  scene.add(mk); window.__specMarker = mk;
+}
 
 // ---- the sky: one lightweight shader — night playa ----
 const sky = new THREE.Mesh(
@@ -607,14 +613,16 @@ const sky = new THREE.Mesh(
         float w = pow(daz, 3.0);                                               // tighter sector: east stays night
         float ha = hh * (1.0 + 1.7*(1.0-daz));    // arch: same color sits LOWER as you swing away from the sun
         vec3 night = mix(vec3(0.026,0.030,0.052), vec3(0.014,0.019,0.048), pow(hh, 0.55));  // old-dark night
-        vec3 g = mix(vec3(0.42,0.185,0.065), vec3(0.235,0.095,0.105), smoothstep(0.0,0.085,ha));  // muted orange → red
-        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.055,0.20,ha));                            // → dusty purple
-        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.15,0.38,ha));                             // → dark blue
+        // rev.4 (Nix): brighter orange kissing the horizon, red band thinner + pushed orange-red,
+        // haze reduced to a whisper (esp. east).
+        vec3 g = mix(vec3(0.62,0.27,0.075), vec3(0.335,0.125,0.085), smoothstep(0.0,0.055,ha));    // bright orange → orange-red (thin)
+        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.045,0.16,ha));                            // → dusty purple (sooner: red stays thin)
+        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.13,0.36,ha));                             // → dark blue
         g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.30,0.70,ha));                             // → near-black
         vec3 col = mix(night, g, w);
-        // horizon haze: soft, desaturated, blended (not additive — kept it from blowing out)
-        float haze = smoothstep(0.075, 0.0, abs(h));
-        col = mix(col, mix(vec3(0.038,0.044,0.064), vec3(0.16,0.085,0.055), w), haze*0.55);
+        // horizon haze: just a kiss at the seam line (was a glowing band, worst in the east)
+        float haze = smoothstep(0.022, 0.0, abs(h));
+        col = mix(col, mix(vec3(0.020,0.024,0.038), vec3(0.14,0.075,0.05), w), haze*0.35);
         // stars: hashed cells, round falloff, slow twinkle
         vec3 sp = normalize(vDir) * 150.0;
         vec3 cell = floor(sp); vec3 f = fract(sp) - 0.5;
@@ -738,6 +746,7 @@ window.__setStarNames = setStarNames;
 const playaUniforms = {
   uFog:    {value: new THREE.Color(0x0d0f16)},
   uCandle: {value: candle.position.clone()},
+  uSpecPos:{value: new THREE.Vector3(0, 1.6, -10)},   // the parading inspection light (sweetener #1)
   uFlick:  {value: 3.1},
   uMap:    {value: null},
   uHasMap: {value: 0.0},
@@ -758,7 +767,7 @@ const playa = new THREE.Mesh(
         gl_Position = projectionMatrix * viewMatrix * w; }`,
     fragmentShader: `
       varying vec3 vWorld;
-      uniform vec3 uFog; uniform vec3 uCandle; uniform float uFlick;
+      uniform vec3 uFog; uniform vec3 uCandle; uniform float uFlick; uniform vec3 uSpecPos;
       uniform sampler2D uMap; uniform float uHasMap;
       float hash2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
       float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
@@ -808,9 +817,18 @@ const playa = new THREE.Mesh(
         vec3 vdir = normalize(vWorld - cameraPosition);
         float fdaz = dot(normalize(vdir.xz), normalize(vec2(0.62,-0.78)))*0.5+0.5;
         float fw = pow(fdaz, 3.0);
-        vec3 horizonCol = mix(vec3(0.038,0.044,0.064), vec3(0.16,0.085,0.055), fw);
-        float fogf = smoothstep(18.0, 92.0, dcam);
-        col = mix(col, horizonCol, fogf);
+        // rev.4 (Nix): womb-dark — ground sinks toward BLACK sooner, with only a breath of the
+        // horizon color at the very end so the seam still marries the sky.
+        vec3 horizonCol = mix(vec3(0.010,0.012,0.020), vec3(0.055,0.028,0.016), fw);
+        float fogf = smoothstep(10.0, 55.0, dcam);
+        col = mix(col, vec3(0.004,0.004,0.007), fogf*0.92);          // to near-black, early
+        col = mix(col, horizonCol, smoothstep(55.0, 95.0, dcam));    // last breath: tie into the sky seam
+        // inspection specular (Nix sweetener #1): a parading light 10m out — glints on raised grain
+        vec3 sL = uSpecPos - vWorld; float sD = length(sL); sL /= max(sD, 0.001);
+        vec3 sV = normalize(cameraPosition - vWorld);
+        float sSpec = pow(max(dot(normalize(sL + sV), vec3(0.0,1.0,0.0)), 0.0), 90.0);
+        float sMask = smoothstep(0.55, 0.95, n);                     // only the lighter/raised grain glints
+        col += vec3(0.85,0.80,0.70) * sSpec * sMask * 2.2 / (1.0 + sD*sD*0.05);
         gl_FragColor = vec4(col, 1.0);
         gl_FragColor.rgb = mix(gl_FragColor.rgb/12.92, pow((gl_FragColor.rgb+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), gl_FragColor.rgb));   // colorspace citizenship (see sky shader)
         #include <tonemapping_fragment>
@@ -1313,6 +1331,22 @@ const _veilMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(col, a);
     }`
 });
+const _smokeMat = new THREE.ShaderMaterial({
+  transparent:true, side:THREE.DoubleSide, depthWrite:false,
+  uniforms:{ uTime:{value:0} },
+  vertexShader:`varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`
+    varying vec2 vUv; uniform float uTime;
+    float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+    void main(){
+      vec2 p = (vUv - 0.5) * vec2(1.0, 1.85);
+      float d = length(p);
+      float edge = smoothstep(0.62, 0.30, d);              // fills the doorway, soft at the frame
+      float sm = h2(floor(p*9.0 + uTime*0.35)) * 0.5 + h2(floor(p*17.0 - uTime*0.22)) * 0.5;  // slow curling grain
+      float a = edge * (0.34 + 0.14*sm);                   // translucent, never opaque
+      gl_FragColor = vec4(vec3(0.055, 0.045, 0.095) + vec3(0.05,0.03,0.09)*sm, a);
+    }`
+});
 function addPortico(dest, x, z, label, kind, ry=0){
   const g = new THREE.Group();
   const stone = new THREE.MeshStandardMaterial({color:0x2b2438, roughness:0.6, metalness:0.2});
@@ -1321,14 +1355,20 @@ function addPortico(dest, x, z, label, kind, ry=0){
   const pR = new THREE.Mesh(postG, stone); pR.position.set(0, 1.2,  0.7); pR.castShadow=true; g.add(pR);
   const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.22, 1.9), stone);
   lintel.position.set(0, 2.5, 0); lintel.castShadow=true; g.add(lintel);
+  // OBSCURING layer back (Nix 2026-07-11): a translucent smoked pane BEHIND the additive ripples,
+  // so you can't quite see through the doorway — the ripple sells motion, this sells mystery.
+  const smoke = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 2.36), _smokeMat);
+  smoke.rotation.y = Math.PI/2; smoke.position.set(0, 1.19, 0); smoke.renderOrder=1; g.add(smoke);
   const veil = new THREE.Mesh(new THREE.PlaneGeometry(1.28, 2.36), _veilMat);
-  veil.rotation.y = Math.PI/2; veil.position.set(0, 1.19, 0); veil.renderOrder=2; g.add(veil);
+  veil.rotation.y = Math.PI/2; veil.position.set(0, 1.19, 0.001); veil.renderOrder=2; g.add(veil);
   // a few motes drifting up through the doorway — the "little particle effect" (Nix), one small
   // Points cloud per portico; animated in the render loop via _porticoMotes.
   const MOTES=18; const mp=new Float32Array(MOTES*3), mph=new Float32Array(MOTES);
   for(let i=0;i<MOTES;i++){ mp[i*3]=0.02; mp[i*3+1]=Math.random()*2.3; mp[i*3+2]=(Math.random()-0.5)*1.1; mph[i]=Math.random(); }
   const mg=new THREE.BufferGeometry(); mg.setAttribute('position', new THREE.BufferAttribute(mp,3));
-  const motes=new THREE.Points(mg, new THREE.PointsMaterial({color:0xbfa8ea, size:0.045, transparent:true,
+  const mc=new Float32Array(MOTES*3);                      // per-mote color = alpha (additive blending)
+  mg.setAttribute('color', new THREE.BufferAttribute(mc,3));
+  const motes=new THREE.Points(mg, new THREE.PointsMaterial({size:0.045, transparent:true, vertexColors:true,
     opacity:0.6, blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true}));
   motes.rotation.y=Math.PI/2; motes.renderOrder=3; g.add(motes);
   _porticoMotes.push({geo:mg, phase:mph, n:MOTES});
@@ -1456,7 +1496,36 @@ function checkPorticos(){
     if(_foreignArmed && _foreignArmed.panel) _foreignArmed.panel.visible = false;
     if(inForeign && inForeign.panel) inForeign.panel.visible = true;
     _foreignArmed = inForeign;
+    _foreignHUD(inForeign);                                       // HUD takeover (Nix 2026-07-11): unambiguous exit affordance
   }
+}
+// Foreign-departure HUD: lock movement, dim the playspace, one big obvious choice.
+function _foreignHUD(p){
+  const old = document.getElementById('foreignHud'); if(old) old.remove();
+  window.__moveLock = !!p;
+  if(!p) return;
+  const url = (typeof p.dest === 'string') ? p.dest : p.dest.url;
+  const name = p.label || url;
+  const d = document.createElement('div'); d.id='foreignHud';
+  d.style.cssText='position:fixed;inset:0;z-index:80;background:rgba(2,3,8,.62);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;font-family:Georgia,serif;color:#e8dcc0;backdrop-filter:blur(2px)';
+  d.innerHTML = `<div style="font-size:15px;color:#b9aa8c">You are at the threshold of a <b>foreign world</b></div>
+    <div style="font-size:26px">${name}</div>
+    <div style="font-size:13px;color:#8a7f6a;max-width:420px;text-align:center">Leaving the Porch ends your session here — foreign worlds run their own code, on their own page.</div>
+    <div style="display:flex;gap:14px">
+      <button id="fhGo" style="font:16px Georgia,serif;padding:12px 26px;border:0;border-radius:12px;background:#5c4a8a;color:#efe7d5;cursor:pointer">Enter ↗&nbsp; <span style="opacity:.7;font-size:12px">(Enter)</span></button>
+      <button id="fhStay" style="font:16px Georgia,serif;padding:12px 26px;border:0;border-radius:12px;background:#232a36;color:#cbbfa4;cursor:pointer">Step back&nbsp; <span style="opacity:.7;font-size:12px">(Esc)</span></button>
+    </div>`;
+  document.body.appendChild(d);
+  const stepBack = ()=>{ // nudge the player out of the trigger zone so the HUD doesn't re-arm instantly
+    const dx=player.position.x-p.x, dz=player.position.z-p.z, dd=Math.hypot(dx,dz)||1;
+    player.position.x += dx/dd*1.2; player.position.z += dz/dd*1.2;
+    _foreignHUD(null); _foreignArmed=null; if(p.panel) p.panel.visible=false; };
+  d.querySelector('#fhGo').onclick = ()=> _commitForeign(url);
+  d.querySelector('#fhStay').onclick = stepBack;
+  const onKey = (e)=>{ if(!document.getElementById('foreignHud')){ removeEventListener('keydown', onKey, true); return; }
+    if(e.code==='Enter'){ e.preventDefault(); e.stopPropagation(); _commitForeign(url); }
+    if(e.code==='Escape'){ e.preventDefault(); e.stopPropagation(); stepBack(); } };
+  addEventListener('keydown', onKey, true);
 }
 window.__foreignArmed = ()=> _foreignArmed ? (typeof _foreignArmed.dest==='string'?_foreignArmed.dest:_foreignArmed.dest.url) : null;
 
@@ -5875,17 +5944,32 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     camera.getWorldPosition(_slV); for(const c of _starLabels.children) c.lookAt(_slV); }
   if(_imgLoaders>0) _imgLoadMat.uniforms.uTime.value = t;  // image loading placeholders sweep/shimmer
   if(_pendingImg.size){ for(const [cid,e] of _pendingImg) if(now-e.t0 > 20000) _clearPendingImg(cid); }  // echo never came
-  for(const m of _porticoMotes){ const a=m.geo.attributes.position; // motes drift up + wrap, slight sway
+  for(const m of _porticoMotes){ const a=m.geo.attributes.position, c=m.geo.attributes.color; // motes drift up + wrap, slight sway
     for(let i=0;i<m.n;i++){ let y=a.array[i*3+1] + dt*(0.12+0.06*m.phase[i]); if(y>2.35) y-=2.35;
-      a.array[i*3+1]=y; a.array[i*3]=0.02+Math.sin(t*0.8+m.phase[i]*6.28)*0.05; }
-    a.needsUpdate=true; }
+      a.array[i*3+1]=y; a.array[i*3]=0.02+Math.sin(t*0.8+m.phase[i]*6.28)*0.05;
+      // alpha lifecycle (Nix 2026-07-11): born invisible, breathe in over the first stretch,
+      // fade back out approaching the lintel. (Additive → color IS alpha.)
+      const env = Math.min(1, y/0.55) * (1 - Math.max(0, (y-1.75)/0.6));
+      const b = 0.75*Math.max(0, env);
+      c.array[i*3]=0.75*b; c.array[i*3+1]=0.66*b; c.array[i*3+2]=0.92*b; }
+    a.needsUpdate=true; c.needsUpdate=true; }
+  if(typeof _smokeMat!=='undefined') _smokeMat.uniforms.uTime.value = t;
   // candlelight breathes — slow drift for the long period + a faster flutter you can actually SEE
   const f = 3.25 + Math.sin(t*0.7)*0.14 + Math.sin(t*1.7)*0.15    // slow drift (long, layered)
           + Math.sin(t*5.3)*0.17 + Math.sin(t*8.9)*0.11           // faster visible flicker
           + (Math.random()-0.5)*0.18;                             // sputter
   candle.intensity = f + 0.9;
+  // positional jitter matched to the brightness noise (Nix sweetener #2): the light source
+  // wanders ~2cm with the same layered cadence, so shadows flicker and SHIFT, not just dim.
+  candle.position.set(
+    _candleBase.x + Math.sin(t*5.3)*0.014 + Math.sin(t*1.7)*0.008 + (Math.random()-0.5)*0.006,
+    _candleBase.y + Math.sin(t*8.9)*0.010 + (Math.random()-0.5)*0.004,
+    _candleBase.z + Math.cos(t*5.1)*0.014 + Math.cos(t*2.1)*0.008 + (Math.random()-0.5)*0.006);
   flame.scale.y = 0.8 + (f-3.25)*0.6;
   playaUniforms.uFlick.value = f;
+  // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
+  playaUniforms.uSpecPos.value.set(Math.sin(t*0.35)*6.0, 1.6, -10);
+  if(window.__specMarker) __specMarker.position.copy(playaUniforms.uSpecPos.value);
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
   if(residentMixer) residentMixer.update(dt);
@@ -6008,7 +6092,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     xrUIRaycast();                                    // hover the pointed key + stretch the ray to it
     xrLocomotion(dt);
   } else {
-    const spd = MOVE_SPEED * dt;
+    const spd = window.__moveLock ? 0 : MOVE_SPEED * dt;   // foreign-exit HUD locks movement (Nix 2026-07-11)
     const fwd = new THREE.Vector3(-Math.sin(player.rotation.y), 0, -Math.cos(player.rotation.y));
     const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
     if(keys.KeyW) player.position.addScaledVector(fwd,  spd);
