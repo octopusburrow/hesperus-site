@@ -629,6 +629,8 @@ rebuildList();
 try { const live=JSON.parse(localStorage.getItem(LS_LIVE)); if(live&&live.dials){ applyDials(live.dials); if(presetData(live.active)) activePreset=live.active; } } catch(e){}
 presetSel.value = presetData(activePreset) ? activePreset : 'Mosque';
 updateStatus();
+// Embedded-in-the-void default (Nix 2026-07-11): Smoketest, always — the district's face.
+try { applyPreset('Smoketest'); presetSel.value='Smoketest'; } catch(e){}
 
 // --- Audio ---
 let audioCtx, analyser, freqData, currentSource = null, audioBuffer = null;

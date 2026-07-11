@@ -182,6 +182,7 @@
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
+  <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
   <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
@@ -683,7 +684,7 @@ let _starMat = null;
           float a = smoothstep(0.5, 0.06, r);            // soft round star
           if(a<0.02) discard; gl_FragColor = vec4(vC, a); }`
     });
-    const stars = new THREE.Points(g, _starMat);
+    const stars = new THREE.Points(g, _starMat); window.__stars = stars;
     // THE NORTH POLE, the night Claude was made (2026-07-10). The Porch is built so the sun
     // never rises — that IS the polar winter. So: observer at 90°N → the north celestial pole sits at
     // the zenith (Polaris 0.74° from straight up, verified), the whole sky wheels around it, nothing
@@ -1471,9 +1472,11 @@ function _ensureVoidDistrict(){
   frame.id = 'girihframe'; frame.src = './assets/girih-embed.html';
   frame.style.cssText = 'position:fixed;left:0;top:0;width:960px;height:960px;border:0;opacity:0;pointer-events:none;z-index:1';
   document.body.appendChild(frame);                        // in-viewport → rAF keeps running; size = texture res
-  let wallMat = new THREE.MeshBasicMaterial({color:0x120a18});
-  const wall = new THREE.Mesh(new THREE.PlaneGeometry(96, 96), wallMat);
-  wall.position.set(VX, 34, -70); scene.add(wall);
+  // SPHERE PROJECTION (Nix 2026-07-11): the girih wraps the inside of a dome around the
+  // spawn — it takes over your whole field of view the moment you cross. (Was a flat wall.)
+  let wallMat = new THREE.MeshBasicMaterial({color:0x120a18, side:THREE.BackSide});
+  const wall = new THREE.Mesh(new THREE.SphereGeometry(58, 48, 32), wallMat);
+  wall.position.set(VX, 0, 6); scene.add(wall);            // centered on the void spawn
   function initGirih(){
     try{
       const idoc = frame.contentDocument;
@@ -1483,7 +1486,8 @@ function _ensureVoidDistrict(){
       idoc.head.appendChild(st);
       _girihTex = new THREE.CanvasTexture(idoc.getElementById('c'));
       _girihTex.colorSpace = THREE.SRGBColorSpace;
-      wall.material = new THREE.MeshBasicMaterial({map:_girihTex});
+      _girihTex.wrapS = THREE.RepeatWrapping; _girihTex.repeat.x = 2;   // tile 2x around the dome to soften pole stretch
+      wall.material = new THREE.MeshBasicMaterial({map:_girihTex, side:THREE.BackSide});
       return true;
     }catch(e){ return false; }
   }
@@ -1503,7 +1507,7 @@ function _ensureVoidDistrict(){
     _voidGlow.intensity = 6 + ((0.30*d[0]+0.55*d[1]+0.15*d[2])/255)*26;
     _voidGlow.color.setRGB(0.35+d[0]/510, 0.30+d[1]/510, 0.45+d[2]/510);
   }catch(e){} }, 400);
-  const home = addPortico({district:'porch'}, VX+6, 6, 'The Porch', 'home');   // walk +x from spawn to go home
+  const home = addPortico({district:'porch'}, VX+6, 6, 'The Porch', 'home', Math.PI/2);   // face the girih axis (was perpendicular — Nix 2026-07-11)
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
 }
 const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
@@ -1520,6 +1524,15 @@ async function _crossDistrict(name, opts){
   scene.fog = wake ? _wakeFog : (name === 'void') ? _voidFog : _porchFog;
   scene.background = wake ? _wakeBg : (name === 'void') ? _voidBg : _porchBg;
   if(typeof sky !== 'undefined') sky.visible = (name === 'porch');
+  // the HYG starfield + labels are PORCH sky furniture — from 1000m away they read as a
+  // breakthrough star-bubble off to one side of other districts (Nix 2026-07-11).
+  if(window.__stars) window.__stars.visible = (name === 'porch');
+  if(_starLabels) _starLabels.visible = (name === 'porch') && !!document.getElementById('starNamesToggle')?.checked;
+  // void district music: Come Again (composed by Opus 3 — one of ours), lazily fetched
+  if(name === 'void'){
+    if(!window.__voidAudio){ window.__voidAudio = new Audio('./assets/void-come-again.mp3'); __voidAudio.loop = true; __voidAudio.volume = 0.35; }
+    window.__voidAudio.play().catch(()=>{});
+  } else if(window.__voidAudio && !window.__voidAudio.paused){ window.__voidAudio.pause(); }
   if(wake && _wakeAudio){ _wakeAudio.currentTime=0; _wakeAudio.volume=0.5; _wakeAudio.play().catch(()=>{}); }
   if(wake){ await _sleep(250); _hideLoadingBar(); }
   _setDistrictActive(name);                                 // pause the worlds you're NOT standing in
@@ -5072,7 +5085,7 @@ function _startAmbient(){
   new THREE.AudioLoader().load('./assets/porch_ambient.ogg', (buf)=>{
     _ambient = new THREE.Audio(_audioListener);
     _ambient.setBuffer(buf); _ambient.setLoop(true); _ambient.setVolume(0.0);
-    if(_ambientOn && _audioListener.context.state==='running'){ _ambient.play(); _ambientFade(0.20, 4); }
+    if(_ambientOn && _audioListener.context.state==='running'){ _ambient.play(); _ambientFade(_ambientVol, 4); }
   }, undefined, (e)=>{ _ambientLoading=false; console.warn('ambient load failed', e); });
 }
 function _ambientFade(to, secs){                            // gentle ramp instead of an abrupt start/stop
@@ -5080,17 +5093,27 @@ function _ambientFade(to, secs){                            // gentle ramp inste
   g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(to, now+secs);
 }
 function setAmbient(on){ _ambientOn=on; localStorage.setItem('porch.ambient', on?'on':'off');
-  if(on){ if(!_ambient) _startAmbient(); else { if(!_ambient.isPlaying) _ambient.play(); _ambientFade(0.20, 3); } }
+  if(on){ if(!_ambient) _startAmbient(); else { if(!_ambient.isPlaying) _ambient.play(); _ambientFade(_ambientVol, 3); } }
   else if(_ambient && _ambient.isPlaying){ _ambientFade(0.0, 2); setTimeout(()=>{ if(!_ambientOn && _ambient) _ambient.pause(); }, 2100); } }
 window.__setAmbient = setAmbient;
 function _audioGesture(){                                   // autoplay gate: resume context + start on first interaction
   if(_audioListener.context.state==='suspended') _audioListener.context.resume().catch(()=>{});
   if(_ambientOn){ if(!_ambient) _startAmbient();
-    else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambientFade(0.20, 4); } }
+    else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambientFade(_ambientVol, 4); } }
 }
 ['pointerdown','keydown','touchstart'].forEach(ev=>addEventListener(ev, _audioGesture));
-addEventListener('DOMContentLoaded', ()=>{ const cb=document.getElementById('ambientToggle');
-  if(cb){ cb.checked=_ambientOn; cb.addEventListener('change', ()=>setAmbient(cb.checked)); } });
+let _ambientVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem('porch.ambientVol')||'0.20')));
+{ // immediate wiring (module scripts often run after DOMContentLoaded — the star-names lesson)
+  const _wire = ()=>{
+    const cb=document.getElementById('ambientToggle');
+    if(cb){ cb.checked=_ambientOn; cb.addEventListener('change', ()=>setAmbient(cb.checked)); }
+    const vol=document.getElementById('ambientVol');                  // volume under the tick box (Nix 2026-07-11)
+    if(vol){ vol.value = String(Math.round(_ambientVol*100));
+      vol.addEventListener('input', ()=>{ _ambientVol = vol.value/100;
+        localStorage.setItem('porch.ambientVol', String(_ambientVol));
+        if(_ambient && _ambient.isPlaying) _ambientFade(_ambientVol, 0.15); }); } };
+  if(document.readyState==='loading') addEventListener('DOMContentLoaded', _wire); else _wire();
+}
 
 // ---- THE MUSIC BOX (2026-07-10, Fable 5): the Porch's owned POINT SOURCE — Lanternlight fills the
 // whole room; this is a thing on the table you walk toward and start by hand. A fixed house-style
@@ -5319,7 +5342,9 @@ function remoteInEarshot(id){                                  // remote sender 
   (function versionWatch(){
     let baseline=null;
     const check=async ()=>{ try{
-      const r=await fetch('./version.json', {cache:'no-store'}); if(!r.ok) return;
+      // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
+      // by 10 min even with no-store (browser-side only). Unique query = edge cache miss.
+      const r=await fetch('./version.json?ts='+Date.now(), {cache:'no-store'}); if(!r.ok) return;
       const v=(await r.json()).v; if(!v) return;
       if(baseline===null){ baseline=v; return; }
       if(v!==baseline && !document.getElementById('updBtn')){
@@ -5329,7 +5354,7 @@ function remoteInEarshot(id){                                  // remote sender 
         const _pl = _vw ? Math.round(_vw.getBoundingClientRect().right) + 6 : 56;
         b.style.cssText='position:fixed;left:'+_pl+'px;top:12px;z-index:6;height:38px;padding:0 12px;cursor:pointer;border:0;border-radius:10px;background:rgba(20,26,34,.85);color:#e8dcc0;font-size:13px;font-family:Georgia,serif;box-shadow:0 2px 8px rgba(0,0,0,.4)';
         b.innerHTML='new version <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e05545;margin-left:5px;vertical-align:middle"></span>';
-        b.onclick=()=>location.reload();
+        b.onclick=()=>{ const u=new URL(location.href); u.searchParams.set('v', String(Date.now())); location.href=u.toString(); };  // cache-busting reload: plain reload can re-fetch the STALE edge copy (max-age=600)
         document.body.appendChild(b);
       } }catch(e){} };
     check(); setInterval(check, 60000);
