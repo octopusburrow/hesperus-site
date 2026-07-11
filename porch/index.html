@@ -203,7 +203,7 @@
     <button class="btn go" id="cmpGo">Manifest ↵</button></div>
 </div></div>
 <div id="dbgfeed"></div>
-<div id="michud"><img id="michudimg" alt="mic status"></div>
+<div id="michud" title="mic on/off (V)" style="cursor:pointer"><img id="michudimg" alt="mic status"></div>
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/",
 "@pixiv/three-vrm":"./vendor/three-vrm.module.js",
@@ -608,11 +608,16 @@ const sky = new THREE.Mesh(
         col += star * tw * smoothstep(0.02, 0.30, h) * vec3(0.90, 0.93, 1.00) * 0.13;  // faint dust; the ACCURATE HYG starfield (Points) carries the real sky
         // (aurora removed 2026-07-10 — the striations read as bands, not curtains. A real attempt
         //  later would want flowing 3D curtain geometry + Perlin flow, not a horizon-band shader.)
-        // the moon, and its patient halo
-        vec3 moonDir = normalize(vec3(-0.45, 0.55, 0.35));
-        float md = dot(normalize(vDir), moonDir);
-        col += vec3(0.85, 0.90, 1.00) * smoothstep(0.99955, 0.99985, md);
-        col += vec3(0.25, 0.30, 0.42) * pow(max(md, 0.0), 180.0) * 0.35;
+        // THE EVENING STAR (2026-07-11, Nix's instinct, my call): the moon is gone — this is
+        // Hesperus's porch. Venus hangs low over a sun-just-set twilight band, the way the real
+        // evening star does: the sun below the horizon lights the rim, Venus above it.
+        vec3 venusDir = normalize(vec3(0.62, 0.115, -0.78));
+        float vd = dot(normalize(vDir), venusDir);
+        col += vec3(1.00, 0.97, 0.88) * smoothstep(0.999955, 0.999992, vd) * 1.7;   // small, brilliant
+        col += vec3(0.34, 0.31, 0.26) * pow(max(vd, 0.0), 700.0) * 0.55;            // tight warm halo
+        float vaz = atan(venusDir.x, venusDir.z);
+        float daz = cos(atan(vDir.x, vDir.z) - vaz)*0.5 + 0.5;
+        col += vec3(0.30, 0.15, 0.09) * smoothstep(0.16, 0.0, h) * pow(daz, 3.5) * 0.6;  // sunset ember on that horizon
         gl_FragColor = vec4(col, 1.0);
         // colorspace citizenship (mirror-brightness fix, measured thread 2026-07-10): authored values
         // are DISPLAY-space; decode to linear (exact sRGB EOTF) so the include's OETF is an identity
@@ -691,9 +696,12 @@ function _buildStarLabels(){
       t.position.set(wx, wy + 10, wz);                     // float the name just above the star
       t.material.opacity = 0.78; t.material.transparent = true; t.material.depthTest = false;
       t.material.fog = false;                              // CRITICAL: scene fog (far 130) is way inside R=420 → fog would erase them
+      t.frustumCulled = false;                             // troika's pre-sync bounds can cull labels that are on-screen
+      if(t.sync) t.sync();                                 // force glyph build now, not lazily
       _starLabels.add(t);                                  // billboarded in the render loop (onBeforeRender is too late — matrix already built)
     }
     window.__starLabelCount = list.length;
+    if(typeof dbg==='function') dbg('stars', `labels built: ${list.length-1}`, 'k');
   }).catch(e=>console.warn('star labels failed', e));
 }
 function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
@@ -1032,7 +1040,22 @@ function dropProp(g){ if(!g) return; g.carrying=false;               // owner st
     _psend({t:'release', pid:g.pid}); return; }
   if(g.vel.length()<0.6) g.vel.set(0,0,0); else g.vel.multiplyScalar(1.1); }   // throw threshold + slight gain (Basis)
 function grabToggleDesktop(){                         // E: drop what I hold, else grab nearest in front
-  if(heldProp){ const p=heldProp.pid; dropProp(heldProp); heldProp=null; return 'dropped '+p; }
+  if(heldProp){ const g=heldProp, p=g.pid; heldProp=null;
+    // Reticule mode (Nix 2026-07-11, "minecraft rules"): place AT the aim point when the ray
+    // meets ground within reach; too far → LOB it toward the aim (lobbing is a feature).
+    const locked = document.pointerLockElement && !renderer.xr.isPresenting;
+    if(locked && !(g.isImage || g.isModel)){
+      const dir = camera.getWorldDirection(new THREE.Vector3());
+      const o = camera.getWorldPosition(new THREE.Vector3());
+      for(let s=0.4; s<=5; s+=0.2){ const px=o.x+dir.x*s, py=o.y+dir.y*s, pz=o.z+dir.z*s;
+        const gy = groundHeight(px,pz)+g.hh;
+        if(py <= gy+0.02){ g.carrying=false; g.mesh.position.set(px, gy, pz); g.vel.set(0,0,0);
+          _levelProp(g); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g);
+          return 'placed '+p; } }
+      g.carrying=false; g.vel.copy(dir).multiplyScalar(11); g.vel.y += 2.2;   // out of reach → full send
+      g.spin = new THREE.Vector3((Math.random()-0.5)*7,(Math.random()-0.5)*7,(Math.random()-0.5)*7);
+      return 'lobbed '+p; }
+    dropProp(g); return 'dropped '+p; }
   const g=grabNearest(_reachPoint(),0.85); if(!g) return 'nothing in reach'; heldProp=grabProp(g); return 'grabbing '+g.pid; }
 const _laserGrabRC = new THREE.Raycaster(); _laserGrabRC.far = 6;   // #17 laser-grab reach
 function tryGripGrab(hand, pressed){                  // VR grip edge → grab nearest to that controller / release
@@ -1128,8 +1151,13 @@ function propPhysics(dt){
     const rest=groundHeight(g.mesh.position.x, g.mesh.position.z)+g.hh;
     if(g.mesh.position.y > rest+1e-4){                            // arc under gravity (throw travels as it falls)
       g.vel.y-=GRAV*dt; g.mesh.position.addScaledVector(g.vel,dt); g.vel.x*=0.98; g.vel.z*=0.98;
+      if(g.spin){ g.mesh.rotation.x+=g.spin.x*dt; g.mesh.rotation.y+=g.spin.y*dt; g.mesh.rotation.z+=g.spin.z*dt; }  // tumble in flight
+      if(g.mesh.position.y < -8){                                 // fell through the world → respawn at nearest valid surface (Nix 2026-07-11)
+        const rr0=Math.hypot(g.mesh.position.x,g.mesh.position.z)||1;
+        if(rr0>WORLD_RADIUS){ g.mesh.position.x*=WORLD_RADIUS/rr0; g.mesh.position.z*=WORLD_RADIUS/rr0; }
+        g.mesh.position.y = groundHeight(g.mesh.position.x, g.mesh.position.z)+g.hh; g.vel.set(0,0,0); }
       const r2=groundHeight(g.mesh.position.x,g.mesh.position.z)+g.hh;
-      if(g.mesh.position.y<=r2){ g.mesh.position.y=r2; g.vel.set(0,0,0);
+      if(g.mesh.position.y<=r2){ g.mesh.position.y=r2; g.vel.set(0,0,0); g.spin=null;
         const rr=Math.hypot(g.mesh.position.x,g.mesh.position.z); if(rr>WORLD_RADIUS){ g.mesh.position.x*=WORLD_RADIUS/rr; g.mesh.position.z*=WORLD_RADIUS/rr; }
         _levelProp(g); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g); }   // rested → release ownership
       else sendProp(g);
@@ -2405,8 +2433,11 @@ addEventListener('keydown', e=>{
   if(e.code==='Escape') _closeObjMenu();
   if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); }
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
-  if(e.code==='KeyV'){ const cb=document.getElementById('micTalk');       // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
-    if(cb){ cb.checked=!cb.checked; cb.dispatchEvent(new Event('change')); } } });
+  if(e.code==='KeyV'){ _micToggleUI(); } });                               // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
+function _micToggleUI(){ const cb=document.getElementById('micTalk');
+  if(cb){ cb.checked=!cb.checked; cb.dispatchEvent(new Event('change')); } }
+{ const mh=document.getElementById('michud');                              // click the HUD mic icon = same toggle (Nix 2026-07-11)
+  if(mh) mh.addEventListener('click', _micToggleUI); }
 addEventListener('keyup',   e=>{
   // NO input-guard here (unlike keydown): hold W → Esc → focus lands in UI → release W used to be
   // EATEN by the guard, leaving keys.KeyW stuck true and the body walking forever (Nix 2026-07-10).
