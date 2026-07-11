@@ -1958,7 +1958,8 @@ if(_residentPick){
     // minimum effort/thinking for conversational latency.)
     let brainTimeoutMs = 120000;
     function sayError(msg){ say(`(${String(msg).slice(0,120)})`); }
-    function respond(prompt){
+    let _povHiresNext = false;   // #24: set by [[look]] — next brainReq captures 720x1080 q0.85
+    function respond(prompt, ropts){
       setState('thinking');                                   // generating a response
       dbg('brain', `→ "${prompt.slice(0,80)}" (cache: ${backlog.length})`);
       const _t0 = Date.now();
@@ -1986,8 +1987,22 @@ if(_residentPick){
         settled=true; clearTimeout(watchdog); clearTimeout(busyTimer);
         _pending.forEach(e=>e.delivered=true);                 // brain received them → don't re-send
         dbg('brain', `← ${((Date.now()-_t0)/1000).toFixed(1)}s: ${reply ? '"'+String(reply).slice(0,80)+'"' : '(intentional silence)'}`, 'g');
+        // #24 second half: [[look]] in the reply = the resident wants a CLOSER look. Strip the
+        // tag from speech, then follow up with a hi-res recapture as its own brain turn. noLook
+        // guards the follow-up's reply so two [[look]]s can't ping-pong forever.
+        let replyText = reply, wantLook = false;
+        if(replyText && !(ropts&&ropts.noLook) && /\[\[look\]\]/.test(String(replyText))){
+          wantLook = true;
+          replyText = String(replyText).replace(/\s*\[\[look\]\]\s*/g, ' ').trim();
+          dbg('pov', 'reply requested [[look]] → hi-res recapture follow-up', 'k');
+        }
         const wait = Math.max(0, 650 - (Date.now() - _t0));   // let 'thinking' read even with an instant stub brain
-        setTimeout(()=>{ if(reply) say(reply); else { setState(workingOn?'working':'idle'); clearLook(); drainDeferred(); } }, wait);
+        setTimeout(()=>{
+          if(replyText) say(replyText);
+          else if(!wantLook){ setState(workingOn?'working':'idle'); clearLook(); drainDeferred(); }
+          if(wantLook){ _povHiresNext = true;
+            setTimeout(()=> respond('[system: you took a closer look — a hi-res view of who/what is in front of you is attached]', {noLook:true}), 400); }
+        }, wait);
       }).catch(e=>{ settled=true; clearTimeout(watchdog); clearTimeout(busyTimer);
         const msg=String(e && e.message || e);
         dbg('brain', `ERROR ${((Date.now()-_t0)/1000).toFixed(1)}s: ${msg.slice(0,90)}`, 'e');
@@ -2185,7 +2200,9 @@ if(_residentPick){
               if(d<bd){ bd=d; best=rr; } }
             if(best) tgt = best.group;
           }
-          if(tgt) image = capturePOV(tgt);
+          if(tgt){ const hires = _povHiresNext; _povHiresNext = false;
+            image = capturePOV(tgt, hires ? {w:720, h:1080, q:0.85} : null);
+            if(hires) dbg('pov', 'captured HI-RES 720x1080 for [[look]]', 'g'); }
         }
         catch(e){ dbg('pov','capture failed: '+(e&&e.message||e),'e'); }
         if(sock && sock.readyState === 1){
@@ -5296,12 +5313,17 @@ let emoteBtn = false, prevEmoteBtn = false;
 // Camera sits at the resident's head bone and looks at the addressee's head. Headless-safe
 // (WebGLRenderTarget + readRenderTargetPixels needs no display), exposed as __capturePOV.
 let _povRT=null, _povCam=null, _pov2d=null;
-function capturePOV(targetObj){
+let _povW=0, _povH=0;
+function capturePOV(targetObj, opts){
   if(!residentVrm || !targetObj) return null;
-  if(!_povRT){
-    _povRT = new THREE.WebGLRenderTarget(240, 360, {depthBuffer:true});
-    _povCam = new THREE.PerspectiveCamera(46, 240/360, 0.03, 120);
-    _pov2d = document.createElement('canvas'); _pov2d.width=240; _pov2d.height=360;
+  // #24 second half: [[look]] requests a hi-res recapture — size is now a parameter.
+  const W=(opts&&opts.w)||240, H=(opts&&opts.h)||360, Q=(opts&&opts.q)||0.7;
+  if(!_povRT || _povW!==W || _povH!==H){
+    if(_povRT) _povRT.dispose();
+    _povRT = new THREE.WebGLRenderTarget(W, H, {depthBuffer:true});
+    _povCam = new THREE.PerspectiveCamera(46, W/H, 0.03, 120);
+    _pov2d = document.createElement('canvas'); _pov2d.width=W; _pov2d.height=H;
+    _povW=W; _povH=H;
   }
   const head = residentVrm.humanoid && residentVrm.humanoid.getNormalizedBoneNode('head');
   const eye = head ? head.getWorldPosition(new THREE.Vector3())
@@ -5316,14 +5338,14 @@ function capturePOV(targetObj){
   renderer.render(scene, _povCam);
   renderer.setRenderTarget(old);
   renderer.xr.enabled = wasXR;
-  const buf = new Uint8Array(240*360*4);
-  renderer.readRenderTargetPixels(_povRT, 0, 0, 240, 360, buf);
-  const ctx=_pov2d.getContext('2d'), img=ctx.createImageData(240,360);
-  for(let y=0;y<360;y++){ const sy=359-y;                   // GL origin is bottom-left → flip vertically
-    for(let x=0;x<240;x++){ const s=(sy*240+x)*4, d=(y*240+x)*4;
+  const buf = new Uint8Array(W*H*4);
+  renderer.readRenderTargetPixels(_povRT, 0, 0, W, H, buf);
+  const ctx=_pov2d.getContext('2d'), img=ctx.createImageData(W,H);
+  for(let y=0;y<H;y++){ const sy=H-1-y;                     // GL origin is bottom-left → flip vertically
+    for(let x=0;x<W;x++){ const s=(sy*W+x)*4, d=(y*W+x)*4;
       img.data[d]=buf[s]; img.data[d+1]=buf[s+1]; img.data[d+2]=buf[s+2]; img.data[d+3]=255; } }
   ctx.putImageData(img,0,0);
-  try{ return _pov2d.toDataURL('image/jpeg', 0.7); }catch(e){ return null; }
+  try{ return _pov2d.toDataURL('image/jpeg', Q); }catch(e){ return null; }
 }
 window.__capturePOV = capturePOV;
 
