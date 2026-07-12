@@ -715,10 +715,14 @@ let _starMat = null;
       uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)} },
       vertexShader:`attribute vec3 scolor; attribute float ssize; attribute float sphase;
         varying vec3 vC; uniform float uTime; uniform float uPx;
-        void main(){ float tw = 0.82 + 0.18*sin(uTime*1.3 + sphase*7.0);
+        void main(){ float tw = 0.82 + 0.18*sin(uTime*1.9 + sphase*7.0);
           vC = scolor * tw * 1.6;                        // brightness ↑ (Nix 2026-07-11: "VERY small" — 2x size+brightness)
           vec4 mv = modelViewMatrix*vec4(position,1.0);
-          gl_PointSize = max(1.8, ssize * uPx * 4.6);    // 2x (was 2.3); floor so faint stars still register; ?starsize= to retune
+          // VISIBLE twinkle (Nix 2026-07-12 ":3"): the ±18% color-only shimmer was imperceptible on
+          // 2-4px points — tiny stars twinkle by SIZE, not tint. Second incommensurate phase so
+          // size and brightness beat against each other like real scintillation.
+          float twS = 0.90 + 0.10*sin(uTime*2.7 + sphase*11.0);
+          gl_PointSize = max(1.8, ssize * uPx * 4.6 * twS);   // 2x (was 2.3); floor so faint stars still register; ?starsize= to retune
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r = length(d);
@@ -2906,7 +2910,9 @@ addEventListener('keydown', e=>{
   if(e.code==='KeyE'){                                     // holding the camera → E = selfie flip; else grab/drop as before
     if(!(window.__cameraFlip && window.__cameraFlip()) && window.__grabToggle) dbg('grab', window.__grabToggle()); }
   if(e.code==='KeyF' && window.__cameraSnapIfHeld){ window.__cameraSnapIfHeld(); }  // F = shutter while holding the camera
-  if(e.code==='KeyC' && !e.repeat && window.__setCrouch){ window.__setCrouch(true); }  // hold C = crouch
+  if((e.code==='KeyC' || e.code==='ControlLeft' || e.code==='ControlRight') && !e.repeat && window.__setCrouch){
+    if(e.code!=='KeyC') e.preventDefault();               // keep Ctrl combos from leaking (browser shortcuts still work via keyup timing)
+    window.__setCrouch(true); if(typeof dbg==='function') dbg('pose', 'crouch DOWN ('+e.code+')', 'k'); }   // hold Ctrl = crouch (her-shooter muscle memory); C = alias. dbg: if you hold Ctrl and DON'T see this line, the key never reached us
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
   if(e.code==='KeyV'){ _micToggleUI(); } });                               // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
 function _micToggleUI(){ const cb=document.getElementById('micTalk');
@@ -2918,7 +2924,7 @@ addEventListener('keyup',   e=>{
   // EATEN by the guard, leaving keys.KeyW stuck true and the body walking forever (Nix 2026-07-10).
   // Clearing a movement key mid-typing is harmless — keydown's guard stops typing from SETTING keys.
   keys[e.code] = false;
-  if(e.code==='KeyC' && window.__setCrouch) window.__setCrouch(false); });   // release C = stand
+  if((e.code==='KeyC' || e.code==='ControlLeft' || e.code==='ControlRight') && window.__setCrouch) window.__setCrouch(false); });   // release = stand
 const _releaseAllKeys = ()=>{ for(const k in keys) keys[k] = false; wantJump = false;
   if(window.__setCrouch) window.__setCrouch(false); };
 addEventListener('blur', _releaseAllKeys);                  // alt-tab away = let go of everything
@@ -3214,7 +3220,7 @@ window.__POSES = {
     const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
     ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.15); set(s+'LowerLeg', env*1.85); set(s+'Foot', -env*0.70); });
     set('spine', env*0.18); set('hips', -env*0.12);
-    vrm.scene.position.y = -env*0.32; } },
+    vrm.scene.position.y = -env*(window.__crouchDrop||0.52); } },   // hips travel DOWN to the feet (Nix: -0.32 left you squatting in midair); __crouchDrop = live-tunable per body
   sit: { eyeDrop: 0.78, apply(vrm, env){
     const h=vrm.humanoid; if(!h) return;
     const set=(nm,x,z=0)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,z,'YXZ')); };
@@ -5752,10 +5758,22 @@ let _mbox = null;
   // debugging insurance goes back to a 487KB vorbis — same -22.8 LUFS. Bandwidth watch hit 61%.
   new THREE.AudioLoader().load('./assets/musicbox4.ogg', buf=>{
     pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0);
-    flat.setBuffer(buf); flat.setLoop(true); flat.setVolume(0.4);
+    flat.setBuffer(buf); flat.setLoop(true); flat.setVolume(1.0);   // now THE player (hand-rolled spatial below)
     if(_mbox) _mbox.ready = true;
   }, undefined, e=>console.warn('musicbox load failed', e));
   window.__mboxFlat = flat;
+  // HAND-ROLLED SPATIALIZER (2026-07-12, the pop's endgame): pop audible while TURNING, but the
+  // gain-probe stayed silent — its yaw-stable gate slept through the crime, and the surviving
+  // suspect is Chrome equalpower's behind-the-head FOLD: per-channel gain has a CORNER at the
+  // ±90° azimuth clamp (total power stays flat, which is why the offline sweep acquitted it).
+  // Smoothing can't fix a corner. So: no PannerNode at all. StereoPanner.pan = the lateral
+  // head-space component of the direction (dot(headRight, dir) — smooth through all 360°, rear
+  // included), distance = inverse gain. Both AudioParams, both setTargetAtTime. C¹ everywhere.
+  { const actx = _audioListener.context;
+    const panN = actx.createStereoPanner(), distN = actx.createGain();
+    flat.setFilters([distN, panN]);
+    window.__mboxSpatial = { panN, distN, v1:new THREE.Vector3(), v2:new THREE.Vector3(), q:new THREE.Quaternion() };
+  }
   _mbox = { group:G, spin, brass, comb:comb.material, audio:pa, glow, ready:false, playing:false, lvl:0 };
 })();
 window.__mbox = _mbox;                                        // debug: headless audio-graph probe
@@ -5796,8 +5814,8 @@ function _mboxToggle(){
   if(pa.isPlaying || (fl && fl.isPlaying)){ if(pa.isPlaying) pa.stop(); if(fl && fl.isPlaying) fl.stop();
     _mbox.playing=false; return 'music box: stopped'; }
   if(_audioListener.context.state!=='running') _audioListener.context.resume().catch(()=>{});
-  if(_mboxFlatMode() && fl){ fl.play(); if(typeof dbg==='function') dbg('mbox','A/B: FLAT (no panner)','k'); }
-  else { pa.play(); if(typeof dbg==='function') dbg('mbox','A/B: SPATIAL (panner)','k'); }
+  if(fl){ fl.play(); if(typeof dbg==='function') dbg('mbox', _mboxFlatMode() ? 'A/B: FLAT (spatial pinned off)' : 'hand-rolled spatial ♪ (PannerNode retired)','k'); }
+  else pa.play();                                            // pa survives only as a fallback if flat failed to build
   _mbox.playing=true; return 'music box: playing ♪';
 }
 window.__toggleMusicbox = _mboxToggle;
@@ -5823,6 +5841,19 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   _mbox.brass.emissive.setRGB(lvl*0.10, lvl*0.07, lvl*0.02);
   _mbox.comb.emissive.setRGB(lvl*0.10, lvl*0.07, lvl*0.02);
   if(_mbox.playing) _mbox.spin.rotation.x += dt*2.1;        // drum + crank turn while it plays
+  if(_mbox.playing && window.__mboxSpatial){                // hand-rolled pan/distance (see build comment)
+    const S = window.__mboxSpatial, actx = _audioListener.context;
+    const wp = _mbox.group.getWorldPosition(S.v1);
+    const cp = camera.getWorldPosition(S.v2);
+    const dir = wp.sub(cp); const d = Math.max(0.01, dir.length()); dir.normalize();
+    const right = S.v2.set(1,0,0).applyQuaternion(camera.getWorldQuaternion(S.q));
+    const flatMode = typeof _mboxFlatMode==='function' && _mboxFlatMode();
+    const pan = flatMode ? 0 : Math.max(-0.9, Math.min(0.9, right.dot(dir)*0.9));
+    const g   = flatMode ? 0.4 : Math.min(1, 1/(1 + 1.3*Math.max(0, d-1)));
+    const t = actx.currentTime;
+    S.panN.pan.setTargetAtTime(pan, t, 0.035);
+    S.distN.gain.setTargetAtTime(g, t, 0.035);
+  }
 };
 // ---- THE CAMERA (Nix 2026-07-11, "like the VRC object — I could take a selfie with the two of
 // us"): a grabbable camera on the table. Place it facing your scene, click it → 3-2-1 → flash →
@@ -5894,7 +5925,7 @@ window.__musicboxTick = (dt)=>{                             // called from the r
     renderer.xr.enabled = wasXR; }
   // ---- HTML viewfinder HUD (desktop): live preview + red shutter, bottom-right
   const vfHud = document.createElement('div');
-  vfHud.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:46;display:none;'+
+  vfHud.style.cssText = 'position:fixed;right:18px;bottom:150px;z-index:46;display:none;'+   // rides ABOVE the chat/talk bars (Nix: overlap ×2)
     'background:#14171f;border:2px solid #3a4152;border-radius:12px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,.55)';
   const vfCanvas = document.createElement('canvas'); vfCanvas.width=vfW; vfCanvas.height=vfH;
   vfCanvas.style.cssText = 'display:block;width:280px;border-radius:6px;background:#000';
@@ -5961,6 +5992,9 @@ window.__musicboxTick = (dt)=>{                             // called from the r
           ctx.putImageData(img, 0, 0);
           const dataURL = cam2d.toDataURL('image/jpeg', 0.85);
           // manifest the polaroid: floats above the camera, facing back at the scene
+          const wp = root.getWorldPosition(new THREE.Vector3());   // (2026-07-12: the _poseFrom unification deleted the old
+                                                                    // pose block that declared wp — snap died silently in the
+                                                                    // catch for an hour. Nix noticed the missing save dialog.)
           const px = wp.x, pz = wp.z, ry = Math.atan2(-(camCam.getWorldDirection(new THREE.Vector3()).x), -(camCam.getWorldDirection(new THREE.Vector3()).z));
           if(sock && sock.readyState===1)
             sendObj('image', {dataURL, aspect:CAM_W/CAM_H, x:px, y:1.5, z:pz, ry, cid:'cam'+Date.now()%100000});
