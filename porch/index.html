@@ -5991,7 +5991,10 @@ window.__musicboxTick = (dt)=>{                             // called from the r
                                      // forward. One pose function, one truth, preview = photo.
           const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
           const old = renderer.getRenderTarget();
+          flash.visible = false;                          // the flash tells the WORLD a photo happened — it doesn't belong IN the photo (Nix: "blown out")
+          if(window.__setHeadScale) __setHeadScale(1);    // re-assert: the 8Hz preview tick renders in the flash-to-capture gap and re-hides the head (the headless-photo race)
           renderer.setRenderTarget(camRT); renderer.render(scene, camCam); renderer.setRenderTarget(old);
+          flash.visible = true;
           renderer.xr.enabled = wasXR;
           const buf = new Uint8Array(CAM_W*CAM_H*4);
           renderer.readRenderTargetPixels(camRT, 0, 0, CAM_W, CAM_H, buf);
