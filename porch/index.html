@@ -2629,9 +2629,17 @@ addEventListener('contextmenu', e=>{
     b.textContent=label; b.style.cssText='padding:6px 14px;border-radius:7px;cursor:pointer';
     b.onmouseenter=()=>b.style.background='rgba(90,80,60,.35)'; b.onmouseleave=()=>b.style.background='';
     b.onclick=()=>{ _closeObjMenu(); fn(); }; m.appendChild(b); };
+  dbg('objmenu', `open: target=${g.pid||'?'} sid=${sid||'NONE'} held=${heldProp===g}`, 'k');   // delete-bug forensics (Nix 2026-07-11: photo delete "didn't work" — this names the failing step)
   row(heldProp===g ? '⬇ Put down' : '✋ Pick up', ()=> window.__grab && __grab.grabToggleDesktop && __grab.grabToggleDesktop());
   if(g.isCamera3D) row('📸 3-second timer', ()=>{ if(window.__cameraSnap) dbg('camera', __cameraSnap(), 'k'); });
-  if(sid) row('🗑 Delete', ()=>{ if(sock && sock.readyState===1) sendDelObj(sid); else removeObj(sid); });
+  if(sid) row('🗑 Delete', ()=>{
+    const live = sock && sock.readyState===1;
+    dbg('objmenu', `delete ${sid} → ${live?'relay':'local'}`, 'k');
+    if(live){ sendDelObj(sid);
+      window._delPending = window._delPending || new Map(); _delPending.set(sid, setTimeout(()=>{
+        if(_delPending.delete(sid)) dbg('objmenu', `⚠ delete ${sid}: no confirmation after 2.5s — relay denied or dropped it`, 'w'); }, 2500)); }
+    else removeObj(sid); });
+  else dbg('objmenu', '⚠ no sid on this object — Delete row hidden', 'w');
   document.body.appendChild(m);
   setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
 });
@@ -4397,6 +4405,8 @@ function applyObj(m){
   _worldLedger.set(m.sid, {kind, ...keep});
 }
 function removeObj(sid){
+  if(window._delPending && _delPending.has(sid)){ clearTimeout(_delPending.get(sid)); _delPending.delete(sid);
+    dbg('objmenu', `✓ delete ${sid} confirmed by relay`, 'k'); }
   const reg = OBJECT_TYPES[objKind[sid]];
   if(reg) reg.remove(sid);
   else for(const k in OBJECT_TYPES) OBJECT_TYPES[k].remove(sid);   // unknown sid: removers are safe no-ops
