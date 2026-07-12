@@ -1303,6 +1303,65 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   die.position.set(-0.12, topY+0.025, cz-0.22); _addProp('die', die, 0.025);
 }
 
+// ---- the wood stove (2026-07-12): Ship's Log v2 said "a porch swing, a wood stove, a music
+// box" — Nix caught that the stove didn't exist yet and offered: edit the draft, or build it.
+// We edit reality, not the draft. Pot-belly, cast iron, right of the bookcases (mirror's
+// symmetric spot), fire window + light breathing on the candle's layered-flicker cadence. ----
+{
+  const iron = new THREE.MeshStandardMaterial({color:0x1f1f24, roughness:0.92, metalness:0.35});
+  const g = new THREE.Group();
+  // legs: four stubby angled feet
+  for(let i=0;i<4;i++){
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.022,0.03,0.16,8), iron);
+    const a = Math.PI/4 + i*Math.PI/2;
+    leg.position.set(Math.cos(a)*0.17, 0.08, Math.sin(a)*0.17);
+    leg.rotation.z = Math.cos(a)*0.28; leg.rotation.x = -Math.sin(a)*0.28;
+    g.add(leg);
+  }
+  // belly: squashed sphere — the pot
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 16), iron);
+  belly.scale.set(1, 0.92, 1); belly.position.y = 0.40; belly.castShadow = true; g.add(belly);
+  // waist ring + top plate + lid knob
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.245, 0.018, 8, 24), iron);
+  ring.rotation.x = Math.PI/2; ring.position.y = 0.52; g.add(ring);
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.20, 0.07, 20), iron);
+  top.position.y = 0.665; g.add(top);
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.02, 16), iron);
+  lid.position.y = 0.71; g.add(lid);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), iron);
+  knob.position.y = 0.735; g.add(knob);
+  // stovepipe: up, with a rain cap (chimney exits the sky's problem, not ours)
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 1.85, 12), iron);
+  pipe.position.y = 0.70 + 1.85/2; g.add(pipe);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.068, 0.05, 12), iron);
+  collar.position.y = 0.72; g.add(collar);
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.09, 12), iron);
+  cap.position.y = 0.70 + 1.85 + 0.07; g.add(cap);
+  // door: raised round hatch on the front (+z), with the fire window in it
+  const door = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.035, 18), iron);
+  door.rotation.x = Math.PI/2; door.position.set(0, 0.40, 0.245); g.add(door);
+  const hinge = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.09, 0.02), iron);
+  hinge.position.set(0.125, 0.40, 0.255); g.add(hinge);
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.008, 6, 12), iron);
+  handle.position.set(-0.10, 0.40, 0.268); g.add(handle);
+  // fire window: emissive disc behind three grille bars — THIS is what flickers
+  const fireMat = new THREE.MeshStandardMaterial({color:0x120802,
+    emissive:0xff7a28, emissiveIntensity:1.6, roughness:1});
+  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.085, 18), fireMat);
+  glass.position.set(0, 0.40, 0.264); g.add(glass);
+  for(let i=-1;i<=1;i++){
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.17, 0.012), iron);
+    bar.position.set(i*0.055, 0.40, 0.269); g.add(bar);
+  }
+  // warm light: shadowless (the candle owns the shadow budget), short throw, breathes in the loop
+  const fire = new THREE.PointLight(0xff8434, 2.2, 5.5, 1.8);
+  fire.position.set(0, 0.42, 0.42); g.add(fire);
+  g.position.set(2.6, 0.005, -1.8);
+  g.rotation.y = -0.38;                                   // door swivelled toward the room's middle
+  scene.add(g); addCollider(g, 'stove');
+  window._stoveFire = { light: fire, mat: fireMat };      // picked up by the candle-flicker block
+}
+
 // ---- a literal mirror, framed, to the left of the bookcases (so you can see yourself) ----
 {
   const MW = 1.5, MH = 2.4;   // taller + wider (Nix): readable nametags, better with guests
@@ -6400,6 +6459,13 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     _candleBase.y + Math.sin(t*13.9)*0.005 + (Math.random()-0.5)*0.002,
     _candleBase.z + Math.cos(t*8.3)*0.007 + Math.cos(t*3.7)*0.004 + (Math.random()-0.5)*0.003);
   flame.scale.y = 0.8 + (f-3.25)*0.6;
+  // stove fire: same layered-flicker family as the candle but slower + deeper — embers, not wick.
+  if(window._stoveFire){
+    const s = 2.0 + Math.sin(t*0.5+1.3)*0.22 + Math.sin(t*1.3+0.7)*0.18
+            + Math.sin(t*4.1)*0.14 + (Math.random()-0.5)*0.10;
+    window._stoveFire.light.intensity = s;
+    window._stoveFire.mat.emissiveIntensity = 1.1 + (s-2.0)*0.9;
+  }
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
   // (spec wanderer parked underground 2026-07-11 — the SHADER half of the parade light survived
