@@ -68,7 +68,7 @@
   #chatbar textarea::-webkit-scrollbar-thumb:hover, #chathist::-webkit-scrollbar-thumb:hover{background:#566073}
   #chatbar textarea::-webkit-scrollbar-button, #chathist::-webkit-scrollbar-button{display:none}
   #chatbar textarea, #chathist{scrollbar-width:thin;scrollbar-color:#3a3f4c rgba(14,16,22,0.5)}
-  #dbgfeed{position:fixed;right:10px;bottom:10px;width:380px;max-height:46vh;display:none;
+  #dbgfeed{position:fixed;right:10px;top:96px;width:380px;max-height:46vh;display:none;  /* top-right under name/world (Nix 2026-07-11) */
     overflow-y:auto;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#b8c4d0;
     background:rgba(8,10,14,0.82);border:1px solid #2a3040;border-radius:8px;padding:8px 10px;
     white-space:pre-wrap;word-break:break-word;z-index:50}
@@ -590,8 +590,8 @@ const _candleBase = candle.position.clone();               // jitter anchor (swe
   const mk = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8),
     new THREE.MeshBasicMaterial({color:0xfff2cc}));
   scene.add(mk); window.__specMarker = mk;
-  const sl = new THREE.PointLight(0xfff2cc, 4, 14, 1.8);   // the same wanderer, as a REAL light —
-  scene.add(sl); window.__specLight = sl;                  // the shader-spec was playa-only math (Nix asked why)
+  const sl = new THREE.PointLight(0xfff2cc, 20, 22, 1.6);  // the same wanderer, as a REAL light — intensity 4 decayed
+  scene.add(sl); window.__specLight = sl;                  // to nothing before reaching the deck (Nix's floorboard check)
 }
 
 // ---- the sky: one lightweight shader — night playa ----
@@ -628,10 +628,12 @@ const sky = new THREE.Mesh(
         // rev.5 (Nix): brightest EXACTLY at the horizon line, one long smooth ramp — the
         // orange→red seam was band-y because the stops barely overlapped. Now each mix spans
         // ~2x the previous stop's range (heavy overlap = no visible seams).
-        vec3 g = mix(vec3(0.68,0.30,0.085), vec3(0.30,0.115,0.095), smoothstep(0.0,0.20,ha));      // orange → orange-red, LONGER ramp (rev.7: the luminance cliff read as a dark artifact band)
-        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.06,0.26,ha));                             // → dusty purple, overlapping
-        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.16,0.42,ha));                             // → dark blue
-        g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.32,0.72,ha));                             // → near-black
+        // rev.8 (Nix): bands compressed to HALF height — the warm colors hug the horizon; the
+        // dark-blue → black tail keeps its long slow death into the night.
+        vec3 g = mix(vec3(0.68,0.30,0.085), vec3(0.30,0.115,0.095), smoothstep(0.0,0.10,ha));      // orange → orange-red
+        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.03,0.13,ha));                             // → dusty purple
+        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.08,0.21,ha));                             // → dark blue
+        g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.28,0.72,ha));                             // → near-black (long tail preserved)
         vec3 col = mix(night, g, w);
         // haze: EAST ONLY (Nix rev.5 — it was dimming the sunward horizon's brightest line)
         float haze = smoothstep(0.022, 0.0, abs(h)) * (1.0 - w);
@@ -5300,7 +5302,9 @@ let _mbox = null;
   // write and audibly stutters when the render loop hiccups; equalpower is smooth + cheap.
   pa.panner.panningModel = 'equalpower';
   G.add(pa);
-  new THREE.AudioLoader().load('./assets/musicbox.ogg', buf=>{
+  // musicbox2.wav (2026-07-11): remade from scratch — fresh mono WAV straight from the original
+  // loop render, ZERO codec artifacts, new filename busts every cache layer (Nix: "still crunchy").
+  new THREE.AudioLoader().load('./assets/musicbox2.wav', buf=>{
     pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0); if(_mbox) _mbox.ready = true;
   }, undefined, e=>console.warn('musicbox load failed', e));
   _mbox = { group:G, spin, brass, comb:comb.material, audio:pa, glow, ready:false, playing:false, lvl:0 };
@@ -6065,6 +6069,20 @@ window.__capturePOV = capturePOV;
 
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
+let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
+const _VEN = new THREE.Vector3(0.62, 0, -0.78).normalize();   // venus azimuth, horizontal
+{ // THE FILM MATTE (Nix 2026-07-11, "if I were doing this in a short film"): a huge gaussian
+  // blob pegged to the western horizon, obscuring the razor line where ground meets sky.
+  const c = document.createElement('canvas'); c.width=256; c.height=128;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(128,64,4,128,64,120);
+  g.addColorStop(0,'rgba(226,120,40,0.42)'); g.addColorStop(0.4,'rgba(160,70,28,0.22)'); g.addColorStop(1,'rgba(120,50,20,0)');
+  x.save(); x.translate(128,64); x.scale(1,0.42); x.translate(-128,-64);   // squash: wide, low
+  x.fillStyle=g; x.fillRect(0,0,256,128); x.restore();
+  const mt = new THREE.Mesh(new THREE.PlaneGeometry(560, 120),
+    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c), transparent:true, depthWrite:false, fog:false}));
+  mt.renderOrder = 2; scene.add(mt); window.__horizonMatte = mt;
+}
 renderer.setAnimationLoop((now, xrFrame)=>{
   const dt = _last ? Math.min((now - _last)/1000, 0.05) : 0.016;
   _last = now;
@@ -6109,6 +6127,24 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
   if(window.__blobTick) window.__blobTick();                 // avatar drop-shadows follow their bodies
+  // perf line in the debug feed (Nix 2026-07-11): fps + draw calls + tris, refreshed 1/s
+  _perfFrames++; if(t - _perfT0 >= 1){
+    const el = document.getElementById('dbgperf') || (()=>{ const d=document.createElement('div');
+      d.id='dbgperf'; d.style.cssText='position:fixed;right:10px;top:74px;z-index:9;font:11px ui-monospace,monospace;color:#8fc98f;background:rgba(8,10,14,.82);border:1px solid #2a3040;border-radius:6px;padding:2px 8px;display:none';
+      document.body.appendChild(d); return d; })();
+    const inf = renderer.info;
+    el.textContent = `${Math.round(_perfFrames/(t-_perfT0))} fps · ${inf.render.calls} calls · ${(inf.render.triangles/1000).toFixed(0)}k tris`;
+    el.style.display = document.getElementById('dbgfeed')?.style.display==='block' ? 'block' : 'none';
+    _perfFrames = 0; _perfT0 = t;
+  }
+  // infinite-sky pegging (Nix: "stars parallax around me"): the celestial sphere, starfield,
+  // labels, and horizon matte all ride the camera's position — direction-only, like a real sky.
+  { const cp = camera.getWorldPosition(_skyPegV);
+    sky.position.set(cp.x, 0, cp.z);
+    if(window.__stars) __stars.position.set(cp.x, 0, cp.z);
+    if(_starLabels) _starLabels.position.set(cp.x, 0, cp.z);
+    if(window.__horizonMatte){ __horizonMatte.position.set(cp.x + _VEN.x*400, 6, cp.z + _VEN.z*400);
+      __horizonMatte.lookAt(cp.x, 20, cp.z); } }
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
   _applyTouchFx();                                    // pats: head squish envelopes (all touched VRMs)
