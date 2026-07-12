@@ -1678,7 +1678,7 @@ function _commitForeign(url){
 addPortico({district:'void'}, -3.2, 8, 'The Girih Void', 'district', Math.PI/2);
 addPortico({district:'wake'},  0.0, 8, 'The Wake', 'home world', Math.PI/2);
 addPortico('https://moonrider.xyz', 3.2, 8, 'Moon Rider', 'foreign world', Math.PI/2);
-addPortico({district:'porch'}, WAKE_X, 16, 'The Porch', 'home');      // the way home, inside the wake
+addPortico({district:'porch'}, WAKE_X, 16, 'The Porch', 'home', Math.PI/2);   // the way home, inside the wake (90° — was sideways, Nix 2026-07-12; every portico carries π/2 except this one, which defaulted)
 window.__porticos = _porticos;                 // headless probes
 // FOREIGN THRESHOLD (Nix 2026-07-09): a portico whose dest is a URL string / {url} leaves
 // Exultation. We CAN'T keep VR across origins (Chrome policy) — so instead of silently dropping
