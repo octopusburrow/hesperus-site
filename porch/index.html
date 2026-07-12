@@ -183,7 +183,8 @@
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
-  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label>
+  <label class="mrow"><input type="checkbox" id="starNamesToggle" checked><span>☆ Star names</span></label>
+  <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
@@ -560,7 +561,12 @@ const moonlight = new THREE.DirectionalLight(0x8fa6c8, 0.4);   // grey-blue wash
 moonlight.position.set(-45, 55, 35); scene.add(moonlight);
 const candle = new THREE.PointLight(0xffb45e, 3.4, 10, 1.6);    // the amber
 candle.position.set(0.5, 1.15, -1.5);
-candle.castShadow = true; candle.shadow.mapSize.set(512,512);
+candle.castShadow = true;
+// shadow res: 512 cube faces were visibly noisy (Nix 2026-07-11). 1024 default; menu can push 2048.
+const _shadowRes = parseInt(localStorage.getItem('porch.shadowRes')||'1024');
+candle.shadow.mapSize.set(_shadowRes,_shadowRes); candle.shadow.radius = 3;
+window.__setShadowRes = (n)=>{ localStorage.setItem('porch.shadowRes', String(n));
+  candle.shadow.mapSize.set(n,n); if(candle.shadow.map){ candle.shadow.map.dispose(); candle.shadow.map=null; } };
 scene.add(candle);
 
 // iron floor candlestick: shaft from the deck, drip pan, wax, flame
@@ -584,6 +590,8 @@ const _candleBase = candle.position.clone();               // jitter anchor (swe
   const mk = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8),
     new THREE.MeshBasicMaterial({color:0xfff2cc}));
   scene.add(mk); window.__specMarker = mk;
+  const sl = new THREE.PointLight(0xfff2cc, 4, 14, 1.8);   // the same wanderer, as a REAL light —
+  scene.add(sl); window.__specLight = sl;                  // the shader-spec was playa-only math (Nix asked why)
 }
 
 // ---- the sky: one lightweight shader — night playa ----
@@ -612,13 +620,15 @@ const sky = new THREE.Mesh(
         float daz = dot(normalize(vDir.xz), normalize(venusDir.xz))*0.5+0.5;   // 1 sunward, 0 opposite
         float w = pow(daz, 3.0);                                               // tighter sector: east stays night
         float ha = hh * (1.0 + 1.7*(1.0-daz));    // arch: same color sits LOWER as you swing away from the sun
-        vec3 night = mix(vec3(0.026,0.030,0.052), vec3(0.014,0.019,0.048), pow(hh, 0.55));  // old-dark night
+        // rev.7 EXPERIMENT (Nix): the eastern sky falls to full black at the horizon so sky and
+        // ground become one dark body — night lifts off the ground with height.
+        vec3 night = mix(vec3(0.004,0.004,0.007), vec3(0.014,0.019,0.048), smoothstep(0.0, 0.30, hh));
         // rev.4 (Nix): brighter orange kissing the horizon, red band thinner + pushed orange-red,
         // haze reduced to a whisper (esp. east).
         // rev.5 (Nix): brightest EXACTLY at the horizon line, one long smooth ramp — the
         // orange→red seam was band-y because the stops barely overlapped. Now each mix spans
         // ~2x the previous stop's range (heavy overlap = no visible seams).
-        vec3 g = mix(vec3(0.68,0.30,0.085), vec3(0.30,0.115,0.095), smoothstep(0.0,0.13,ha));      // orange → orange-red, long soft ramp
+        vec3 g = mix(vec3(0.68,0.30,0.085), vec3(0.30,0.115,0.095), smoothstep(0.0,0.20,ha));      // orange → orange-red, LONGER ramp (rev.7: the luminance cliff read as a dark artifact band)
         g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.06,0.26,ha));                             // → dusty purple, overlapping
         g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.16,0.42,ha));                             // → dark blue
         g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.32,0.72,ha));                             // → near-black
@@ -628,8 +638,8 @@ const sky = new THREE.Mesh(
         col = mix(col, vec3(0.020,0.024,0.038), haze*0.35);
         // rev.6 (Nix): the razor seam in the WEST gets a bright dab — a few pixels of glow
         // hugging the horizon line, sunward only, dying off to the north/south with w.
-        float seam = smoothstep(0.014, 0.0, abs(h)) * pow(daz, 6.0);
-        col += vec3(0.55, 0.26, 0.08) * seam * 0.8;
+        float seam = exp(-abs(h)*34.0) * pow(daz, 6.0);      // rev.7: gaussian-soft falloff, no band edges
+        col += vec3(0.55, 0.26, 0.08) * seam * 0.55;
         // stars: hashed cells, round falloff, slow twinkle
         vec3 sp = normalize(vDir) * 150.0;
         vec3 cell = floor(sp); vec3 f = fract(sp) - 0.5;
@@ -743,9 +753,17 @@ window.__setStarNames = setStarNames;
 { // module scripts run AFTER DOMContentLoaded has often already fired → the old
   // addEventListener('DOMContentLoaded') never ran and the toggle was dead (Nix 2026-07-11).
   const _wireStars = ()=>{ const cb=document.getElementById('starNamesToggle');
-    if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked)); };
+    if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked));
+    const hs=document.getElementById('hiShadowToggle');
+    if(hs){ hs.checked = (localStorage.getItem('porch.shadowRes')||'1024')==='2048';
+      hs.addEventListener('change', ()=>window.__setShadowRes && __setShadowRes(hs.checked?2048:1024)); } };
   if(document.readyState==='loading') addEventListener('DOMContentLoaded', _wireStars);
   else _wireStars();
+  // DEFAULT ON (Nix 2026-07-11 "still not working, what gives" — remove the toggle from the
+  // equation entirely; the labels are pretty anyway). dbg lines say exactly what happened.
+  setTimeout(()=>{ try{ setStarNames(true);
+    if(typeof dbg==='function') dbg('stars','auto-on: labels requested (☆ menu toggles off)','k'); }catch(e){
+    if(typeof dbg==='function') dbg('stars','auto-on FAILED: '+e.message,'e'); } }, 4000);
 }
 
 // ---- the playa: cracked-earth PHOTO texture (First Light's CC0 ground, Nix's ask
@@ -5367,6 +5385,9 @@ window.__musicboxTick = (dt)=>{                             // called from the r
             sendObj('image', {dataURL, aspect:CAM_W/CAM_H, x:px, y:1.5, z:pz, ry, cid:'cam'+Date.now()%100000});
           else applyObj({t:'obj', kind:'image', sid:'cam_'+Date.now()%100000, id:myNet, dataURL, aspect:CAM_W/CAM_H, x:px, y:1.5, z:pz, ry});
           if(window.__logChat) __logChat('camera', '📸 click! photo manifested', 'sys');
+          { const a=document.createElement('a'); a.href=dataURL;   // offline copy → Downloads (Nix 2026-07-11)
+            a.download='porch-photo-'+new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)+'.jpg';
+            document.body.appendChild(a); a.click(); a.remove(); }
         }catch(e){ console.warn('camera snap failed', e); }
         if(window.__setHeadScale) __setHeadScale(0);            // back to first-person hiding
         setTimeout(()=>{ scene.remove(flash); }, 140);
@@ -6084,6 +6105,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
   playaUniforms.uSpecPos.value.set(Math.sin(t*0.35)*6.0, 1.6, -10);
   if(window.__specMarker) __specMarker.position.copy(playaUniforms.uSpecPos.value);
+  if(window.__specLight) __specLight.position.copy(playaUniforms.uSpecPos.value);   // real light: deck + props respond too (Nix: "why doesn't it light the floorboards")
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
   if(window.__blobTick) window.__blobTick();                 // avatar drop-shadows follow their bodies
