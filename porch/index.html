@@ -130,7 +130,7 @@
   <b>WASD</b> walk · <b>Space</b> jump · <b>drag</b> look · <b>click</b> world buttons<br>
   <b>Enter</b> chat · <b>@Name</b> addresses · <b>/help</b> commands<br>
   <b>E</b> grab/drop · <b>T</b> boop whoever you face · <b>V</b> mic<br>
-  <b>G</b> emotes · <b>1–4</b> 👋🎉💃🙌 · <b>M</b> menu · <b>`</b> debug<br>
+  <b>G</b> emotes · <b>1–5</b> 👋🎉💃🙌🪑 · <b>C</b> hold = crouch · <b>M</b> menu · <b>`</b> debug<br>
   <b>B</b> spawn block · <b>arrows</b> nudge · <b>X</b> remove<br>
   <div style="color:#e8dcc0;font-size:13px;margin:8px 0 4px">🥽 VR</div>
   <b>L-stick</b> walk · <b>R-stick</b> turn · <b>A/X</b> jump · <b>B/Y</b> mic<br>
@@ -150,6 +150,7 @@
   <button class="emoteItem" data-emote="cheer" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="cheer (2)">🎉</button>
   <button class="emoteItem" data-emote="dance" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="dance (3)">💃</button>
   <button class="emoteItem" data-emote="raise" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="raise hand (4)">🙌</button>
+  <button class="emoteItem" data-emote="sit" style="width:44px;height:44px;border:0;border-radius:10px;background:rgba(20,26,34,.9);color:#e8dcc0;font-size:20px;cursor:pointer" title="sit on the ground (5) — again or walk to stand">🪑</button>
 </div>
 <button id="manifestBtn" title="manifest (make things)" style="position:fixed;left:14px;bottom:248px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">✨</button>
 <button id="bodyBtn" title="avatar body" style="position:fixed;left:14px;bottom:296px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🎭</button>
@@ -2638,6 +2639,7 @@ addEventListener('keydown', e=>{
   if(e.code==='Escape') _closeObjMenu();
   if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); }
   if(e.code==='KeyF' && window.__cameraSnapIfHeld){ window.__cameraSnapIfHeld(); }  // F = shutter while holding the camera
+  if(e.code==='KeyC' && !e.repeat && window.__setCrouch){ window.__setCrouch(true); }  // hold C = crouch
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
   if(e.code==='KeyV'){ _micToggleUI(); } });                               // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
 function _micToggleUI(){ const cb=document.getElementById('micTalk');
@@ -2648,8 +2650,10 @@ addEventListener('keyup',   e=>{
   // NO input-guard here (unlike keydown): hold W → Esc → focus lands in UI → release W used to be
   // EATEN by the guard, leaving keys.KeyW stuck true and the body walking forever (Nix 2026-07-10).
   // Clearing a movement key mid-typing is harmless — keydown's guard stops typing from SETTING keys.
-  keys[e.code] = false; });
-const _releaseAllKeys = ()=>{ for(const k in keys) keys[k] = false; wantJump = false; };
+  keys[e.code] = false;
+  if(e.code==='KeyC' && window.__setCrouch) window.__setCrouch(false); });   // release C = stand
+const _releaseAllKeys = ()=>{ for(const k in keys) keys[k] = false; wantJump = false;
+  if(window.__setCrouch) window.__setCrouch(false); };
 addEventListener('blur', _releaseAllKeys);                  // alt-tab away = let go of everything
 document.addEventListener('pointerlockchange', ()=>{        // Esc out of mouselook = let go too (WoW/VRC convention)
   if(!document.pointerLockElement) _releaseAllKeys(); });
@@ -2933,6 +2937,53 @@ async function upgradeAvatarToVrm(r, model, body){
   }catch(e){ console.error('remote vrm failed (capsule stays)', e); }
   finally{ r._vrmLoading = false; }
 }
+// ---- HELD POSES: crouch (hold C) + sit-on-ground (emote 🪑 / 5) — Nix 2026-07-11.
+// Procedural like the resident's PROC_EMOTES (no .vrma exists for these): normalized-bone
+// overwrites post-mixer, smooth env in/out, persistent until released/cleared. Bone signs are
+// the MEASURED ones from the resident crouch (2026-07-09): -X thigh forward, +X shin fold.
+window.__POSES = {
+  crouch: { eyeDrop: 0.45, apply(vrm, env){
+    const h=vrm.humanoid; if(!h) return;
+    const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
+    ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.15); set(s+'LowerLeg', env*1.85); set(s+'Foot', -env*0.70); });
+    set('spine', env*0.18); set('hips', -env*0.12);
+    vrm.scene.position.y = -env*0.32; } },
+  sit: { eyeDrop: 0.78, apply(vrm, env){
+    const h=vrm.humanoid; if(!h) return;
+    const set=(nm,x,z=0)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,z,'YXZ')); };
+    // ground sit, knees up, slight recline; feet flat-ish
+    ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.62); set(s+'LowerLeg', env*1.38); set(s+'Foot', -env*0.25); });
+    set('spine', env*0.10); set('hips', -env*0.06);
+    vrm.scene.position.y = -env*0.56; } },
+};
+let _poseHeld=null, _poseCrouch=false, _poseEnv=0, _poseApplied=null, _posePX=0, _posePZ=0;
+window.__playerPose = (nm)=>{ _poseHeld = (_poseHeld===nm) ? null : nm; return _poseHeld ? 'pose: '+_poseHeld : 'pose: cleared'; };
+window.__setCrouch = (on)=>{ _poseCrouch = !!on; };
+window.__playerPoseTick = (dt)=>{
+  const sp = Math.hypot(player.position.x-_posePX, player.position.z-_posePZ)/Math.max(dt,1e-4);
+  _posePX=player.position.x; _posePZ=player.position.z;
+  if(_poseHeld==='sit' && sp > 0.5) _poseHeld = null;         // walking stands you up
+  const want = _poseCrouch ? 'crouch' : _poseHeld;
+  if(want && want!==_poseApplied && _poseEnv > 0.03){          // switching poses: fade the old out first
+    _poseEnv = Math.max(0, _poseEnv - dt*5);
+  } else {
+    if(want) _poseApplied = want;
+    _poseEnv += ((want?1:0) - _poseEnv) * Math.min(1, dt*6);
+    if(!want && _poseEnv < 0.01){ _poseEnv = 0; _poseApplied = null; }
+  }
+  window.__netPose = (want && _poseEnv>0.05) ? _poseApplied : undefined;   // travels in the 10Hz pose msg
+  const P = _poseApplied && window.__POSES[_poseApplied];
+  if(P && playerVrm && _poseEnv>0.001) P.apply(playerVrm, _poseEnv);
+  if(!renderer.xr.isPresenting) camera.position.y = 1.6 - (P ? _poseEnv*P.eyeDrop : 0);   // feel the crouch
+};
+window.__applyNetPose = (r, dt)=>{                             // remotes hold the same poses
+  const want = r.poseName || null;
+  if(want) r._poseApplied = want;
+  r._poseEnv = (r._poseEnv||0) + ((want?1:0) - (r._poseEnv||0)) * Math.min(1, dt*6);
+  const P = r._poseApplied && window.__POSES[r._poseApplied];
+  if(P && r.vrm && r._poseEnv>0.001) P.apply(r.vrm, r._poseEnv);
+  else if(!want && r._poseEnv<0.01) r._poseApplied = null;
+};
 // my own body — hidden from my eyes, shown to the mirror/spectator
 avatar = makeAvatar(0x2b8a8a, playerName, undefined, playerModel);
 avatar.visible = false; player.add(avatar);
@@ -4710,7 +4761,8 @@ setInterval(()=>{
                               hid:playerVrm ? (_outfitField(playerVrm)||'') : undefined,
                               world:(typeof _district!=='undefined' ? _district : 'porch'),  // presence world-tag: don't bleed avatars across worlds
                               emote:(window._myEmote && performance.now()<window._myEmote.until+300) ? window._myEmote.name : undefined,
-                              eid:(window._myEmote && performance.now()<window._myEmote.until+300) ? window._myEmote.id : undefined}));
+                              eid:(window._myEmote && performance.now()<window._myEmote.until+300) ? window._myEmote.id : undefined,
+                              pose: window.__netPose}));
 }, 100);
 const _voice = window.speechSynthesis;
 function speak(text){
@@ -4901,6 +4953,7 @@ function cachedCreds(q){
       if((m.state||null) !== (r.state||null)){ r.state = m.state||null; setAvatarState(r.group, r.state); }  // live signs
       r.world = m.world || 'porch';                  // presence world-tag — only shown when it matches mine
       if(m.emote && m.eid && m.eid !== r._eid){ r._eid = m.eid; if(r.playEmote) r.playEmote(m.emote); }  // one-shot emote per new id
+      r.poseName = m.pose || null;                   // held pose (crouch/sit) — streamed, not one-shot
       if(r.vrm && m.hid!==undefined) _applyOutfitField(r.vrm, m.hid);   // clothes toggles travel with the pose
     }
     else if(m.t === 'avfx' && m.id !== myNet){         // avatar moments from peers: winks, pats, boops
@@ -5744,8 +5797,10 @@ function remoteInEarshot(id){                                  // remote sender 
   if(vrProbeBtn) vrProbeBtn.addEventListener('click', ()=>{ menu.classList.add('hid'); vrProbe(); });
   // ---- emote menu (desktop): tray toggle + click + 1-4 hotkeys. VR uses the world-space panel. ----
   const emoteBtn = document.getElementById('emoteBtn'), emoteTray = document.getElementById('emoteTray');
-  const EMOTE_KEYS = { Digit1:'wave', Digit2:'cheer', Digit3:'dance', Digit4:'raise' };
-  window.__doEmote = (nm)=>{ if(window.__playerEmote) window.__playerEmote(nm);
+  const EMOTE_KEYS = { Digit1:'wave', Digit2:'cheer', Digit3:'dance', Digit4:'raise', Digit5:'sit' };
+  window.__doEmote = (nm)=>{
+    if(nm==='sit'){ if(window.__playerPose) dbg('pose', __playerPose('sit'), 'k'); return; }  // held pose, not a one-shot clip
+    if(window.__playerEmote) window.__playerEmote(nm);
     else if(window.cmdNote) cmdNote('embody first to emote'); };
   const toggleTray = (f)=>{ if(emoteTray) emoteTray.style.display =
     (f!==undefined ? f : emoteTray.style.display==='none') ? 'flex' : 'none'; };
@@ -6359,6 +6414,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(residentVrm && window.__residentGaze) window.__residentGaze();   // eyes track whoever's near
   if(residentVrm) residentVrm.update(dt);
   if(playerMixer) playerMixer.update(dt);                     // idle keeps arms/legs alive (even under head-tracking)
+  if(window.__playerPoseTick) __playerPoseTick(dt);           // held poses (crouch/sit) overwrite post-mixer
   if(window.__playerLoco){                                    // locomotion: ground speed drives walk↔idle
     const sp = Math.hypot(player.position.x - _locoPX, player.position.z - _locoPZ) / Math.max(dt, 1e-4);
     _locoPX = player.position.x; _locoPZ = player.position.z;
@@ -6525,7 +6581,9 @@ renderer.setAnimationLoop((now, xrFrame)=>{
         else s.expr.until=t+0.5;                   // 10Hz pose stream keeps it alive; decays when sender stops
       }
       applyFaceLife(r.vrm, t);                     // face life: blink for everyone, expressions when synced
-      r.mixer.update(dt); r.vrm.update(dt);
+      r.mixer.update(dt);
+      if(window.__applyNetPose) __applyNetPose(r, dt);        // synced crouch/sit (post-mixer, pre-vrm.update)
+      r.vrm.update(dt);
     } else if(r.group.userData.bod){               // capsule (owl / pre-upgrade): talk-bob when making sound
       const talking = (r.spkUntil && performance.now() < r.spkUntil) || r.state === 'speaking';
       r._bobEnv = THREE.MathUtils.lerp(r._bobEnv || 0, talking ? 1 : 0, Math.min(1, dt*6));
