@@ -589,11 +589,7 @@ const flame = new THREE.Mesh(
 flame.position.copy(candle.position).y += 0.005; scene.add(flame);
 const _candleBase = candle.position.clone();               // jitter anchor (sweetener #2)
 { // sweetener #1: visible marker so the parading spec light can be found and inspected
-  const mk = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8),
-    new THREE.MeshBasicMaterial({color:0xfff2cc}));
-  scene.add(mk); window.__specMarker = mk;
-  const sl = new THREE.PointLight(0xfff2cc, 20, 22, 1.6);  // the same wanderer, as a REAL light — intensity 4 decayed
-  scene.add(sl); window.__specLight = sl;                  // to nothing before reaching the deck (Nix's floorboard check)
+  // (parade light + marker RETIRED 2026-07-11 — served its purpose: spec verified, GI lesson learned.)
 }
 
 // ---- the sky: one lightweight shader — night playa ----
@@ -750,13 +746,13 @@ function _buildStarLabels(){
     const font = `${px}px Georgia, serif`; ctx.font=font;
     const w=Math.ceil(ctx.measureText(name).width)+pad*2; c.width=w; c.height=px+pad*2;
     const x=c.getContext('2d'); x.font=font;
-    x.fillStyle = tier ? 'rgba(120,145,182,0.50)' : 'rgba(148,175,214,0.80)';   // cool sky blue
+    x.fillStyle = tier ? 'rgba(138,164,200,0.72)' : 'rgba(148,175,214,0.80)';   // cool sky blue (dim tier brightened, Nix rev.5)
     x.textBaseline='middle'; x.shadowColor='rgba(0,0,0,0.75)'; x.shadowBlur=5;
     x.fillText(name, pad, c.height/2);
     const tx=new THREE.CanvasTexture(c); tx.colorSpace=THREE.SRGBColorSpace;
     const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tx, transparent:true, depthTest:false, fog:false,
-      opacity: tier?0.7:1}));
-    const SC = tier ? 0.15 : 0.24;
+      opacity: tier?0.9:1}));
+    const SC = tier ? 0.12*2 : 0.24;                       // dim tier 2x (Nix rev.5: "too tough to read") ≈ half the bright tier
     sp.scale.set(c.width*SC, c.height*SC, 1); sp.renderOrder=3; return sp; };
   const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
   let _built = 0;
@@ -6176,8 +6172,6 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
   playaUniforms.uSpecPos.value.set(Math.sin(t*0.35)*6.0, 1.6, -10);
-  if(window.__specMarker) __specMarker.position.copy(playaUniforms.uSpecPos.value);
-  if(window.__specLight) __specLight.position.copy(playaUniforms.uSpecPos.value);   // real light: deck + props respond too (Nix: "why doesn't it light the floorboards")
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
   if(window.__blobTick) window.__blobTick();                 // avatar drop-shadows follow their bodies
