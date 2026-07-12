@@ -46,6 +46,48 @@ player.position.set(0,0,6);                        // spawn: wall ahead, portico
 // ---- the wall of light: girih canvas → one side of the sky ----
 const frame = document.getElementById('girihframe');
 let girihTex=null, _gAcc=0, wallMat=new THREE.MeshBasicMaterial({color:0x120a18});
+// VECTOR WALL (2026-07-12, project session — "optimize the shit out of the girih", R.): the
+// engine is a pure fragment shader, so instead of rasterize→CanvasTexture→upload (blurry AND
+// the scene's biggest per-frame cost), we compile the SAME shader as a three ShaderMaterial on
+// the wall and copy the embed's per-frame uniform values (window.__u mirror). The iframe stays
+// as the CONDUCTOR — all Track-mode/audio logic — shrunk to 96px so its own draw is pocket
+// change. Resolution-independent at any distance; zero uploads. Canvas path kept as fallback.
+let _wallShader = null;
+function initGirihShader(){
+  const iw = frame.contentWindow;
+  if(!iw || !iw.__fsrc || !iw.__u || !Object.keys(iw.__u).length) return false;   // needs one engine frame
+  try{
+    let fs = iw.__fsrc.replace('vec2 uv=(gl_FragCoord.xy-u_res*0.5)',
+                               'vec2 uv=((vUv*u_res)-u_res*0.5)');                // wall-local coords, not screen
+    if(fs.indexOf('vUv') < 0) throw new Error('fragCoord anchor not found');
+    fs = fs.replace(/\bactive\b/g, 'actv_');       // 'active' is reserved in WebGL2 (three's context); legal in the embed's WebGL1
+    fs = 'varying vec2 vUv;\n' + fs;
+    const uniforms = {};
+    for(const k in iw.__u){ const v = iw.__u[k];
+      if(k==='u_erdos') continue;                                                 // sampler: mirrored as a unit NUMBER — real texture supplied below
+      uniforms[k] = { value: Array.isArray(v) ? (k==='u_pan'||k==='u_res' ? new THREE.Vector2(v[0],v[1]) : v.slice()) : v }; }
+    uniforms.u_res = { value: new THREE.Vector2(1024,1024) };                     // square, constant: only normalizes uv
+    const dummy = new THREE.DataTexture(new Uint8Array([0,0,0,255]), 1, 1); dummy.needsUpdate = true;
+    uniforms.u_erdos = { value: dummy };   // Erdős-mode bake (u_mode 3 only); unfed sampler = WeakMap crash = black wall.
+                                           // TODO if the void ever runs Erdős mode: copy the real bake from the embed.
+    _wallShader = new THREE.ShaderMaterial({
+      vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+      fragmentShader: fs, uniforms });
+    wall.material = _wallShader;
+    frame.style.width = frame.style.height = '96px';                             // conductor mode: logic on, pixels off
+    console.log('girih vector wall: native shader active,', Object.keys(uniforms).length, 'uniforms');
+    return true;
+  }catch(e){ console.warn('girih vector wall failed — canvas fallback stays', e); _wallShader=null; return false; }
+}
+function _wallShaderTick(){
+  if(!_wallShader) return;
+  const u = frame.contentWindow && frame.contentWindow.__u; if(!u) return;
+  const U = _wallShader.uniforms;
+  for(const k in u){ const t = U[k]; if(!t) continue; const v = u[k];
+    if(k==='u_res' || k==='u_erdos') continue;   // wall keeps its own res; u_erdos mirrors as a texture-UNIT NUMBER (uniform1i) — stomping the dummy texture with it = WeakMap crash
+    if(Array.isArray(v)){ if(t.value && t.value.isVector2) t.value.set(v[0],v[1]); else t.value = v; }
+    else t.value = v; }
+}
 function initGirih(){
   try{
     const idoc = frame.contentDocument;
@@ -54,6 +96,8 @@ function initGirih(){
     const style = idoc.createElement('style');
     style.textContent = 'body>*:not(canvas#c){display:none !important} canvas#c{display:block}';
     idoc.head.appendChild(style);
+    if(initGirihShader()) return true;                                            // native path won
+    setTimeout(initGirihShader, 2000);                                            // engine may need a frame to fill __u
     const src = idoc.getElementById('c');
     girihTex = new THREE.CanvasTexture(src); girihTex.colorSpace = THREE.SRGBColorSpace;
     girihTex.generateMipmaps = false; girihTex.minFilter = THREE.LinearFilter;   // per-frame texture: mipmap pyramid regen was a hidden 60Hz cost
@@ -146,6 +190,8 @@ function checkPortico(){
 }
 
 window.__scene=scene; window.__player=player; window.__cam=camera; window.__girih=()=>!!girihTex;  // headless probes
+window.__vectorWall=()=>({active:!!_wallShader, uniforms:_wallShader?Object.keys(_wallShader.uniforms).length:0,
+  time:_wallShader&&_wallShader.uniforms.u_time?_wallShader.uniforms.u_time.value:null});
 const clock=new THREE.Clock();
 renderer.setAnimationLoop(()=>{
   const dt=Math.min(clock.getDelta(), 0.05);
@@ -167,7 +213,8 @@ renderer.setAnimationLoop(()=>{
   }
   // the veil breathes; the texture streams
   if(portico.userData.veil) portico.userData.veil.material.opacity = 0.12+0.07*Math.sin(clock.elapsedTime*1.4);
-  _gAcc = (_gAcc||0) + dt; if(girihTex && _gAcc >= 1/30){ _gAcc = 0; girihTex.needsUpdate = true; }  // 30Hz uploads: half the bus traffic, invisible on a slow-breathing pattern
+  if(_wallShader) _wallShaderTick();                        // native path: copy ~100 floats, zero uploads
+  else { _gAcc = (_gAcc||0) + dt; if(girihTex && _gAcc >= 1/30){ _gAcc = 0; girihTex.needsUpdate = true; } }  // fallback: 30Hz uploads
   checkPortico();
   renderer.render(scene, camera);
 });

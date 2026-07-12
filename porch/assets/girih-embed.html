@@ -1917,6 +1917,20 @@ const U=['u_res','u_time','u_crystal','u_mode','u_vignette','u_erdos','u_dirs','
   'u_strapSat_b','u_strapAlpha_b','u_lineW_b','u_lineGlow_b','u_hue_b','u_hueVar_b','u_baseSat_b','u_baseVal_b','u_sparkle_b','u_whorl_b','u_inflate_b','u_glowHeat_b','u_glowBloom_b','u_sparkleDens_b','u_sparkleSize_b','u_cbSize_b','u_cbAlpha_b','u_strapRamp_b','u_colorFollow_b',
   'u_pan','u_zoom'];
 const uloc={}; U.forEach(n=>uloc[n]=gl.getUniformLocation(prog,n));
+// VECTOR-WALL EXPORT (2026-07-12, the girih-optimization session Rab endorsed): the void
+// wall re-renders this same fragment shader NATIVELY (three.js ShaderMaterial) instead of
+// rasterizing this canvas — resolution-independent, zero texture uploads. This hook mirrors
+// every per-frame uniform value into window.__u so the host page can drive its twin shader.
+// Locations not in uloc (post/blur/particle programs) pass through untouched.
+window.__fsrc = fsrc; window.__u = {};
+(function(){
+  const names = new Map(); for(const k in uloc) if(uloc[k]) names.set(uloc[k], k);
+  const w1=gl.uniform1f.bind(gl), w2=gl.uniform2f.bind(gl), wv=gl.uniform1fv.bind(gl), wi=gl.uniform1i.bind(gl);
+  gl.uniform1f = (l,v)=>{ const n=names.get(l); if(n) window.__u[n]=v; return w1(l,v); };
+  gl.uniform2f = (l,a,b)=>{ const n=names.get(l); if(n) window.__u[n]=[a,b]; return w2(l,a,b); };
+  gl.uniform1fv= (l,v)=>{ const n=names.get(l); if(n) window.__u[n]=Array.from(v); return wv(l,v); };
+  gl.uniform1i = (l,v)=>{ const n=names.get(l); if(n) window.__u[n]=v; return wi(l,v); };
+})();
 // The 18 SAFE params, keyed by dial id, that the Beat pose drives per-pixel through the wave.
 const BEAT_SAFE=['warp','warpFreq','drift','macro','micro','gain','strapVal','strapHue','strapSat','strapAlpha','lineW','lineGlow','hue','hueVar','baseSat','baseVal','sparkle','whorl','inflate','glowHeat','glowBloom','sparkleDens','sparkleSize','cbSize','cbAlpha','strapRamp','colorFollow'];  // 'whiteHot' removed 2026-06-24; 'glowChroma' removed 2026-06-25
 const BEAT_SAFE_SET=new Set(BEAT_SAFE);   // only these reveal per-pixel through the beat wave; the rest are greyed on the Beat tab
