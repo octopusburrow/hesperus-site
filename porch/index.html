@@ -184,7 +184,7 @@
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
-  <label class="mrow"><input type="checkbox" id="starNamesToggle" checked><span>☆ Star names</span></label>
+  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
@@ -675,9 +675,12 @@ const sky = new THREE.Mesh(
         // rev.3 rays (Nix): cardinal spikes (up/down/left/right) dominant, diagonals smaller.
         float card = pow(abs(cos(2.0*vang + 0.10*sin(uTime*0.5))), 40.0);
         float diag = pow(abs(sin(2.0*vang + 0.10*sin(uTime*0.5))), 52.0);
-        float rays = (card + diag*0.38) * exp(-adist*175.0) * (0.75 + 0.25*sin(uTime*1.1 + vang*2.0));
+        // rev.4 (Nix 2026-07-12): cardinal rays a touch LONGER (slower falloff), halo -50% size
+        // (exponent x2 = half angular radius) and -50% intensity.
+        float breath = 0.75 + 0.25*sin(uTime*1.1 + vang*2.0);
+        float rays = (card * exp(-adist*130.0) + diag*0.38 * exp(-adist*175.0)) * breath;
         col += vec3(0.95, 0.90, 0.80) * rays * 0.85;
-        col += vec3(0.26, 0.23, 0.19) * pow(max(vd, 0.0), 1600.0) * 0.4;             // smaller, fainter halo
+        col += vec3(0.26, 0.23, 0.19) * pow(max(vd, 0.0), 3200.0) * 0.2;             // halo: half size, half strength
         gl_FragColor = vec4(col, 1.0);
         // colorspace citizenship (mirror-brightness fix, measured thread 2026-07-10): authored values
         // are DISPLAY-space; decode to linear (exact sRGB EOTF) so the include's OETF is an identity
@@ -1123,6 +1126,11 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   tableG.position.set(0, 0.014, -0.6);              // sit on the rug
   scene.add(tableG);
   _tableBox = addCollider(tableG, 'table');         // solid + gives us the tabletop height for props
+  // PHANTOM SHADOW FLICKER (Nix 2026-07-12, red-circle report): the candle is a point light with
+  // a cube shadow map — casters get frustum-culled per cube FACE, and the candle's position
+  // jitter walks the table's boards across a face boundary, popping their shadow on/off.
+  // frustumCulled=false includes them in every shadow face. Cheap: it's one table.
+  tableG.traverse(o=>{ if(o.isMesh) o.frustumCulled = false; });
 }
 
 // ---- physics v0: grabbable props on the table — pick up, hold, put down. Desktop: E grabs the
@@ -6816,7 +6824,10 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     // (feet planted in the world, stepping on drift/twist) with desktop inputs — the whole
     // machinery is HMD-free (_footTargets reads the hips bone). Walking hands legs back to the
     // walk clip and clears gait state so re-plant SNAPs fresh. ?nofootik opts out here too.
-    if(playerVrm && !renderer.xr.isPresenting && !window.__nofootik && !window.__noik){
+    if(playerVrm && !renderer.xr.isPresenting && !window.__nofootik && !window.__noik && !window.__netPose){
+      // ^ !__netPose (2026-07-12, THE LEVITATION BUG): this gait runs AFTER the pose tick and
+      // re-solves the legs to plant feet at floor level from hips-at-rest-height — every frame,
+      // undoing crouch/sit's fold + drop. Held poses own the legs; the gait yields.
       const ud=playerVrm.userData=playerVrm.userData||{};
       if(sp > 0.5){ ud._gait=null; }                          // moving: the walk clip owns the legs
       else {
