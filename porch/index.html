@@ -5406,22 +5406,28 @@ window.__mbox = _mbox;                                        // debug: headless
 // theorizing; measure on HER client. Taps the panner's stereo output; every 300ms while playing,
 // logs a dbg line ONLY when level steps >2dB while yaw barely moved — i.e. exactly the pop.
 (function(){
+  // rev.2: v1 watched OUTPUT level and fired on every note attack (a music box is nothing but
+  // 2dB steps — Nix). Now measures the panner's GAIN — post-panner L/R divided by pre-panner
+  // input over the same window — which cancels the melody's envelope; only pan-machinery steps fire.
   const ctx = _audioListener.context, pa = _mbox && _mbox.audio; if(!pa) return;
-  const split = ctx.createChannelSplitter(2), aL = ctx.createAnalyser(), aR = ctx.createAnalyser();
-  aL.fftSize = aR.fftSize = 1024; let tapped = false;
-  const bufL = new Float32Array(1024), bufR = new Float32Array(1024);
+  const split = ctx.createChannelSplitter(2), aL = ctx.createAnalyser(), aR = ctx.createAnalyser(),
+        aIn = ctx.createAnalyser();
+  aL.fftSize = aR.fftSize = aIn.fftSize = 2048; let tapped = false;
+  const bufL = new Float32Array(2048), bufR = new Float32Array(2048), bufI = new Float32Array(2048);
   const rms = (a,b)=>{ a.getFloatTimeDomainData(b); let s=0; for(let i=0;i<b.length;i++) s+=b[i]*b[i];
     return Math.sqrt(s/b.length); };
   let prev = null;
   setInterval(()=>{
     if(!pa.isPlaying) { prev=null; return; }
-    if(!tapped){ pa.getOutput().connect(split); split.connect(aL,0); split.connect(aR,1); tapped=true; }
-    const L = rms(aL,bufL), R = rms(aR,bufR), tot = Math.hypot(L,R);
+    if(!tapped){ pa.getOutput().connect(split); split.connect(aL,0); split.connect(aR,1);
+      pa.gain.connect(aIn); tapped=true; }
+    const inp = rms(aIn,bufI); if(inp < 1e-4) return;        // silence between notes: no gain estimate
+    const gL = rms(aL,bufL)/inp, gR = rms(aR,bufR)/inp, gT = Math.hypot(gL,gR);
     const yaw = Math.round(camera.rotation.y*180/Math.PI*10)/10;
-    const dB = 20*Math.log10(Math.max(tot,1e-6));
-    if(prev && Math.abs(dB - prev.dB) > 2 && Math.abs(yaw - prev.yaw) < 4)
-      dbg('pan', `POP: ${prev.dB.toFixed(1)}→${dB.toFixed(1)}dB @yaw ${prev.yaw}→${yaw}° L=${L.toFixed(3)} R=${R.toFixed(3)}`, 'w');
-    window.__panProbe = {yaw, L:+L.toFixed(4), R:+R.toFixed(4), dB:+dB.toFixed(1)};
+    const dB = 20*Math.log10(Math.max(gT,1e-6));
+    if(prev && Math.abs(dB - prev.dB) > 1.5 && Math.abs(yaw - prev.yaw) < 4)
+      dbg('pan', `POP(gain): ${prev.dB.toFixed(1)}→${dB.toFixed(1)}dB @yaw ${prev.yaw}→${yaw}° gL=${gL.toFixed(3)} gR=${gR.toFixed(3)}`, 'w');
+    window.__panProbe = {yaw, gL:+gL.toFixed(4), gR:+gR.toFixed(4), gainDB:+dB.toFixed(1)};
     prev = {dB, yaw};
   }, 300);
 })();
