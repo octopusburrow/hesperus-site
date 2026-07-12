@@ -5305,6 +5305,79 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   _mbox.comb.emissive.setRGB(lvl*0.10, lvl*0.07, lvl*0.02);
   if(_mbox.playing) _mbox.spin.rotation.x += dt*2.1;        // drum + crank turn while it plays
 };
+// ---- THE CAMERA (Nix 2026-07-11, "like the VRC object — I could take a selfie with the two of
+// us"): a grabbable camera on the table. Place it facing your scene, click it → 3-2-1 → flash →
+// the photo MANIFESTS as an image object floating by the camera (the polaroid rides the existing
+// image pipeline: networked, grabbable, deletable). Non-POV camera convention: heads un-shrunk.
+(function buildWorldCamera(){
+  const topY = _tableBox ? _tableBox.max.y : 0.764;
+  const G = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({color:0x22242c, roughness:0.5, metalness:0.4});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.062, 0.036), bodyMat); G.add(body);
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.023, 0.030, 14),
+    new THREE.MeshStandardMaterial({color:0x0c0d12, roughness:0.2, metalness:0.7}));
+  lens.rotation.x = Math.PI/2; lens.position.set(0, 0.004, -0.030); G.add(lens);
+  const shutter = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.006, 10),
+    new THREE.MeshStandardMaterial({color:0xc94b40, roughness:0.4}));
+  shutter.position.set(0.030, 0.034, 0); G.add(shutter);
+  G.position.set(-0.46, topY+0.031, -0.86); G.rotation.y = 0.5;
+  G.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
+  const g = _addProp('camera', G, 0.031); g.isCamera3D = true;   // grabbable via the prop system
+  // click hull for the shutter
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.10), new THREE.MeshBasicMaterial({visible:false}));
+  hull.userData.action = ()=> _cameraSnap(G); G.add(hull); _clickables.push(hull);
+  let _snapBusy = false;
+  const CAM_W=1024, CAM_H=640;
+  let camRT=null, camCam=null, cam2d=null;
+  function _cameraSnap(root){
+    if(_snapBusy) return 'camera busy';
+    _snapBusy = true;
+    let n = 3;
+    const tick = ()=>{
+      if(n > 0){ if(window.__logChat) __logChat('camera', '📸 '+n+'…', 'sys'); n--; setTimeout(tick, 900); return; }
+      // FLASH + capture
+      const flash = new THREE.PointLight(0xffffff, 30, 18, 1.2);
+      flash.position.copy(root.getWorldPosition(new THREE.Vector3())).y += 0.1; scene.add(flash);
+      if(window.__setHeadScale) __setHeadScale(1);              // convention: non-POV cameras see heads
+      setTimeout(()=>{
+        try{
+          if(!camRT){ camRT = new THREE.WebGLRenderTarget(CAM_W, CAM_H, {depthBuffer:true});
+            camCam = new THREE.PerspectiveCamera(58, CAM_W/CAM_H, 0.05, 300);
+            cam2d = document.createElement('canvas'); cam2d.width=CAM_W; cam2d.height=CAM_H; }
+          const wp = root.getWorldPosition(new THREE.Vector3());
+          const wq = root.getWorldQuaternion(new THREE.Quaternion());
+          camCam.position.copy(wp).addScaledVector(new THREE.Vector3(0,0,-0.05).applyQuaternion(wq), 1);
+          camCam.quaternion.copy(wq); camCam.rotateY(Math.PI);   // lens looks out the -z face
+          camCam.updateMatrixWorld(true);
+          const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
+          const old = renderer.getRenderTarget();
+          renderer.setRenderTarget(camRT); renderer.render(scene, camCam); renderer.setRenderTarget(old);
+          renderer.xr.enabled = wasXR;
+          const buf = new Uint8Array(CAM_W*CAM_H*4);
+          renderer.readRenderTargetPixels(camRT, 0, 0, CAM_W, CAM_H, buf);
+          const ctx = cam2d.getContext('2d'), img = ctx.createImageData(CAM_W, CAM_H);
+          for(let y=0;y<CAM_H;y++){ const sy=CAM_H-1-y;
+            for(let x=0;x<CAM_W;x++){ const s=(sy*CAM_W+x)*4, d=(y*CAM_W+x)*4;
+              img.data[d]=buf[s]; img.data[d+1]=buf[s+1]; img.data[d+2]=buf[s+2]; img.data[d+3]=255; } }
+          ctx.putImageData(img, 0, 0);
+          const dataURL = cam2d.toDataURL('image/jpeg', 0.85);
+          // manifest the polaroid: floats above the camera, facing back at the scene
+          const px = wp.x, pz = wp.z, ry = Math.atan2(-(camCam.getWorldDirection(new THREE.Vector3()).x), -(camCam.getWorldDirection(new THREE.Vector3()).z));
+          if(sock && sock.readyState===1)
+            sendObj('image', {dataURL, aspect:CAM_W/CAM_H, x:px, y:1.5, z:pz, ry, cid:'cam'+Date.now()%100000});
+          else applyObj({t:'obj', kind:'image', sid:'cam_'+Date.now()%100000, id:myNet, dataURL, aspect:CAM_W/CAM_H, x:px, y:1.5, z:pz, ry});
+          if(window.__logChat) __logChat('camera', '📸 click! photo manifested', 'sys');
+        }catch(e){ console.warn('camera snap failed', e); }
+        if(window.__setHeadScale) __setHeadScale(0);            // back to first-person hiding
+        setTimeout(()=>{ scene.remove(flash); }, 140);
+        _snapBusy = false;
+      }, 120);
+    };
+    tick(); return 'camera: 3…2…1…';
+  }
+  window.__cameraSnap = ()=> _cameraSnap(G);
+})();
+
 // make.music: the PLACEABLE music object (upload/compose → grab it, positional) still needs a spine
 // kind + relay OBJ_CAPS row — that's the next increment. The fixed box above is the owned first one.
 window.__manifestMusic = function(){ if(window.__logChat)
