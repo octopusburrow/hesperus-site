@@ -335,6 +335,8 @@ let _cdX=0, _cdY=0, _cdT=0;
 addEventListener('mousedown', e=>{ _cdX=e.clientX; _cdY=e.clientY; _cdT=performance.now(); });
 let _clickConsumed=false;                                           // a world-button click shouldn't ALSO lock the pointer
 addEventListener('mouseup', e=>{
+  if(e.button!==0) return;                                          // RMB is EXCLUSIVELY the object menu (Nix 2026-07-12:
+                                                                    // it was ALSO running this grab path first — the delete bug)
   if(e.target && e.target.tagName!=='CANVAS') return;               // UI clicks stay UI clicks
   if(Math.hypot(e.clientX-_cdX, e.clientY-_cdY)>6 || performance.now()-_cdT>400) return;  // that was a drag
   if(document.pointerLockElement){ _clickRC.setFromCamera({x:0,y:0}, camera); }
@@ -1715,8 +1717,46 @@ function _ensureVoidDistrict(){
       return true;
     }catch(e){ return false; }
   }
-  frame.addEventListener('load', ()=>{ if(!initGirih()) setTimeout(initGirih, 1500); });
-  setTimeout(()=>{ if(!_girihTex) initGirih(); }, 1200);
+  // VECTOR DOME (2026-07-12, Nix: "still *very* pixellated — did you connect the shader work?"
+  // — she was right: last night's vector wall shipped in void.html; THIS district dome from
+  // 07-09 was a separate canvas-texture path and never got it). Same conductor architecture:
+  // iframe shrinks to 96px and broadcasts uniforms; the dome runs the engine shader natively.
+  function initGirihShaderD(){
+    const iw = frame.contentWindow;
+    if(!iw || !iw.__fsrc || !iw.__u || !Object.keys(iw.__u).length) return false;
+    try{
+      let fs = iw.__fsrc.replace('vec2 uv=(gl_FragCoord.xy-u_res*0.5)',
+        'vec2 uv=((vec2(fract(vUv.x*2.0), vUv.y)*u_res)-u_res*0.5)');   // dome-local coords; fract(x*2) = the old repeat.x=2 wrap
+      if(fs.indexOf('vUv') < 0) throw new Error('fragCoord anchor not found');
+      fs = fs.replace(/\bactive\b/g, 'actv_');             // reserved word in WebGL2 (three's context)
+      fs = 'varying vec2 vUv;\n' + fs;
+      const uniforms = {};
+      for(const k in iw.__u){ const v = iw.__u[k];
+        if(k==='u_erdos') continue;                        // sampler mirrors as a unit NUMBER — dummy below or WeakMap crash
+        uniforms[k] = { value: Array.isArray(v) ? (k==='u_pan'||k==='u_res' ? new THREE.Vector2(v[0],v[1]) : v.slice()) : v }; }
+      uniforms.u_res = { value: new THREE.Vector2(1024,1024) };
+      const dummy = new THREE.DataTexture(new Uint8Array([0,0,0,255]), 1, 1); dummy.needsUpdate = true;
+      uniforms.u_erdos = { value: dummy };
+      const sh = new THREE.ShaderMaterial({
+        vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+        fragmentShader: fs, uniforms, side: THREE.BackSide });
+      wall.material = sh; window._districtWallShader = sh;
+      _girihTex = null;                                    // retire the canvas-upload path entirely
+      frame.style.width = frame.style.height = '96px';     // conductor mode: logic on, pixels off
+      console.log('girih vector DOME: native shader active,', Object.keys(uniforms).length, 'uniforms');
+      return true;
+    }catch(e){ console.warn('girih vector dome failed — canvas fallback stays', e); window._districtWallShader = null; return false; }
+  }
+  window._districtWallTick = ()=>{
+    const sh = window._districtWallShader; if(!sh) return;
+    const u = frame.contentWindow && frame.contentWindow.__u; if(!u) return;
+    for(const k in u){ const t = sh.uniforms[k]; if(!t) continue; const v = u[k];
+      if(k==='u_res' || k==='u_erdos') continue;
+      if(Array.isArray(v)){ if(t.value && t.value.isVector2) t.value.set(v[0],v[1]); else t.value = v; }
+      else t.value = v; } };
+  const _tryVector = (n)=>{ if(!initGirihShaderD() && n>0) setTimeout(()=>_tryVector(n-1), 2000); };
+  frame.addEventListener('load', ()=>{ if(!initGirih()) setTimeout(initGirih, 1500); _tryVector(5); });
+  setTimeout(()=>{ if(!_girihTex && !window._districtWallShader) initGirih(); }, 1200);
   const lake = new THREE.Mesh(new THREE.CircleGeometry(60, 72),
     new THREE.MeshStandardMaterial({color:0x0a0812, roughness:0.25, metalness:0.85}));
   lake.rotation.x = -Math.PI/2; lake.position.set(VX, 0.001, 0); scene.add(lake);
@@ -2706,7 +2746,9 @@ addEventListener('contextmenu', e=>{
     b.onmouseenter=()=>b.style.background='rgba(90,80,60,.35)'; b.onmouseleave=()=>b.style.background='';
     b.onclick=()=>{ _closeObjMenu(); fn(); }; m.appendChild(b); };
   dbg('objmenu', `open: target=${g.pid||'?'} sid=${sid||'NONE'} held=${heldProp===g}`, 'k');   // delete-bug forensics (Nix 2026-07-11: photo delete "didn't work" — this names the failing step)
-  row(heldProp===g ? '⬇ Put down' : '✋ Pick up', ()=> window.__grab && __grab.grabToggleDesktop && __grab.grabToggleDesktop());
+  row(heldProp===g ? '⬇ Put down' : '✋ Pick up', ()=>{      // TARGETED (was grab-nearest — grabbed the wrong thing)
+    if(heldProp===g) __grab.grabToggleDesktop();             // holding it → toggle = drop
+    else if(window.__grab && __grab.grabSpecific) __grab.grabSpecific(g); });
   if(g.isCamera3D) row('📸 3-second timer', ()=>{ if(window.__cameraSnap) dbg('camera', __cameraSnap(), 'k'); });
   if(sid) row('🗑 Delete', ()=>{
     const live = sock && sock.readyState===1;
@@ -2730,7 +2772,8 @@ addEventListener('keydown', e=>{
     else if(e.code==='ArrowUp') moveLast(0,0,-d); else if(e.code==='ArrowDown') moveLast(0,0,d); }
   if(e.code==='KeyX'){ if(!deleteHeldObject() && window.despawnLast) despawnLast(); }   // held image/text → delete it; else last block
   if(e.code==='Escape') _closeObjMenu();
-  if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); }
+  if(e.code==='KeyE'){                                     // holding the camera → E = selfie flip; else grab/drop as before
+    if(!(window.__cameraFlip && window.__cameraFlip()) && window.__grabToggle) dbg('grab', window.__grabToggle()); }
   if(e.code==='KeyF' && window.__cameraSnapIfHeld){ window.__cameraSnapIfHeld(); }  // F = shutter while holding the camera
   if(e.code==='KeyC' && !e.repeat && window.__setCrouch){ window.__setCrouch(true); }  // hold C = crouch
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
@@ -4986,7 +5029,13 @@ function cachedCreds(q){
           sock.send(JSON.stringify({t:'wristcal', cal:JSON.parse(_wc)})); }catch(e){}  // no DevTools console at midnight
       _authVeil(false); { const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; }
       dbg('welcome', `#${m.id} ${m.display} (${myRole}) room=${m.room} proto=${m.proto}`, 'g');
+      // AVATAR-AGNOSTIC NAMEPLATE (Nix 2026-07-12: joined as "Guest" until she switched avatars —
+      // the plate was baked at build time, before the relay told us who we are). The server's
+      // display name is the truth; push it through every plate the moment welcome lands.
+      if(m.display && window.__setMyName) window.__setMyName(m.display);
       setAvatarRole(avatar, myRole); showRole(myRole, m.display);
+      if(avatar && avatar.userData && avatar.userData.tag)
+        replotTag(avatar.userData.tag, playerName, myRole||'visitor', avatar.userData.model);
       if(window.__refreshOwnTag) window.__refreshOwnTag();   // re-badge the VRM nameplate (was stuck VISITOR)
       // prune remote avatars that predate a reconnect (their ids died with the old server)
       const alive = new Set((m.peers||[]).map(p=>p.id));
@@ -5649,7 +5698,7 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   lens.rotation.x = Math.PI/2; lens.position.set(0, 0.004, 0.030); G.add(lens);
   const shutter = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.006, 10),
     new THREE.MeshStandardMaterial({color:0xc94b40, roughness:0.4}));
-  shutter.position.set(0.030, 0.034, 0); G.add(shutter);
+  shutter.position.set(-0.030, 0.034, 0); G.add(shutter);  // local -X = viewer's RIGHT seen from behind (Nix caught the mirror)
   // BACK SCREEN (Nix: "preview window/image in the back if it's not ridiculous" — it's not):
   // a live viewfinder plane on the -Z face, fed by a small render target while the camera is held.
   const vfW=320, vfH=200;
@@ -5667,17 +5716,29 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   hull.userData.action = ()=>{
     if(window.__heldProp && __heldProp()===g) return _cameraSnap(G, true);
     window.__grab.grabSpecific(g);
-    return 'camera in hand — aim with your view · F or ● = shutter · E = put down'; };
+    return 'camera in hand — aim with your view · F or ● = shutter · E = flip for selfies'; };
+  window.__cameraFlip = ()=>{                              // E while holding: flip lens toward/away from you
+    if(!(window.__heldProp && __heldProp()===g)) return false;
+    _selfie = !_selfie;
+    dbg('camera', _selfie ? 'selfie mode — lens faces you 🤳' : 'forward mode', 'k');
+    return true; };
   G.add(hull); _clickables.push(hull);
   let _snapBusy = false;
   const CAM_W=1024, CAM_H=640;
   let camRT=null, camCam=null, cam2d=null;
   // ---- viewfinder plumbing: pose a camera from the mesh (shared by preview + snap)
+  let _selfie = false;                                     // E flips the lens (Nix: "no way to do *selfies*")
   function _poseFrom(root, cam){
     const wp = root.getWorldPosition(new THREE.Vector3());
     const wq = root.getWorldQuaternion(new THREE.Quaternion());
-    cam.position.copy(wp).addScaledVector(new THREE.Vector3(0,0,-0.05).applyQuaternion(wq), 1);
-    cam.quaternion.copy(wq); cam.rotateY(Math.PI); cam.updateMatrixWorld(true); }
+    if(_selfie){                                           // lens faces the holder: cam behind the body looking back
+      cam.position.copy(wp).addScaledVector(new THREE.Vector3(0,0,-0.06).applyQuaternion(wq), 1);
+      cam.quaternion.copy(wq);                             // cam forward (-Z) = mesh -Z = toward you
+    } else {                                               // forward: cam IN FRONT of the lens (was -0.05 = inside the
+      cam.position.copy(wp).addScaledVector(new THREE.Vector3(0,0,0.07).applyQuaternion(wq), 1);  // body → the big black
+      cam.quaternion.copy(wq); cam.rotateY(Math.PI);       // circle in the preview was our own lens barrel)
+    }
+    cam.updateMatrixWorld(true); }
   function _rtRender(rt, cam){
     const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
     const old = renderer.getRenderTarget();
@@ -5695,7 +5756,7 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   vfBtn.textContent = '●'; vfBtn.title = 'shutter (F)';
   vfBtn.style.cssText = 'font:20px Georgia;color:#fff;background:#c94b40;border:0;border-radius:50%;'+
     'width:34px;height:34px;cursor:pointer;line-height:1';
-  const vfHint = document.createElement('span'); vfHint.textContent = 'F = shutter · E = put down';
+  const vfHint = document.createElement('span'); vfHint.textContent = 'F = shutter · E = flip 🤳';
   vfRow.appendChild(vfBtn); vfRow.appendChild(vfHint); vfHud.appendChild(vfCanvas); vfHud.appendChild(vfRow);
   document.body.appendChild(vfHud);
   vfBtn.addEventListener('click', e=>{ e.stopPropagation(); _cameraSnap(G, true); });
@@ -6642,7 +6703,8 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   }
   resolveCollisions();                               // solid world: push out of table/mirror/bookcases (XZ)
   checkPorticos();                                   // doorways: crossing the east arch fades to the girih void
-  if(_girihTex && _district==='void' && window.__girihActive!==false) _girihTex.needsUpdate = true;   // stream only the active world
+  if(window._districtWallShader){ if(_district==='void' && window._districtWallTick) window._districtWallTick(); }
+  else if(_girihTex && _district==='void' && window.__girihActive!==false) _girihTex.needsUpdate = true;   // canvas fallback only
   // jump + gravity (shared desktop/VR) — ground is the tabletop if I'm standing on it, else the deck
   const gH = groundHeight(player.position.x, player.position.z);
   if(grounded && player.position.y > gH + 0.02) grounded = false;   // walked off an edge → fall
