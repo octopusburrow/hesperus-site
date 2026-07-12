@@ -186,6 +186,7 @@
   <label class="mrow"><input type="checkbox" id="starNamesToggle" checked><span>☆ Star names</span></label>
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
+  <label class="mrow"><input type="checkbox" id="skyDarkToggle"><span>🌌 Darker dusk (experiment)</span></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
@@ -600,13 +601,13 @@ const sky = new THREE.Mesh(
   new THREE.SphereGeometry(450, 32, 16),
   new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { uTime: {value: 0} },
+    uniforms: { uTime: {value: 0}, uSkyDark: {value: 0.0} },
     vertexShader: `
       varying vec3 vDir;
       void main(){ vDir = normalize(position);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
-      varying vec3 vDir; uniform float uTime;
+      varying vec3 vDir; uniform float uTime; uniform float uSkyDark;
       float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7)))*43758.5453); }
       void main(){
         float h = clamp(vDir.y, -0.05, 1.0);
@@ -635,6 +636,15 @@ const sky = new THREE.Mesh(
         g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.03,0.13,ha));                             // → dusty purple
         g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.08,0.21,ha));                             // → dark blue
         g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.28,0.72,ha));                             // → near-black (long tail preserved)
+        // DARKER-DUSK EXPERIMENT (Nix 2026-07-11, menu toggle, "just for yuks"): whole dusk
+        // color-treated darker, violet/blue span pulled UPWARD — live-comparable, easy rollback.
+        if(uSkyDark > 0.5){
+          vec3 g2 = mix(vec3(0.30,0.135,0.05), vec3(0.155,0.062,0.058), smoothstep(0.0,0.09,ha));
+          g2 = mix(g2, vec3(0.085,0.058,0.135), smoothstep(0.025,0.11,ha));       // violet arrives sooner
+          g2 = mix(g2, vec3(0.026,0.038,0.090), smoothstep(0.06,0.19,ha));        // blue arrives sooner
+          g2 = mix(g2, vec3(0.008,0.011,0.026), smoothstep(0.34,0.85,ha));        // and both LINGER upward
+          g = g2;
+        }
         vec3 col = mix(night, g, w);
         // haze: EAST ONLY (Nix rev.5 — it was dimming the sunward horizon's brightest line)
         float haze = smoothstep(0.022, 0.0, abs(h)) * (1.0 - w);
@@ -737,27 +747,40 @@ function _buildStarLabels(){
   // rev.2 (2026-07-11): SPRITES, not troika text — troika rendered in every harness but never
   // on Nix's client. Canvas-drawn name → SpriteMaterial: the most boring, unbreakable path in
   // three.js. Auto-billboards, no shader derivatives, no font SDF, no lookAt loop.
-  const _mkLabel = (name)=>{ const c=document.createElement('canvas');
-    const px=44, pad=12; const ctx=c.getContext('2d'); ctx.font=`${px}px system-ui, sans-serif`;
+  // rev.3 refinements (Nix): smaller, sky-blue, Georgia italic (house font), magnitude tiers
+  // (bright stars → fuller labels; dim → smaller/fainter), below-horizon culled, zenith-safe offsets.
+  const _mkLabel = (name, dim)=>{ const c=document.createElement('canvas');
+    const px = dim ? 34 : 44, pad=12; const ctx=c.getContext('2d');
+    const font = `italic ${px}px Georgia, serif`; ctx.font=font;
     const w=Math.ceil(ctx.measureText(name).width)+pad*2; c.width=w; c.height=px+pad*2;
-    const x=c.getContext('2d'); x.font=`${px}px system-ui, sans-serif`;
-    x.fillStyle='rgba(207,224,242,0.85)'; x.textBaseline='middle';
-    x.shadowColor='rgba(0,0,0,0.8)'; x.shadowBlur=6;
+    const x=c.getContext('2d'); x.font=font;
+    x.fillStyle = dim ? 'rgba(126,150,186,0.55)' : 'rgba(148,175,214,0.78)';   // cool sky blue
+    x.textBaseline='middle'; x.shadowColor='rgba(0,0,0,0.75)'; x.shadowBlur=5;
     x.fillText(name, pad, c.height/2);
     const tx=new THREE.CanvasTexture(c); tx.colorSpace=THREE.SRGBColorSpace;
-    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tx, transparent:true, depthTest:false, fog:false}));
-    const SC=0.34; sp.scale.set(c.width*SC, c.height*SC, 1); sp.renderOrder=3; return sp; };
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tx, transparent:true, depthTest:false, fog:false,
+      opacity: dim?0.75:1}));
+    const SC = dim ? 0.17 : 0.23;                          // smaller across the board (was 0.34)
+    sp.scale.set(c.width*SC, c.height*SC, 1); sp.renderOrder=3; return sp; };
   fetch('./assets/stars_named.json').then(r=>r.json()).then(list=>{
     const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
+    let built = 0;
     for(const s of list){
       if(s.n === 'Sol') continue;                          // no Sun label in the night sky
       const wx = (s.x*cy + s.z*sy)*R, wy = s.y*R, wz = (-s.x*sy + s.z*cy)*R;   // rotate into world
-      const sp = _mkLabel(s.n);
-      sp.position.set(wx, wy + 10, wz);                    // float the name just above the star
-      _starLabels.add(sp);
+      if(wy < 4) continue;                                 // below the horizon: not our sky tonight
+      const sp = _mkLabel(s.n, (s.m ?? 2) > 1.2);          // mag tiers: ≤1.2 bright, else dim
+      // zenith-safe offset: push the label along the LOCAL 'sky north' tangent, not raw +y —
+      // near the pole raw +y sat the label ON its star (Polaris/Kochab, Nix).
+      const dir = new THREE.Vector3(wx,wy,wz).normalize();
+      let off = new THREE.Vector3(0,1,0).addScaledVector(dir, -dir.y);   // up projected onto the sky sphere
+      if(off.lengthSq() < 0.05) off.set(1,0,0).addScaledVector(dir, -dir.x);  // zenith fallback: east-ish
+      off.normalize();
+      sp.position.set(wx, wy, wz).addScaledVector(off, 11);
+      _starLabels.add(sp); built++;
     }
-    window.__starLabelCount = list.length;
-    if(typeof dbg==='function') dbg('stars', `labels built (sprites): ${list.length-1}`, 'k');
+    window.__starLabelCount = built;
+    if(typeof dbg==='function') dbg('stars', `labels built (sprites v3): ${built} above horizon`, 'k');
   }).catch(e=>console.warn('star labels failed', e));
 }
 function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
@@ -768,7 +791,9 @@ window.__setStarNames = setStarNames;
     if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked));
     const hs=document.getElementById('hiShadowToggle');
     if(hs){ hs.checked = (localStorage.getItem('porch.shadowRes')||'1024')==='2048';
-      hs.addEventListener('change', ()=>window.__setShadowRes && __setShadowRes(hs.checked?2048:1024)); } };
+      hs.addEventListener('change', ()=>window.__setShadowRes && __setShadowRes(hs.checked?2048:1024)); }
+    const sd=document.getElementById('skyDarkToggle');
+    if(sd) sd.addEventListener('change', ()=>{ sky.material.uniforms.uSkyDark.value = sd.checked?1:0; }); };
   if(document.readyState==='loading') addEventListener('DOMContentLoaded', _wireStars);
   else _wireStars();
   // DEFAULT ON (Nix 2026-07-11 "still not working, what gives" — remove the toggle from the
@@ -5317,7 +5342,9 @@ let _mbox = null;
   // A/B RIG (Nix): a parallel NON-spatial player of the same buffer. Menu toggle swaps them live —
   // if 'flat' is clean and 'spatial' crunches, the panner is guilty; if both crunch, it's downstream.
   const flat = new THREE.Audio(_audioListener);
-  new THREE.AudioLoader().load('./assets/musicbox2.wav', buf=>{
+  // musicbox3 (2026-07-11): A/B verdict was "identical" → the panner was INNOCENT; the crunch
+  // was the glockenspiel's own high harmonics. Lowpassed at 3.8k + a whisper of room echo.
+  new THREE.AudioLoader().load('./assets/musicbox3.wav', buf=>{
     pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0);
     flat.setBuffer(buf); flat.setLoop(true); flat.setVolume(0.4);
     if(_mbox) _mbox.ready = true;
