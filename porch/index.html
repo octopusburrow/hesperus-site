@@ -1310,23 +1310,27 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
 // We edit reality, not the draft. Pot-belly, cast iron, right of the bookcases (mirror's
 // symmetric spot), fire window + light breathing on the candle's layered-flicker cadence. ----
 {
-  // pixel-iron: house-density mottled cast iron with sparse rust flecks (Nix: "could stand to
-  // be textured"). NearestFilter magnify = the same chunky-pixel read as the oak and deck.
-  const ironTex = (()=>{
-    const c = document.createElement('canvas'); c.width = c.height = 64;
-    const x = c.getContext('2d');
-    x.fillStyle = '#26262c'; x.fillRect(0,0,64,64);
-    for(let i=0;i<1400;i++){ const v = 22 + (Math.random()*30|0);
-      x.fillStyle = `rgb(${v},${v},${v+5})`;
-      x.fillRect(Math.random()*64|0, Math.random()*64|0, 1, 1); }
-    for(let i=0;i<22;i++){ x.fillStyle = `rgba(140,80,42,${0.15+Math.random()*0.22})`;
-      x.fillRect(Math.random()*64|0, Math.random()*64|0, 2, 1); }
-    const t = new THREE.CanvasTexture(c);
-    t.magFilter = THREE.NearestFilter; t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(3, 2); t.colorSpace = THREE.SRGBColorSpace; return t;
-  })();
-  const iron = new THREE.MeshStandardMaterial({map:ironTex, color:0xb8b8c2,
-    roughness:0.92, metalness:0.3});
+  // HOUSE PIXEL CONVENTION on a curved object (Nix: 32px/m, no non-square pixels — "Octopath
+  // manages"; her suggested escape hatch: do it in a shader). UV textures on a sphere always
+  // stretch somewhere, so the mottle is computed in WORLD space instead: quantize the fragment's
+  // world position to a 1/32 m grid and hash the cell. Every pixel is a perfect 32px/m cube
+  // facet, on the belly, the pipe, the legs — curvature can't distort what isn't mapped.
+  const iron = new THREE.MeshStandardMaterial({color:0x2b2b32, roughness:0.92, metalness:0.3});
+  iron.onBeforeCompile = (sh)=>{
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWP;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWP = (modelMatrix * vec4(transformed,1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', ['#include <common>',
+        'varying vec3 vWP;',
+        'float ironHash(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7)))*43758.5453); }'].join('\n'))
+      .replace('#include <map_fragment>', ['#include <map_fragment>',
+        'vec3 ironCell = floor(vWP * 32.0);',                        // 32px/m, square by construction
+        'float ironH = ironHash(ironCell);',
+        'diffuseColor.rgb *= 0.72 + 0.42*ironH;',                    // cast-iron mottle
+        'float ironRust = step(0.972, ironHash(ironCell + 17.0));',  // sparse rust cells
+        'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.33,0.19,0.10), ironRust*0.55);'].join('\n'));
+  };
   const g = new THREE.Group();
   // legs: four stubby angled feet, spread for the bigger pot
   for(let i=0;i<4;i++){
@@ -1379,6 +1383,37 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   g.rotation.y = -0.38;                                   // door swivelled toward the room's middle
   scene.add(g); addCollider(g, 'stove');
   window._stoveFire = { light: fire, mat: fireMat };      // picked up by the candle-flicker block
+}
+
+// ---- THE PORCH SWING (2026-07-12): Nix caught that the essay — and weeks of my own narration —
+// described a swing that never existed. I'd furnished the porch in imagination and lived on the
+// furniture. Same ruling as the stove: we edit reality, not the draft. Oak in the house pixel
+// style, hung on chains from its own frame, with a perpetual gentle sway. Front-left of the
+// deck, facing the table and the hearth. (Sitting ON it = proper-porch milestone, with the
+// chairs; for now it sways and holds the narrative weight it always claimed to.) ----
+{
+  const G = new THREE.Group();
+  const oak = (w,h,d)=> _makePixelBox(w, h, d, _oakPaint, {roughness:1}).mesh;
+  // frame: two posts + crossbeam
+  const postL = oak(0.10, 2.10, 0.10); postL.position.set(-0.95, 1.05, 0); G.add(postL);
+  const postR = oak(0.10, 2.10, 0.10); postR.position.set( 0.95, 1.05, 0); G.add(postR);
+  const beam  = oak(2.10, 0.10, 0.10); beam.position.set(0, 2.07, 0); G.add(beam);
+  const footL = oak(0.34, 0.08, 0.34); footL.position.set(-0.95, 0.04, 0); G.add(footL);
+  const footR = oak(0.34, 0.08, 0.34); footR.position.set( 0.95, 0.04, 0); G.add(footR);
+  // hanger: pivots at the beam so the whole bench sways as a pendulum
+  const H = new THREE.Group(); H.position.set(0, 2.02, 0); G.add(H);
+  const seat = oak(1.45, 0.055, 0.48); seat.position.set(0, -1.44, 0.02); H.add(seat);
+  const back = oak(1.45, 0.50, 0.045); back.position.set(0, -1.18, -0.235); back.rotation.x = -0.18; H.add(back);
+  const chain = new THREE.MeshStandardMaterial({color:0x2a2a30, roughness:0.6, metalness:0.6});
+  for(const sx of [-0.66, 0.66]) for(const [sz, tilt] of [[0.22, 0.10], [-0.20, -0.06]]){
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 1.44, 6), chain);
+    c.position.set(sx, -0.72, sz*0.55); c.rotation.x = tilt; H.add(c);
+  }
+  G.traverse(o=>{ if(o.isMesh) o.castShadow = true; });
+  G.position.set(-2.4, 0, 2.2);
+  G.rotation.y = 2.32;                                     // facing the table, the candle, the stove
+  scene.add(G); addCollider(G, 'swing');
+  window._swingHanger = H;                                 // swayed in the flicker block: the porch breathes
 }
 
 // ---- a literal mirror, framed, to the left of the bookcases (so you can see yourself) ----
@@ -6544,6 +6579,8 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     window._stoveFire.light.intensity = s;
     window._stoveFire.mat.emissiveIntensity = 1.1 + (s-2.0)*0.9;
   }
+  // the swing sways — two incommensurate periods so it never quite repeats, like wind does
+  if(window._swingHanger) window._swingHanger.rotation.x = Math.sin(t*0.45)*0.018 + Math.sin(t*0.131)*0.009;
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
   // (spec wanderer parked underground 2026-07-11 — the SHADER half of the parade light survived
