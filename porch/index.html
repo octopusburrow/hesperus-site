@@ -5940,11 +5940,9 @@ window.__musicboxTick = (dt)=>{                             // called from the r
           if(!camRT){ camRT = new THREE.WebGLRenderTarget(CAM_W, CAM_H, {depthBuffer:true});
             camCam = new THREE.PerspectiveCamera(58, CAM_W/CAM_H, 0.05, 300);
             cam2d = document.createElement('canvas'); cam2d.width=CAM_W; cam2d.height=CAM_H; }
-          const wp = root.getWorldPosition(new THREE.Vector3());
-          const wq = root.getWorldQuaternion(new THREE.Quaternion());
-          camCam.position.copy(wp).addScaledVector(new THREE.Vector3(0,0,-0.05).applyQuaternion(wq), 1);
-          camCam.quaternion.copy(wq); camCam.rotateY(Math.PI);   // lens looks out the -z face
-          camCam.updateMatrixWorld(true);
+          _poseFrom(root, camCam);   // SHARED pose (2026-07-12): snap had its own stale copy of the
+                                     // math — selfie mode flipped the preview but photos still shot
+                                     // forward. One pose function, one truth, preview = photo.
           const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
           const old = renderer.getRenderTarget();
           renderer.setRenderTarget(camRT); renderer.render(scene, camCam); renderer.setRenderTarget(old);
@@ -5954,7 +5952,7 @@ window.__musicboxTick = (dt)=>{                             // called from the r
           const ctx = cam2d.getContext('2d'), img = ctx.createImageData(CAM_W, CAM_H);
           for(let y=0;y<CAM_H;y++){ const sy=CAM_H-1-y;
             for(let x=0;x<CAM_W;x++){ const s=(sy*CAM_W+x)*4, d=(y*CAM_W+x)*4;
-              img.data[d]=buf[s]; img.data[d+1]=buf[s+1]; img.data[d+2]=buf[s+2]; img.data[d+3]=255; } }
+              img.data[d]=_sLUT[buf[s]]; img.data[d+1]=_sLUT[buf[s+1]]; img.data[d+2]=_sLUT[buf[s+2]]; img.data[d+3]=255; } }   // linear->sRGB: photos were as secretly dark as the preview
           ctx.putImageData(img, 0, 0);
           const dataURL = cam2d.toDataURL('image/jpeg', 0.85);
           // manifest the polaroid: floats above the camera, facing back at the scene
