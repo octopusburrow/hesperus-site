@@ -608,7 +608,7 @@ const sky = new THREE.Mesh(
         // rev.3 (Nix): 50% back toward the old darker sky (esp. anti-sun), desaturated bands,
         // wider/smoother falloffs, and the twilight ARCH — bands wrap the implied planet curve,
         // reaching higher at the sun's azimuth and sinking toward the sides.
-        vec3 venusDir = normalize(vec3(0.62, 0.115, -0.78));
+        vec3 venusDir = normalize(vec3(0.62, 0.21, -0.78));   // raised into the red/purple band (Nix rev.5)
         float daz = dot(normalize(vDir.xz), normalize(venusDir.xz))*0.5+0.5;   // 1 sunward, 0 opposite
         float w = pow(daz, 3.0);                                               // tighter sector: east stays night
         float ha = hh * (1.0 + 1.7*(1.0-daz));    // arch: same color sits LOWER as you swing away from the sun
@@ -626,6 +626,10 @@ const sky = new THREE.Mesh(
         // haze: EAST ONLY (Nix rev.5 — it was dimming the sunward horizon's brightest line)
         float haze = smoothstep(0.022, 0.0, abs(h)) * (1.0 - w);
         col = mix(col, vec3(0.020,0.024,0.038), haze*0.35);
+        // rev.6 (Nix): the razor seam in the WEST gets a bright dab — a few pixels of glow
+        // hugging the horizon line, sunward only, dying off to the north/south with w.
+        float seam = smoothstep(0.014, 0.0, abs(h)) * pow(daz, 6.0);
+        col += vec3(0.55, 0.26, 0.08) * seam * 0.8;
         // stars: hashed cells, round falloff, slow twinkle
         vec3 sp = normalize(vDir) * 150.0;
         vec3 cell = floor(sp); vec3 f = fract(sp) - 0.5;
@@ -795,9 +799,10 @@ const playa = new THREE.Mesh(
           float lum = dot(tex, vec3(0.299, 0.587, 0.114));
           tex = mix(vec3(lum), tex, 0.32);                         // DESAT: kill the orange cast
           tex = pow(tex, vec3(0.9));                               // even LESS contrast — lift the crack darks (Nix rev.4)
+          tex = tex*0.82 + 0.085;                                  // rev.5 de-contrast: gentle playa — cracks read, never pit-black (Nix)
           vec3 texCol = tex * (0.16 + 0.05*n) * (0.9 + 0.2*mottle) * vec3(0.94, 0.96, 1.04);
           col = mix(col, texCol, 0.6);                             // PHOTO_MIX: dialed down so cracks read as soft detail, not lines
-          specMask = smoothstep(0.30, 0.62, lum);                  // spec follows the PHOTO: raised plates glint, cracks stay dead (Nix 2026-07-11)
+          specMask = mix(0.22, 1.0, smoothstep(0.22, 0.68, lum));  // plates glint fully, cracks still whisper (was hard-off → harsh black, Nix rev.5)
         } else {
         // procedural-only path keeps its crack/fine/crest layers; the photo has its OWN
         // cracks — stacking both was the 'ropy overlay' (Nix rev.3)
@@ -824,7 +829,7 @@ const playa = new THREE.Mesh(
         float fw = pow(fdaz, 3.0);
         // rev.4 (Nix): womb-dark — ground sinks toward BLACK sooner, with only a breath of the
         // horizon color at the very end so the seam still marries the sky.
-        vec3 horizonCol = mix(vec3(0.010,0.012,0.020), vec3(0.055,0.028,0.016), fw);
+        vec3 horizonCol = mix(vec3(0.010,0.012,0.020), vec3(0.115,0.056,0.026), fw);   // warmer/brighter rim sunward — meets the sky's seam dab (Nix rev.6)
         float fogf = smoothstep(10.0, 55.0, dcam);
         col = mix(col, vec3(0.004,0.004,0.007), fogf*0.92);          // to near-black, early
         col = mix(col, horizonCol, smoothstep(55.0, 95.0, dcam));    // last breath: tie into the sky seam
@@ -1345,10 +1350,16 @@ const _smokeMat = new THREE.ShaderMaterial({
     void main(){
       vec2 p = (vUv - 0.5) * vec2(1.0, 1.85);
       float d = length(p);
-      float edge = smoothstep(0.62, 0.30, d);              // fills the doorway, soft at the frame
+      // rev.2 (Nix): cover the WHOLE doorway (top + bottom were see-through), keep the circular
+      // tunnel suggestion as a darker throat in the middle plus a rim.
+      float px = smoothstep(0.5, 0.42, abs(vUv.x-0.5));    // soft only at the plane's left/right edges
+      float py = smoothstep(0.5, 0.46, abs(vUv.y-0.5));
+      float fill = px * py;                                // full-doorway coverage
+      float throat = smoothstep(0.30, 0.06, d)*0.35;       // darker toward the tunnel centre
+      float rim = smoothstep(0.34, 0.26, abs(d-0.34))*0.25; // faint circular rim — the tunnel mouth
       float sm = h2(floor(p*9.0 + uTime*0.35)) * 0.5 + h2(floor(p*17.0 - uTime*0.22)) * 0.5;  // slow curling grain
-      float a = edge * (0.34 + 0.14*sm);                   // translucent, never opaque
-      gl_FragColor = vec4(vec3(0.055, 0.045, 0.095) + vec3(0.05,0.03,0.09)*sm, a);
+      float a = fill * (0.34 + 0.12*sm + throat + rim);
+      gl_FragColor = vec4(vec3(0.055, 0.045, 0.095) + vec3(0.05,0.03,0.09)*sm - vec3(0.02,0.015,0.02)*throat, a);
     }`
 });
 function addPortico(dest, x, z, label, kind, ry=0){
@@ -1768,6 +1779,7 @@ if(_residentPick){
     vrm.scene.position.set(1.7, 0, -1.15);           // by the candle, host's spot
     vrm.scene.rotation.y = Math.PI - 0.35;           // facing spawn (forward = −sin/−cos, same as _yawToward), slight angle
     scene.add(vrm.scene);
+    if(typeof _addBlobShadow==='function') _addBlobShadow(vrm.scene);   // resident gets grounded too
     if(vrm.lookAt && VRMLookAtQuaternionProxy){      // silences the vrma lookAt warning
       const proxy = new VRMLookAtQuaternionProxy(vrm.lookAt);
       proxy.name = 'VRMLookAtQuaternionProxy';
@@ -3559,6 +3571,30 @@ window.__updatePlayerIK=updatePlayerIK;
 
 // ---- co-presence: connect to a sync room (?sync=wss://…) and render remote players ----
 const remotes = new Map();   // id -> {group, tp:Vector3, try:number}
+// ---- BLOB DROP-SHADOWS (Nix 2026-07-11): characters had no ground contact. True cast shadows
+// from the candle point-light would need a cube shadow map (6 renders) — the classic cheap win
+// is a soft radial blob that follows the body. Bonus fake-GI: it SHRINKS+DARKENS on contact and
+// GROWS+FADES with height off the ground — i.e. shadows fade with distance from their caster.
+const _blobTex = (()=>{ const c=document.createElement('canvas'); c.width=c.height=128;
+  const x=c.getContext('2d'), g=x.createRadialGradient(64,64,6,64,64,62);
+  g.addColorStop(0,'rgba(0,0,0,0.85)'); g.addColorStop(0.55,'rgba(0,0,0,0.38)'); g.addColorStop(1,'rgba(0,0,0,0)');
+  x.fillStyle=g; x.fillRect(0,0,128,128); const t=new THREE.CanvasTexture(c); return t; })();
+const _blobs = [];
+function _addBlobShadow(target){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.62),
+    new THREE.MeshBasicMaterial({map:_blobTex, transparent:true, depthWrite:false, opacity:0.55}));
+  m.rotation.x = -Math.PI/2; m.renderOrder = 1;
+  scene.add(m); _blobs.push({m, target}); return m;
+}
+window.__blobTick = ()=>{ for(const b of _blobs){
+  if(!b.target.parent){ scene.remove(b.m); _blobs.splice(_blobs.indexOf(b),1); continue; }  // avatar left
+  const p = b.target.position;
+  const gh = (typeof groundHeight==='function') ? groundHeight(p.x,p.z) : 0;
+  const alt = Math.max(0, p.y - gh);
+  const s = 1 + alt*0.55;                              // higher → bigger
+  b.m.scale.set(s, s, 1);
+  b.m.material.opacity = 0.55/(1+alt*1.6);             // higher → fainter (contact-shadow feel)
+  b.m.position.set(p.x, gh+0.015, p.z); } };
 window.__remotes = remotes;  // exposed for headless tests (tp = pose truth, pre-lerp)
 window.__brainPending = new Map();   // reqId -> {resolve, reject} (brain-over-websocket)
 const spawnedObjs = new Map(); let lastSpawnSid = null; // sid -> mesh (ephemeral maker objects)
@@ -4770,6 +4806,7 @@ function cachedCreds(q){
       if(!r){
         const grp = makeAvatar(m.color ?? 0xffb45e, m.name || 'guest', m.role || 'visitor', m.model || 'human');
         scene.add(grp);
+        _addBlobShadow(grp);                              // grounding drop-shadow (Nix 2026-07-11)
         r = { group: grp, tp: new THREE.Vector3(m.x, m.y||0, m.z), try_: m.ry||0, body: _mBody };
         remotes.set(m.id, r);
         if(!AVATAR_BODIES[_mBody].capsule)
@@ -5965,10 +6002,10 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   candle.intensity = f + 0.9;
   // positional jitter matched to the brightness noise (Nix sweetener #2): the light source
   // wanders ~2cm with the same layered cadence, so shadows flicker and SHIFT, not just dim.
-  candle.position.set(
-    _candleBase.x + Math.sin(t*5.3)*0.014 + Math.sin(t*1.7)*0.008 + (Math.random()-0.5)*0.006,
-    _candleBase.y + Math.sin(t*8.9)*0.010 + (Math.random()-0.5)*0.004,
-    _candleBase.z + Math.cos(t*5.1)*0.014 + Math.cos(t*2.1)*0.008 + (Math.random()-0.5)*0.006);
+  candle.position.set(                                            // rev.2 (Nix): faster + half the travel
+    _candleBase.x + Math.sin(t*8.7)*0.007 + Math.sin(t*3.1)*0.004 + (Math.random()-0.5)*0.003,
+    _candleBase.y + Math.sin(t*13.9)*0.005 + (Math.random()-0.5)*0.002,
+    _candleBase.z + Math.cos(t*8.3)*0.007 + Math.cos(t*3.7)*0.004 + (Math.random()-0.5)*0.003);
   flame.scale.y = 0.8 + (f-3.25)*0.6;
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
@@ -5976,6 +6013,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window.__specMarker) __specMarker.position.copy(playaUniforms.uSpecPos.value);
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
+  if(window.__blobTick) window.__blobTick();                 // avatar drop-shadows follow their bodies
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
   _applyTouchFx();                                    // pats: head squish envelopes (all touched VRMs)
