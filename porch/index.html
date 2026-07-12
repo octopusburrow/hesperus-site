@@ -5234,6 +5234,11 @@ window.__openTextCompose = openTextCompose;                // the make.text huma
 // A seamless 2-min Cadd9 drone loop. Web-Audio loop via decodeAudioData (sample-accurate; OGG chosen
 // because MP3 encoder-padding leaves a loop gap). Autoplay policy → starts on the first user gesture.
 // The AudioListener here is the shared audio infrastructure that make.music (music objects) reuses.
+// AUDIO UNDERRUN FIX (Nix's minimize experiment, 2026-07-11: box sounds PERFECT with the window
+// minimized → renderer load was starving the audio device callbacks — the "crunch" was buffer
+// underruns, not any source/panner sin). latencyHint 'playback' = big buffers, glitch-proof;
+// ~100ms extra latency is nothing on a porch.
+try{ THREE.AudioContext.setContext(new (window.AudioContext||window.webkitAudioContext)({latencyHint:'playback'})); }catch(e){}
 const _audioListener = new THREE.AudioListener(); camera.add(_audioListener);
 window.__audioListener = _audioListener;                   // music objects attach positional audio to this
 let _ambient=null, _ambientLoading=false;
