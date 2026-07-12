@@ -1433,7 +1433,7 @@ function addPortico(dest, x, z, label, kind, ry=0){
   mg.setAttribute('color', new THREE.BufferAttribute(mc,3));
   const motes=new THREE.Points(mg, new THREE.PointsMaterial({size:0.045, transparent:true, vertexColors:true,
     opacity:0.6, blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true}));
-  motes.rotation.y=Math.PI/2; motes.renderOrder=3; g.add(motes);
+  motes.renderOrder=3; g.add(motes);   // turntable fix (Nix 2026-07-11): motes spread along local Z (between the posts) — the old 90° yaw swung them THROUGH the doorway instead of across it
   _porticoMotes.push({geo:mg, phase:mph, n:MOTES});
   if(label){                                             // destination plate: NAME (one line) + world-type tag beneath
     // (Nix 2026-07-11: the old single-string label — 'moon rider (foreign world test)' — wrapped at
