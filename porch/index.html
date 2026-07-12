@@ -5389,7 +5389,11 @@ let _mbox = null;
   const flat = new THREE.Audio(_audioListener);
   // musicbox3 (2026-07-11): A/B verdict was "identical" → the panner was INNOCENT; the crunch
   // was the glockenspiel's own high harmonics. Lowpassed at 3.8k + a whisper of room echo.
-  new THREE.AudioLoader().load('./assets/musicbox3.wav', buf=>{
+  // musicbox4 (2026-07-11): loudness-normalized to −23 LUFS (was −49.3(!) vs ambient −21.9 —
+  // Windows Loudness EQ had been secretly closing that 27dB gap; with enhancements off the box
+  // vanished). HOUSE STANDARD from now on: every porch audio asset ships at −23 LUFS integrated
+  // (ffmpeg loudnorm=I=-23:TP=-1.5:LRA=11); point sources rely on distance gain, not file gain.
+  new THREE.AudioLoader().load('./assets/musicbox4.wav', buf=>{
     pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0);
     flat.setBuffer(buf); flat.setLoop(true); flat.setVolume(0.4);
     if(_mbox) _mbox.ready = true;
@@ -5398,6 +5402,29 @@ let _mbox = null;
   _mbox = { group:G, spin, brass, comb:comb.material, audio:pa, glow, ready:false, playing:false, lvl:0 };
 })();
 window.__mbox = _mbox;                                        // debug: headless audio-graph probe
+// LIVE PAN PROBE (2026-07-11): the loudness pop survived every fix + enhancements-off. Stop
+// theorizing; measure on HER client. Taps the panner's stereo output; every 300ms while playing,
+// logs a dbg line ONLY when level steps >2dB while yaw barely moved — i.e. exactly the pop.
+(function(){
+  const ctx = _audioListener.context, pa = _mbox && _mbox.audio; if(!pa) return;
+  const split = ctx.createChannelSplitter(2), aL = ctx.createAnalyser(), aR = ctx.createAnalyser();
+  aL.fftSize = aR.fftSize = 1024; let tapped = false;
+  const bufL = new Float32Array(1024), bufR = new Float32Array(1024);
+  const rms = (a,b)=>{ a.getFloatTimeDomainData(b); let s=0; for(let i=0;i<b.length;i++) s+=b[i]*b[i];
+    return Math.sqrt(s/b.length); };
+  let prev = null;
+  setInterval(()=>{
+    if(!pa.isPlaying) { prev=null; return; }
+    if(!tapped){ pa.getOutput().connect(split); split.connect(aL,0); split.connect(aR,1); tapped=true; }
+    const L = rms(aL,bufL), R = rms(aR,bufR), tot = Math.hypot(L,R);
+    const yaw = Math.round(camera.rotation.y*180/Math.PI*10)/10;
+    const dB = 20*Math.log10(Math.max(tot,1e-6));
+    if(prev && Math.abs(dB - prev.dB) > 2 && Math.abs(yaw - prev.yaw) < 4)
+      dbg('pan', `POP: ${prev.dB.toFixed(1)}→${dB.toFixed(1)}dB @yaw ${prev.yaw}→${yaw}° L=${L.toFixed(3)} R=${R.toFixed(3)}`, 'w');
+    window.__panProbe = {yaw, L:+L.toFixed(4), R:+R.toFixed(4), dB:+dB.toFixed(1)};
+    prev = {dB, yaw};
+  }, 300);
+})();
 function _mboxFlatMode(){ return document.getElementById('mboxFlatToggle')?.checked; }
 function _mboxToggle(){
   if(!_mbox) return 'no music box';
