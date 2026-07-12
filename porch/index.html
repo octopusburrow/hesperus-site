@@ -1412,8 +1412,19 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   G.traverse(o=>{ if(o.isMesh) o.castShadow = true; });
   G.position.set(-2.4, 0, 2.2);
   G.rotation.y = 2.32;                                     // facing the table, the candle, the stove
-  scene.add(G); addCollider(G, 'swing');
+  scene.add(G);
+  addCollider(postL, 'swing-post'); addCollider(postR, 'swing-post');   // posts only: the seat must be enterable (click-sit)
   window._swingHanger = H;                                 // swayed in the flicker block: the porch breathes
+  // CLICK-SIT (Nix 2026-07-12, jank pre-authorized): click the bench → teleport onto it in the
+  // chairsit pose, facing the way the swing faces. Click again (or walk) to stand.
+  const sitHull = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 0.6), new THREE.MeshBasicMaterial({visible:false}));
+  sitHull.position.set(0, -1.35, 0.02); H.add(sitHull);
+  sitHull.userData.action = ()=>{
+    const wp = seat.getWorldPosition(new THREE.Vector3());
+    player.position.set(wp.x, 0, wp.z);
+    player.rotation.y = G.rotation.y + Math.PI;            // player fwd is -Z: +π = face where the swing faces
+    return (window.__playerPose ? window.__playerPose('chairsit') : 'no pose system') + ' — the swing'; };
+  _clickables.push(sitHull);
 }
 
 // ---- a literal mirror, framed, to the left of the bookcases (so you can see yourself) ----
@@ -3126,6 +3137,12 @@ window.__POSES = {
     ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.62); set(s+'LowerLeg', env*1.38); set(s+'Foot', -env*0.25); });
     set('spine', env*0.10); set('hips', -env*0.06);
     vrm.scene.position.y = -env*0.56; } },
+  chairsit: { eyeDrop: 0.42, apply(vrm, env){                // bench/chair height (the swing): thighs level,
+    const h=vrm.humanoid; if(!h) return;                     // shins down, feet dangling just off the deck
+    const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
+    ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.50); set(s+'LowerLeg', env*1.50); set(s+'Foot', -env*0.10); });
+    set('spine', env*0.06); set('hips', -env*0.04);
+    vrm.scene.position.y = -env*0.34; } },
 };
 let _poseHeld=null, _poseCrouch=false, _poseEnv=0, _poseApplied=null, _posePX=0, _posePZ=0;
 window.__playerPose = (nm)=>{ _poseHeld = (_poseHeld===nm) ? null : nm; return _poseHeld ? 'pose: '+_poseHeld : 'pose: cleared'; };
@@ -3133,7 +3150,7 @@ window.__setCrouch = (on)=>{ _poseCrouch = !!on; };
 window.__playerPoseTick = (dt)=>{
   const sp = Math.hypot(player.position.x-_posePX, player.position.z-_posePZ)/Math.max(dt,1e-4);
   _posePX=player.position.x; _posePZ=player.position.z;
-  if(_poseHeld==='sit' && sp > 0.5) _poseHeld = null;         // walking stands you up
+  if((_poseHeld==='sit' || _poseHeld==='chairsit') && sp > 0.5 && sp < 30) _poseHeld = null;   // walking stands you up (>30 m/s = a teleport, e.g. click-sit, not a walk)
   const want = _poseCrouch ? 'crouch' : _poseHeld;
   if(want && want!==_poseApplied && _poseEnv > 0.03){          // switching poses: fade the old out first
     _poseEnv = Math.max(0, _poseEnv - dt*5);
