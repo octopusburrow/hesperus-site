@@ -5315,6 +5315,11 @@ function cachedCreds(q){
       }
       dbg('stt←', `${who}: ${(m.text||'').slice(0,80)}  ${disp}`); }
     else if(m.t === 'leave'){ const r = remotes.get(m.id); if(r){ scene.remove(r.group); remotes.delete(m.id); }
+      // ORPHANED PROPS (Nix 2026-07-12: refreshed mid-hold, camera hung in the air): whatever
+      // the departed was carrying, adopt it locally and let gravity finish — propPhysics arcs
+      // it down and releases ownership on rest, exactly like a throw.
+      if(window.__grab) for(const g of grabbables){ if(g.owner===m.id){
+        g.owner = myNet; g.carrying = false; g.vel.set(0,0,0); g.offset = null; } }
       if(window.__rtcDropPeer) window.__rtcDropPeer(m.id); }
   };
   }
