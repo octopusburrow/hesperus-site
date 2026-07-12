@@ -2910,9 +2910,12 @@ addEventListener('keydown', e=>{
   if(e.code==='KeyE'){                                     // holding the camera → E = selfie flip; else grab/drop as before
     if(!(window.__cameraFlip && window.__cameraFlip()) && window.__grabToggle) dbg('grab', window.__grabToggle()); }
   if(e.code==='KeyF' && window.__cameraSnapIfHeld){ window.__cameraSnapIfHeld(); }  // F = shutter while holding the camera
-  if((e.code==='KeyC' || e.code==='ControlLeft' || e.code==='ControlRight') && !e.repeat && window.__setCrouch){
-    if(e.code!=='KeyC') e.preventDefault();               // keep Ctrl combos from leaking (browser shortcuts still work via keyup timing)
-    window.__setCrouch(true); if(typeof dbg==='function') dbg('pose', 'crouch DOWN ('+e.code+')', 'k'); }   // hold Ctrl = crouch (her-shooter muscle memory); C = alias. dbg: if you hold Ctrl and DON'T see this line, the key never reached us
+  if(e.code==='KeyC' && !e.repeat && window.__setCrouch){ window.__setCrouch(true);
+    if(typeof dbg==='function') dbg('pose', 'crouch DOWN', 'k'); }
+  // Ctrl-crouch REMOVED (2026-07-12, RIP one Chrome tab): crouch-walking forward = Ctrl+W = the
+  // browser closes the window, and preventDefault can't intercept it in a normal tab. Shooter
+  // bindings need to own their window; we're tenants. Revisit if the porch ever ships as a PWA
+  // or fullscreen-with-keyboard-lock (navigator.keyboard.lock CAN capture Ctrl+W — future fix).
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
   if(e.code==='KeyV'){ _micToggleUI(); } });                               // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
 function _micToggleUI(){ const cb=document.getElementById('micTalk');
@@ -2924,7 +2927,7 @@ addEventListener('keyup',   e=>{
   // EATEN by the guard, leaving keys.KeyW stuck true and the body walking forever (Nix 2026-07-10).
   // Clearing a movement key mid-typing is harmless — keydown's guard stops typing from SETTING keys.
   keys[e.code] = false;
-  if((e.code==='KeyC' || e.code==='ControlLeft' || e.code==='ControlRight') && window.__setCrouch) window.__setCrouch(false); });   // release = stand
+  if(e.code==='KeyC' && window.__setCrouch) window.__setCrouch(false); });   // release = stand
 const _releaseAllKeys = ()=>{ for(const k in keys) keys[k] = false; wantJump = false;
   if(window.__setCrouch) window.__setCrouch(false); };
 addEventListener('blur', _releaseAllKeys);                  // alt-tab away = let go of everything
