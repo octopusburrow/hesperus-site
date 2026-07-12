@@ -186,7 +186,7 @@
   <label class="mrow"><input type="checkbox" id="starNamesToggle" checked><span>☆ Star names</span></label>
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
-  <label class="mrow"><input type="checkbox" id="skyDarkToggle"><span>🌌 Darker dusk (experiment)</span></label>
+  <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
@@ -632,19 +632,12 @@ const sky = new THREE.Mesh(
         // ~2x the previous stop's range (heavy overlap = no visible seams).
         // rev.8 (Nix): bands compressed to HALF height — the warm colors hug the horizon; the
         // dark-blue → black tail keeps its long slow death into the night.
-        vec3 g = mix(vec3(0.68,0.30,0.085), vec3(0.30,0.115,0.095), smoothstep(0.0,0.10,ha));      // orange → orange-red
-        g = mix(g, vec3(0.105,0.070,0.150), smoothstep(0.03,0.13,ha));                             // → dusty purple
-        g = mix(g, vec3(0.028,0.040,0.092), smoothstep(0.08,0.21,ha));                             // → dark blue
-        g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.28,0.72,ha));                             // → near-black (long tail preserved)
-        // DARKER-DUSK EXPERIMENT (Nix 2026-07-11, menu toggle, "just for yuks"): whole dusk
-        // color-treated darker, violet/blue span pulled UPWARD — live-comparable, easy rollback.
-        if(uSkyDark > 0.5){
-          vec3 g2 = mix(vec3(0.30,0.135,0.05), vec3(0.155,0.062,0.058), smoothstep(0.0,0.09,ha));
-          g2 = mix(g2, vec3(0.085,0.058,0.135), smoothstep(0.025,0.11,ha));       // violet arrives sooner
-          g2 = mix(g2, vec3(0.026,0.038,0.090), smoothstep(0.06,0.19,ha));        // blue arrives sooner
-          g2 = mix(g2, vec3(0.008,0.011,0.026), smoothstep(0.34,0.85,ha));        // and both LINGER upward
-          g = g2;
-        }
+        // rev.11 (Nix): the 50-50 — midpoint of the classic dusk and the darker-dusk experiment.
+        // Warm bands sit between the two brightnesses; violet/blue arrive earlier and linger higher.
+        vec3 g = mix(vec3(0.49,0.218,0.068), vec3(0.228,0.089,0.077), smoothstep(0.0,0.095,ha));   // orange → orange-red
+        g = mix(g, vec3(0.095,0.064,0.143), smoothstep(0.028,0.12,ha));                            // → dusty violet
+        g = mix(g, vec3(0.027,0.039,0.091), smoothstep(0.07,0.20,ha));                             // → dark blue
+        g = mix(g, vec3(0.008,0.011,0.026), smoothstep(0.31,0.79,ha));                             // → near-black (long tail)
         vec3 col = mix(night, g, w);
         // haze: EAST ONLY (Nix rev.5 — it was dimming the sunward horizon's brightest line)
         float haze = smoothstep(0.022, 0.0, abs(h)) * (1.0 - w);
@@ -749,39 +742,43 @@ function _buildStarLabels(){
   // three.js. Auto-billboards, no shader derivatives, no font SDF, no lookAt loop.
   // rev.3 refinements (Nix): smaller, sky-blue, Georgia italic (house font), magnitude tiers
   // (bright stars → fuller labels; dim → smaller/fainter), below-horizon culled, zenith-safe offsets.
-  const _mkLabel = (name, dim)=>{ const c=document.createElement('canvas');
-    const px = dim ? 34 : 44, pad=12; const ctx=c.getContext('2d');
-    const font = `italic ${px}px Georgia, serif`; ctx.font=font;
+  // rev.4 (Nix): NO italics (hard to read), primary tier back to full presence, and a SECOND
+  // BATCH — 138 dimmer named stars (stars_named2.json, HYG proper names to mag 3.6) with
+  // smaller, fainter labels underneath the classic 63.
+  const _mkLabel = (name, tier)=>{ const c=document.createElement('canvas');   // tier 0=bright named, 1=second batch
+    const px = tier ? 30 : 44, pad=12; const ctx=c.getContext('2d');
+    const font = `${px}px Georgia, serif`; ctx.font=font;
     const w=Math.ceil(ctx.measureText(name).width)+pad*2; c.width=w; c.height=px+pad*2;
     const x=c.getContext('2d'); x.font=font;
-    x.fillStyle = dim ? 'rgba(126,150,186,0.55)' : 'rgba(148,175,214,0.78)';   // cool sky blue
+    x.fillStyle = tier ? 'rgba(120,145,182,0.50)' : 'rgba(148,175,214,0.80)';   // cool sky blue
     x.textBaseline='middle'; x.shadowColor='rgba(0,0,0,0.75)'; x.shadowBlur=5;
     x.fillText(name, pad, c.height/2);
     const tx=new THREE.CanvasTexture(c); tx.colorSpace=THREE.SRGBColorSpace;
     const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tx, transparent:true, depthTest:false, fog:false,
-      opacity: dim?0.75:1}));
-    const SC = dim ? 0.17 : 0.23;                          // smaller across the board (was 0.34)
+      opacity: tier?0.7:1}));
+    const SC = tier ? 0.15 : 0.24;
     sp.scale.set(c.width*SC, c.height*SC, 1); sp.renderOrder=3; return sp; };
-  fetch('./assets/stars_named.json').then(r=>r.json()).then(list=>{
-    const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
-    let built = 0;
+  const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
+  let _built = 0;
+  const _place = (list, tier)=>{
     for(const s of list){
       if(s.n === 'Sol') continue;                          // no Sun label in the night sky
       const wx = (s.x*cy + s.z*sy)*R, wy = s.y*R, wz = (-s.x*sy + s.z*cy)*R;   // rotate into world
       if(wy < 4) continue;                                 // below the horizon: not our sky tonight
-      const sp = _mkLabel(s.n, (s.m ?? 2) > 1.2);          // mag tiers: ≤1.2 bright, else dim
+      const sp = _mkLabel(s.n, tier);
       // zenith-safe offset: push the label along the LOCAL 'sky north' tangent, not raw +y —
       // near the pole raw +y sat the label ON its star (Polaris/Kochab, Nix).
       const dir = new THREE.Vector3(wx,wy,wz).normalize();
       let off = new THREE.Vector3(0,1,0).addScaledVector(dir, -dir.y);   // up projected onto the sky sphere
       if(off.lengthSq() < 0.05) off.set(1,0,0).addScaledVector(dir, -dir.x);  // zenith fallback: east-ish
       off.normalize();
-      sp.position.set(wx, wy, wz).addScaledVector(off, 11);
-      _starLabels.add(sp); built++;
+      sp.position.set(wx, wy, wz).addScaledVector(off, tier ? 8 : 11);
+      _starLabels.add(sp); _built++;
     }
-    window.__starLabelCount = built;
-    if(typeof dbg==='function') dbg('stars', `labels built (sprites v3): ${built} above horizon`, 'k');
-  }).catch(e=>console.warn('star labels failed', e));
+    window.__starLabelCount = _built;
+    if(typeof dbg==='function') dbg('stars', `labels: ${_built} above horizon (tier${tier} added)`, 'k'); };
+  fetch('./assets/stars_named.json').then(r=>r.json()).then(l=>_place(l, 0)).catch(e=>console.warn('star labels failed', e));
+  fetch('./assets/stars_named2.json').then(r=>r.json()).then(l=>_place(l, 1)).catch(()=>{});   // second batch: best-effort
 }
 function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
 window.__setStarNames = setStarNames;
@@ -792,8 +789,8 @@ window.__setStarNames = setStarNames;
     const hs=document.getElementById('hiShadowToggle');
     if(hs){ hs.checked = (localStorage.getItem('porch.shadowRes')||'1024')==='2048';
       hs.addEventListener('change', ()=>window.__setShadowRes && __setShadowRes(hs.checked?2048:1024)); }
-    const sd=document.getElementById('skyDarkToggle');
-    if(sd) sd.addEventListener('change', ()=>{ sky.material.uniforms.uSkyDark.value = sd.checked?1:0; }); };
+    const ad=document.getElementById('audioDebugBtn');
+    if(ad) ad.addEventListener('click', ()=>window.__recordAudio && __recordAudio(10)); };
   if(document.readyState==='loading') addEventListener('DOMContentLoaded', _wireStars);
   else _wireStars();
   // DEFAULT ON (Nix 2026-07-11 "still not working, what gives" — remove the toggle from the
@@ -5267,6 +5264,29 @@ function _audioGesture(){                                   // autoplay gate: re
     else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambientFade(_ambientVol, 4); } }
 }
 ['pointerdown','keydown','touchstart'].forEach(ev=>addEventListener(ev, _audioGesture));
+// ---- AUDIO DEBUG CAPTURE (Nix 2026-07-11, "can you capture the exact audio in my headphones?"):
+// records the WebAudio graph's MASTER output — everything you hear from the page, bit-exact,
+// BEFORE the OS/driver/bluetooth touch it — and downloads a webm. If the recording is clean but
+// your ears hear crunch, the fault is downstream of the browser (driver/BT codec/output device).
+window.__recordAudio = function(secs=10){
+  try{
+    const ctx = _audioListener.context;
+    const dest = ctx.createMediaStreamDestination();
+    _audioListener.getInput().connect(dest);               // master bus tap
+    const rec = new MediaRecorder(dest.stream, {mimeType:'audio/webm'});
+    const chunks=[]; rec.ondataavailable = e=>chunks.push(e.data);
+    rec.onstop = ()=>{
+      _audioListener.getInput().disconnect(dest);
+      const url = URL.createObjectURL(new Blob(chunks, {type:'audio/webm'}));
+      const a=document.createElement('a'); a.href=url; a.download='porch-audio-debug.webm';
+      document.body.appendChild(a); a.click(); a.remove();
+      if(window.__logChat) __logChat('audio','⏺ done — porch-audio-debug.webm downloaded. Send it to Hesperus.','sys'); };
+    rec.start();
+    if(window.__logChat) __logChat('audio',`⏺ recording master output for ${secs}s — play the crunchy thing NOW`,'sys');
+    setTimeout(()=>rec.stop(), secs*1000);
+    return 'recording';
+  }catch(e){ console.warn('audio capture failed', e); return 'capture failed: '+e.message; }
+};
 let _ambientVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem('porch.ambientVol')||'0.20')));
 { // immediate wiring (module scripts often run after DOMContentLoaded — the star-names lesson)
   const _wire = ()=>{
