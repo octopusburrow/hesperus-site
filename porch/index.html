@@ -2758,11 +2758,12 @@ addEventListener('pointermove', e=>{
   window.__setReticleHot = on => { xh.style.transform = 'translate(-50%,-50%)'+(on?' scale(1.6)':'');
     xh.style.background = on ? 'rgba(255,214,140,.9)' : 'rgba(232,220,192,.5)'; };
   let _plClick=false;                                       // suppress the lock-request on drag-release
-  renderer.domElement.addEventListener('mousedown', ()=>{ _plClick = !document.pointerLockElement; });
+  renderer.domElement.addEventListener('mousedown', (e)=>{   // LMB ONLY locks (Nix 2026-07-12: RMB was
+    _plClick = e.button===0 && !document.pointerLockElement; });   // re-locking and orphaning its own menu)
   // WINDOW-level on purpose: the world-button click handler is also on window and registered FIRST,
   // so _clickConsumed is decided before we choose to lock (canvas-level would fire before it).
   addEventListener('mouseup', e=>{
-    if(_plClick && e.target && e.target.tagName==='CANVAS'
+    if(_plClick && e.button===0 && e.target && e.target.tagName==='CANVAS'
        && !document.pointerLockElement && !renderer.xr.isPresenting && !_clickConsumed){
       const dx=Math.abs(e.clientX-_cdX), dy=Math.abs(e.clientY-_cdY);
       if(dx<4 && dy<4) renderer.domElement.requestPointerLock();   // click (not drag, not a button) → lock
@@ -2785,6 +2786,9 @@ addEventListener('contextmenu', e=>{
   const m = document.createElement('div'); _objMenu = m;
   const px = document.pointerLockElement ? innerWidth/2+14 : e.clientX;
   const py = document.pointerLockElement ? innerHeight/2 : e.clientY;
+  if(document.pointerLockElement) document.exitPointerLock();   // menu needs a cursor: RMB from reticle
+                                                                // mode drops to HUD (Nix 2026-07-12);
+                                                                // LMB on empty canvas re-locks as usual
   m.style.cssText = `position:fixed;left:${px}px;top:${py}px;z-index:40;background:rgba(14,18,25,.96);`+
     `border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.5);font:13px Georgia,serif;color:#e8dcc0`;
   const row = (label, fn)=>{ const b=document.createElement('div');
