@@ -1228,8 +1228,19 @@ function _updateHover(){
   }
   if(window.__setReticleHot) window.__setReticleHot(!!(g||_rayShelf||c)); }
 function _trackVel(g, pos, dt){ if(dt>0 && _propPrev[g.pid]) g.vel.copy(pos).sub(_propPrev[g.pid]).multiplyScalar(1/dt); _propPrev[g.pid]=pos.clone(); }
+const _ROTY_PI = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI);
 function _propHoldUpdate(dt){                          // glue carried props to the holder + measure throw velocity
-  if(heldProp){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+  if(heldProp && heldProp.isCamera3D && !renderer.xr.isPresenting){
+    // HANDHELD CAMERA (Nix dogfood 2026-07-11): rides bottom-right of the view and AIMS WHERE
+    // YOU LOOK (full pitch, unlike generic carry which only knows body yaw). mesh +Z = view fwd.
+    const g=heldProp, cq=camera.getWorldQuaternion(new THREE.Quaternion()),
+      cp=camera.getWorldPosition(new THREE.Vector3()),
+      fwd=new THREE.Vector3(0,0,-1).applyQuaternion(cq), rgt=new THREE.Vector3(1,0,0).applyQuaternion(cq),
+      up=new THREE.Vector3(0,1,0).applyQuaternion(cq),
+      p=cp.addScaledVector(fwd,0.42).addScaledVector(rgt,0.15).addScaledVector(up,-0.11);
+    g.mesh.quaternion.copy(cq).multiply(_ROTY_PI);
+    _trackVel(g,p,dt); g.mesh.position.copy(p); sendProp(g); }
+  else if(heldProp){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
     const p=new THREE.Vector3(player.position.x+f.x*0.55, player.position.y+1.02, player.position.z+f.z*0.55);
     _trackVel(heldProp,p,dt); heldProp.mesh.position.copy(p); sendProp(heldProp); }
   for(const hand of ['left','right']){ const g=_heldHand[hand]; if(!g) continue;
@@ -1271,7 +1282,10 @@ function applyOwn(pid, owner){ const g=grabbablesById[pid]||_ensureBookProp(pid)
   if(owner!==myNet){ if(heldProp===g) heldProp=null; for(const h of ['left','right']) if(_heldHand[h]===g) _heldHand[h]=null; g.carrying=false; } }
 window.__propPhysics = propPhysics; window.__grabToggle = grabToggleDesktop;
 window.__grabState = ()=>({held:heldProp?heldProp.pid:null, hover:_hoverG?_hoverG.pid:null, shelf:_rayShelf?1:0, n:grabbables.length});  // headless LMB-grab test
-window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, applyOwn, grabProp, dropProp };
+function grabSpecific(g){ if(!g || heldProp===g) return heldProp;      // targeted pickup (camera click)
+  if(heldProp) { const h=heldProp; heldProp=null; dropProp(h); }
+  heldProp = grabProp(g); return heldProp; }
+window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, applyOwn, grabProp, dropProp, grabSpecific };
 { // place a few props on the tabletop
   const topY = _tableBox ? _tableBox.max.y : 0.764, cz = -0.6;
   const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.038,0.075,16),
@@ -2606,6 +2620,7 @@ addEventListener('contextmenu', e=>{
     b.onmouseenter=()=>b.style.background='rgba(90,80,60,.35)'; b.onmouseleave=()=>b.style.background='';
     b.onclick=()=>{ _closeObjMenu(); fn(); }; m.appendChild(b); };
   row(heldProp===g ? '⬇ Put down' : '✋ Pick up', ()=> window.__grab && __grab.grabToggleDesktop && __grab.grabToggleDesktop());
+  if(g.isCamera3D) row('📸 3-second timer', ()=>{ if(window.__cameraSnap) dbg('camera', __cameraSnap(), 'k'); });
   if(sid) row('🗑 Delete', ()=>{ if(sock && sock.readyState===1) sendDelObj(sid); else removeObj(sid); });
   document.body.appendChild(m);
   setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
@@ -2622,6 +2637,7 @@ addEventListener('keydown', e=>{
   if(e.code==='KeyX'){ if(!deleteHeldObject() && window.despawnLast) despawnLast(); }   // held image/text → delete it; else last block
   if(e.code==='Escape') _closeObjMenu();
   if(e.code==='KeyE' && window.__grabToggle){ dbg('grab', window.__grabToggle()); }
+  if(e.code==='KeyF' && window.__cameraSnapIfHeld){ window.__cameraSnapIfHeld(); }  // F = shutter while holding the camera
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
   if(e.code==='KeyV'){ _micToggleUI(); } });                               // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
 function _micToggleUI(){ const cb=document.getElementById('micTalk');
@@ -5476,25 +5492,83 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   const G = new THREE.Group();
   const bodyMat = new THREE.MeshStandardMaterial({color:0x22242c, roughness:0.5, metalness:0.4});
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.062, 0.036), bodyMat); G.add(body);
+  // lens on +Z: photos shoot out the mesh's +Z (see snap math) — the lens now visibly agrees
+  // (dogfood rev: it used to sit on -Z, so the camera LOOKED backwards relative to its shots).
   const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.023, 0.030, 14),
     new THREE.MeshStandardMaterial({color:0x0c0d12, roughness:0.2, metalness:0.7}));
-  lens.rotation.x = Math.PI/2; lens.position.set(0, 0.004, -0.030); G.add(lens);
+  lens.rotation.x = Math.PI/2; lens.position.set(0, 0.004, 0.030); G.add(lens);
   const shutter = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.006, 10),
     new THREE.MeshStandardMaterial({color:0xc94b40, roughness:0.4}));
   shutter.position.set(0.030, 0.034, 0); G.add(shutter);
+  // BACK SCREEN (Nix: "preview window/image in the back if it's not ridiculous" — it's not):
+  // a live viewfinder plane on the -Z face, fed by a small render target while the camera is held.
+  const vfW=320, vfH=200;
+  const vfRT = new THREE.WebGLRenderTarget(vfW, vfH, {depthBuffer:true});
+  const vfCam = new THREE.PerspectiveCamera(58, vfW/vfH, 0.05, 300);
+  const screenMat = new THREE.MeshBasicMaterial({color:0x0a0c10});
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.084, 0.0525), screenMat);
+  screen.position.set(0, 0.004, -0.0185); screen.rotation.y = Math.PI; G.add(screen);
   G.position.set(-0.46, topY+0.031, -0.86); G.rotation.y = 0.5;
   G.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
   const g = _addProp('camera', G, 0.031); g.isCamera3D = true;   // grabbable via the prop system
-  // click hull for the shutter
+  // click = PICK UP (dogfood: click used to fire the shutter while you were just trying to grab
+  // it). Held: F / red ● = instant snap. Tabletop timer lives in the RMB menu.
   const hull = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.10), new THREE.MeshBasicMaterial({visible:false}));
-  hull.userData.action = ()=> _cameraSnap(G); G.add(hull); _clickables.push(hull);
+  hull.userData.action = ()=>{
+    if(window.__heldProp && __heldProp()===g) return _cameraSnap(G, true);
+    window.__grab.grabSpecific(g);
+    return 'camera in hand — aim with your view · F or ● = shutter · E = put down'; };
+  G.add(hull); _clickables.push(hull);
   let _snapBusy = false;
   const CAM_W=1024, CAM_H=640;
   let camRT=null, camCam=null, cam2d=null;
-  function _cameraSnap(root){
+  // ---- viewfinder plumbing: pose a camera from the mesh (shared by preview + snap)
+  function _poseFrom(root, cam){
+    const wp = root.getWorldPosition(new THREE.Vector3());
+    const wq = root.getWorldQuaternion(new THREE.Quaternion());
+    cam.position.copy(wp).addScaledVector(new THREE.Vector3(0,0,-0.05).applyQuaternion(wq), 1);
+    cam.quaternion.copy(wq); cam.rotateY(Math.PI); cam.updateMatrixWorld(true); }
+  function _rtRender(rt, cam){
+    const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
+    const old = renderer.getRenderTarget();
+    renderer.setRenderTarget(rt); renderer.render(scene, cam); renderer.setRenderTarget(old);
+    renderer.xr.enabled = wasXR; }
+  // ---- HTML viewfinder HUD (desktop): live preview + red shutter, bottom-right
+  const vfHud = document.createElement('div');
+  vfHud.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:30;display:none;'+
+    'background:#14171f;border:2px solid #3a4152;border-radius:12px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,.55)';
+  const vfCanvas = document.createElement('canvas'); vfCanvas.width=vfW; vfCanvas.height=vfH;
+  vfCanvas.style.cssText = 'display:block;width:280px;border-radius:6px;background:#000';
+  const vfRow = document.createElement('div');
+  vfRow.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:7px;font:12px Georgia,serif;color:#9aa4b8';
+  const vfBtn = document.createElement('button');
+  vfBtn.textContent = '●'; vfBtn.title = 'shutter (F)';
+  vfBtn.style.cssText = 'font:20px Georgia;color:#fff;background:#c94b40;border:0;border-radius:50%;'+
+    'width:34px;height:34px;cursor:pointer;line-height:1';
+  const vfHint = document.createElement('span'); vfHint.textContent = 'F = shutter · E = put down';
+  vfRow.appendChild(vfBtn); vfRow.appendChild(vfHint); vfHud.appendChild(vfCanvas); vfHud.appendChild(vfRow);
+  document.body.appendChild(vfHud);
+  vfBtn.addEventListener('click', e=>{ e.stopPropagation(); _cameraSnap(G, true); });
+  const vf2d = vfCanvas.getContext('2d');
+  const vfBuf = new Uint8Array(vfW*vfH*4), vfImg = vf2d.createImageData(vfW, vfH);
+  let _vfAcc = 0, _wasHeld = false;
+  window.__cameraTick = (dt)=>{
+    const held = !!(window.__heldProp && __heldProp()===g && !renderer.xr.isPresenting);
+    if(held !== _wasHeld){ _wasHeld = held; vfHud.style.display = held?'block':'none';
+      screenMat.map = held ? vfRT.texture : null; screenMat.color.setHex(held?0xffffff:0x0a0c10);
+      screenMat.needsUpdate = true; }
+    if(!held) return;
+    _vfAcc += dt; if(_vfAcc < 0.12) return; _vfAcc = 0;       // ~8 Hz: alive, not expensive
+    _poseFrom(G, vfCam); _rtRender(vfRT, vfCam);
+    renderer.readRenderTargetPixels(vfRT, 0, 0, vfW, vfH, vfBuf);
+    for(let y=0;y<vfH;y++){ const sy=vfH-1-y;
+      for(let x=0;x<vfW;x++){ const s=(sy*vfW+x)*4, d=(y*vfW+x)*4;
+        vfImg.data[d]=vfBuf[s]; vfImg.data[d+1]=vfBuf[s+1]; vfImg.data[d+2]=vfBuf[s+2]; vfImg.data[d+3]=255; } }
+    vf2d.putImageData(vfImg, 0, 0); };
+  function _cameraSnap(root, instant){
     if(_snapBusy) return 'camera busy';
     _snapBusy = true;
-    let n = 3;
+    let n = instant ? 0 : 3;
     const tick = ()=>{
       if(n > 0){ if(window.__logChat) __logChat('camera', '📸 '+n+'…', 'sys'); n--; setTimeout(tick, 900); return; }
       // FLASH + capture
@@ -5540,7 +5614,11 @@ window.__musicboxTick = (dt)=>{                             // called from the r
     };
     tick(); return 'camera: 3…2…1…';
   }
-  window.__cameraSnap = ()=> _cameraSnap(G);
+  window.__cameraSnap = ()=> _cameraSnap(G);                 // 3-2-1 timer (tabletop selfie)
+  window.__cameraSnapIfHeld = ()=>{                           // F key: instant, only when in hand
+    if(window.__heldProp && __heldProp()===g){ dbg('camera', _cameraSnap(G, true)||'snap', 'k'); return true; }
+    return false; };
+  window.__worldCamProp = g;                                  // headless dogfood probes
 })();
 
 // make.music: the PLACEABLE music object (upload/compose → grab it, positional) still needs a spine
@@ -6254,6 +6332,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   playaUniforms.uSpecPos.value.set(0, -999, 0);
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
+  if(window.__cameraTick) window.__cameraTick(dt);           // handheld camera: live viewfinder while held
   if(window.__blobTick) window.__blobTick();                 // avatar drop-shadows follow their bodies
   // perf line in the debug feed (Nix 2026-07-11): fps + draw calls + tris, refreshed 1/s
   _perfFrames++; if(t - _perfT0 >= 1){
