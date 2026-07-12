@@ -342,6 +342,7 @@ let _clickConsumed=false;                                           // a world-b
 addEventListener('mouseup', e=>{
   if(e.button!==0) return;                                          // RMB is EXCLUSIVELY the object menu (Nix 2026-07-12:
                                                                     // it was ALSO running this grab path first — the delete bug)
+  if(window._menuNav){ const n=_menuNav; window._menuNav=null; n.fire(); return; }   // reticle menu open: LMB = select highlighted row
   if(e.target && e.target.tagName!=='CANVAS') return;               // UI clicks stay UI clicks
   if(Math.hypot(e.clientX-_cdX, e.clientY-_cdY)>6 || performance.now()-_cdT>400) return;  // that was a drag
   if(document.pointerLockElement){ _clickRC.setFromCamera({x:0,y:0}, camera); }
@@ -2767,6 +2768,7 @@ let pitch = 0, dragging = false;
 renderer.domElement.addEventListener('pointerdown', ()=>{ dragging = true; });
 addEventListener('pointerup', ()=> dragging = false);
 addEventListener('pointermove', e=>{
+  if(window._menuNav){ _menuNav.move(e.movementY); return; }   // reticle menu open: mouse drives the highlight, not the camera
   if((!dragging && !document.pointerLockElement) || renderer.xr.isPresenting) return;
   player.rotation.y -= e.movementX * 0.0035;
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0035));
@@ -2803,7 +2805,7 @@ let _spawnKinds = ['cube','sphere','cone','cylinder'], _spawnI = 0;
 // Works on the hover-glowed prop in both mouse and pointer-lock/reticule aim (that's what _hoverG
 // already is). v0: Delete (networked delobj when it has a sid) + Grab/Drop. Radial later if it earns it.
 let _objMenu = null;
-function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; } }
+function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; } window._menuNav = null; }
 addEventListener('contextmenu', e=>{
   const g = (typeof _hoverG!=='undefined' && _hoverG) || heldProp;
   if(!g){                                                  // aimed at nothing:
@@ -2826,13 +2828,12 @@ addEventListener('contextmenu', e=>{
     }
   }
   const m = document.createElement('div'); _objMenu = m;
-  // CURSOR DISCIPLINE (Nix 2026-07-12): on unlock, Chrome restores the cursor to where it was
-  // when the lock STARTED — which we recorded. Put the menu THERE, so it opens under the cursor
-  // instead of at screen center while the cursor rematerializes somewhere else entirely.
-  const _lc = document.pointerLockElement && window._lockCursor;
-  const px = document.pointerLockElement ? (_lc ? _lc.x : innerWidth/2+14) : e.clientX;
-  const py = document.pointerLockElement ? (_lc ? _lc.y : innerHeight/2) : e.clientY;
-  if(document.pointerLockElement) document.exitPointerLock();   // menu needs a cursor (LMB on empty canvas re-locks)
+  // RETICLE-NATIVE MENU (Nix 2026-07-12, rev.2 of cursor discipline): in reticle mode the
+  // reticle IS the cursor, so the menu opens AT CENTER and we NEVER exit the lock — no cursor
+  // teleporting anywhere. Mouse-move highlights rows, LMB selects, Esc/RMB-again closes.
+  const _menuLocked = !!document.pointerLockElement;
+  const px = _menuLocked ? innerWidth/2+18 : e.clientX;
+  const py = _menuLocked ? innerHeight/2 : e.clientY;
   m.style.cssText = `position:fixed;left:${px}px;top:${py}px;z-index:40;background:rgba(14,18,25,.96);`+
     `border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.5);font:13px Georgia,serif;color:#e8dcc0`;
   const row = (label, fn)=>{ const b=document.createElement('div');
@@ -2855,7 +2856,18 @@ addEventListener('contextmenu', e=>{
     else removeObj(sid); });
   else dbg('objmenu', '⚠ no sid on this object — Delete row hidden', 'w');
   document.body.appendChild(m);
-  setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
+  if(_menuLocked){                                         // reticle nav: highlight via mouse, fire via LMB
+    const rows = [...m.children]; let idx = 0, acc = 0;
+    const hl = ()=> rows.forEach((r,i)=>{ r.style.background = i===idx ? 'rgba(90,80,60,.5)' : ''; });
+    hl();
+    window._menuNav = {
+      move(dy){ acc += dy;
+        if(acc >  18){ idx = Math.min(rows.length-1, idx+1); acc = 0; hl(); }
+        if(acc < -18){ idx = Math.max(0, idx-1); acc = 0; hl(); } },
+      fire(){ const r = rows[idx]; if(r && r.onpointerdown) r.onpointerdown({stopPropagation(){}}); } };
+  } else {
+    setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
+  }
 });
 addEventListener('keydown', e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;  // typing ≠ walking
