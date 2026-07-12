@@ -1308,54 +1308,71 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
 // We edit reality, not the draft. Pot-belly, cast iron, right of the bookcases (mirror's
 // symmetric spot), fire window + light breathing on the candle's layered-flicker cadence. ----
 {
-  const iron = new THREE.MeshStandardMaterial({color:0x1f1f24, roughness:0.92, metalness:0.35});
+  // pixel-iron: house-density mottled cast iron with sparse rust flecks (Nix: "could stand to
+  // be textured"). NearestFilter magnify = the same chunky-pixel read as the oak and deck.
+  const ironTex = (()=>{
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const x = c.getContext('2d');
+    x.fillStyle = '#26262c'; x.fillRect(0,0,64,64);
+    for(let i=0;i<1400;i++){ const v = 22 + (Math.random()*30|0);
+      x.fillStyle = `rgb(${v},${v},${v+5})`;
+      x.fillRect(Math.random()*64|0, Math.random()*64|0, 1, 1); }
+    for(let i=0;i<22;i++){ x.fillStyle = `rgba(140,80,42,${0.15+Math.random()*0.22})`;
+      x.fillRect(Math.random()*64|0, Math.random()*64|0, 2, 1); }
+    const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(3, 2); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  const iron = new THREE.MeshStandardMaterial({map:ironTex, color:0xb8b8c2,
+    roughness:0.92, metalness:0.3});
   const g = new THREE.Group();
-  // legs: four stubby angled feet
+  // legs: four stubby angled feet, spread for the bigger pot
   for(let i=0;i<4;i++){
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.022,0.03,0.16,8), iron);
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.026,0.036,0.18,8), iron);
     const a = Math.PI/4 + i*Math.PI/2;
-    leg.position.set(Math.cos(a)*0.17, 0.08, Math.sin(a)*0.17);
-    leg.rotation.z = Math.cos(a)*0.28; leg.rotation.x = -Math.sin(a)*0.28;
+    leg.position.set(Math.cos(a)*0.26, 0.09, Math.sin(a)*0.26);
+    leg.rotation.z = Math.cos(a)*0.30; leg.rotation.x = -Math.sin(a)*0.30;
     g.add(leg);
   }
-  // belly: squashed sphere — the pot
-  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 16), iron);
-  belly.scale.set(1, 0.92, 1); belly.position.y = 0.40; belly.castShadow = true; g.add(belly);
+  // belly: squashed sphere — the pot, 2x-ed on Nix's art direction (r 0.27 → 0.40)
+  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.40, 24, 18), iron);
+  belly.scale.set(1, 0.90, 1); belly.position.y = 0.48; belly.castShadow = true; g.add(belly);
   // waist ring + top plate + lid knob
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.245, 0.018, 8, 24), iron);
-  ring.rotation.x = Math.PI/2; ring.position.y = 0.52; g.add(ring);
-  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.20, 0.07, 20), iron);
-  top.position.y = 0.665; g.add(top);
-  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.02, 16), iron);
-  lid.position.y = 0.71; g.add(lid);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), iron);
-  knob.position.y = 0.735; g.add(knob);
-  // stovepipe: up, with a rain cap (chimney exits the sky's problem, not ours)
-  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 1.85, 12), iron);
-  pipe.position.y = 0.70 + 1.85/2; g.add(pipe);
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.068, 0.068, 0.05, 12), iron);
-  collar.position.y = 0.72; g.add(collar);
-  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.09, 12), iron);
-  cap.position.y = 0.70 + 1.85 + 0.07; g.add(cap);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.365, 0.022, 8, 28), iron);
+  ring.rotation.x = Math.PI/2; ring.position.y = 0.62; g.add(ring);
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.26, 0.08, 20), iron);
+  top.position.y = 0.86; g.add(top);
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.022, 16), iron);
+  lid.position.y = 0.912; g.add(lid);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.024, 10, 8), iron);
+  knob.position.y = 0.94; g.add(knob);
+  // stovepipe: up, with a rain cap. KEPT after Nix questioned it — a stove with no flue reads
+  // as a prop; the pipe is what says the thing breathes. Delete this stanza to overrule.
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.058, 1.72, 12), iron);
+  pipe.position.y = 0.90 + 1.72/2; g.add(pipe);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.076, 0.076, 0.055, 12), iron);
+  collar.position.y = 0.92; g.add(collar);
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.10, 12), iron);
+  cap.position.y = 0.90 + 1.72 + 0.08; g.add(cap);
   // door: raised round hatch on the front (+z), with the fire window in it
-  const door = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.035, 18), iron);
-  door.rotation.x = Math.PI/2; door.position.set(0, 0.40, 0.245); g.add(door);
-  const hinge = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.09, 0.02), iron);
-  hinge.position.set(0.125, 0.40, 0.255); g.add(hinge);
-  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.008, 6, 12), iron);
-  handle.position.set(-0.10, 0.40, 0.268); g.add(handle);
+  const door = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.04, 20), iron);
+  door.rotation.x = Math.PI/2; door.position.set(0, 0.48, 0.375); g.add(door);
+  const hinge = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.13, 0.024), iron);
+  hinge.position.set(0.185, 0.48, 0.385); g.add(hinge);
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.010, 6, 12), iron);
+  handle.position.set(-0.15, 0.48, 0.402); g.add(handle);
   // fire window: emissive disc behind three grille bars — THIS is what flickers
   const fireMat = new THREE.MeshStandardMaterial({color:0x120802,
     emissive:0xff7a28, emissiveIntensity:1.6, roughness:1});
-  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.085, 18), fireMat);
-  glass.position.set(0, 0.40, 0.264); g.add(glass);
+  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.125, 20), fireMat);
+  glass.position.set(0, 0.48, 0.398); g.add(glass);
   for(let i=-1;i<=1;i++){
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.17, 0.012), iron);
-    bar.position.set(i*0.055, 0.40, 0.269); g.add(bar);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.25, 0.014), iron);
+    bar.position.set(i*0.08, 0.48, 0.404); g.add(bar);
   }
   // warm light: shadowless (the candle owns the shadow budget), short throw, breathes in the loop
   const fire = new THREE.PointLight(0xff8434, 2.2, 5.5, 1.8);
-  fire.position.set(0, 0.42, 0.42); g.add(fire);
+  fire.position.set(0, 0.50, 0.58); g.add(fire);
   g.position.set(2.6, 0.005, -1.8);
   g.rotation.y = -0.38;                                   // door swivelled toward the room's middle
   scene.add(g); addCollider(g, 'stove');
