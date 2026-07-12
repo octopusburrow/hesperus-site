@@ -3275,20 +3275,8 @@ window.__playerPoseTick = (dt)=>{
       dbg('pose', `${_poseApplied} env=${_poseEnv.toFixed(2)} rootY(survived)=${playerVrm.scene.position.y.toFixed(3)} want=${(-(_poseEnv)*(P===__POSES.crouch?(window.__crouchDrop||0.52):0.5)).toFixed(2)}`, 'k'); } }
   if(P && playerVrm && _poseEnv>0.001){
     P.apply(playerVrm, _poseEnv);
-    // WRITE TRAP (2026-07-12, the levitation hunt, rev.3): rootY(survived)=0.000 exact, and the
-    // gait + IK anchor both have alibis. So: intercept the .y property itself and photograph the
-    // stack of whoever writes ~0 while a pose is held. The culprit names its own line number.
-    if(!playerVrm.userData._yTrap){
-      playerVrm.userData._yTrap = true;
-      const pos = playerVrm.scene.position; let _yv = pos.y; let _lastLog = 0;
-      Object.defineProperty(pos, 'y', { configurable: true,
-        get(){ return _yv; },
-        set(nv){ _yv = nv;
-          if(window.__netPose && Math.abs(nv) < 0.02 && performance.now() - _lastLog > 1500){
-            _lastLog = performance.now();
-            const st = (new Error().stack||'').split('\n').slice(2,5).map(s=>s.trim().replace(/^at /,'').slice(0,60)).join(' ← ');
-            if(typeof dbg==='function') dbg('pose', '⚠ rootY ZEROED by: '+st, 'w'); } } });
-    }
+    // (write trap removed 2026-07-12 — it served its purpose: convicted the desktop IK-residue
+    // janitor at the render loop's tail. The once/sec forensic line above stays for verification.)
   }
   if(!renderer.xr.isPresenting) camera.position.y = 1.6 - (P ? _poseEnv*P.eyeDrop : 0);   // feel the crouch
 };
@@ -6938,9 +6926,12 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     if(((renderer.xr.isPresenting && !window.__noik) || window.__forceIK) && window.__updatePlayerIK) window.__updatePlayerIK(dt);
     else{                                             // desktop / post-VR: undo IK residue (yaw-ease left the
       const sc = playerVrm.scene;                     // body rotated 45° + anchor offset after exiting VR — Nix)
-      if(sc.position.lengthSq() > 1e-10 || Math.abs(Math.atan2(Math.sin(sc.rotation.y-Math.PI), Math.cos(sc.rotation.y-Math.PI))) > 1e-6){
-        sc.position.set(0,0,0); sc.rotation.y = Math.PI;
-      }
+      // THE LEVITATION BUG'S TRUE CULPRIT (2026-07-12, write-trap conviction): this janitor
+      // treated the pose system's root drop as VR residue and zeroed it EVERY FRAME. Held
+      // poses own the root position; the janitor keeps rotation duty only while they're active.
+      const rotOff = Math.abs(Math.atan2(Math.sin(sc.rotation.y-Math.PI), Math.cos(sc.rotation.y-Math.PI))) > 1e-6;
+      if(window.__netPose){ if(rotOff) sc.rotation.y = Math.PI; }
+      else if(sc.position.lengthSq() > 1e-10 || rotOff){ sc.position.set(0,0,0); sc.rotation.y = Math.PI; }
     }
     applyFaceLife(playerVrm, t);                  // face life: blink + /face expressions
     playerVrm.update(dt);
