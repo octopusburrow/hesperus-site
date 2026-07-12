@@ -5241,6 +5241,29 @@ window.__openTextCompose = openTextCompose;                // the make.text huma
 // ~100ms extra latency is nothing on a porch.
 try{ THREE.AudioContext.setContext(new (window.AudioContext||window.webkitAudioContext)({latencyHint:'playback'})); }catch(e){}
 const _audioListener = new THREE.AudioListener(); camera.add(_audioListener);
+// PAN ZIPPER FIX (2026-07-11, the real one): Nix's L/R test cleared her output path; the crunch
+// is automation zipper — idle-bob rewrites listener pos/orient EVERY frame, Chrome re-steps the
+// panner gains per write. Clean at pan-saturated angles (gain delta = 0), garbo one degree off,
+// perfect when minimized (no frames → no writes). Fix: replace three's per-frame linear ramps
+// with setTargetAtTime exponential smoothing — continuous, glitch-proof gain motion.
+(function(){
+  const L = _audioListener.context.listener;
+  if(!L.positionX) return;                       // old API — keep three's default path
+  const _p=new THREE.Vector3(), _q=new THREE.Quaternion(), _s=new THREE.Vector3(),
+        _f=new THREE.Vector3(), _u=new THREE.Vector3(), TC=0.05;
+  _audioListener.updateMatrixWorld = function(force){
+    THREE.Object3D.prototype.updateMatrixWorld.call(this, force);
+    this.matrixWorld.decompose(_p,_q,_s);
+    _f.set(0,0,-1).applyQuaternion(_q); _u.set(0,1,0).applyQuaternion(_q);
+    const t = this.context.currentTime;
+    L.positionX.setTargetAtTime(_p.x,t,TC); L.positionY.setTargetAtTime(_p.y,t,TC);
+    L.positionZ.setTargetAtTime(_p.z,t,TC);
+    L.forwardX.setTargetAtTime(_f.x,t,TC); L.forwardY.setTargetAtTime(_f.y,t,TC);
+    L.forwardZ.setTargetAtTime(_f.z,t,TC);
+    L.upX.setTargetAtTime(_u.x,t,TC); L.upY.setTargetAtTime(_u.y,t,TC);
+    L.upZ.setTargetAtTime(_u.z,t,TC);
+  };
+})();
 window.__audioListener = _audioListener;                   // music objects attach positional audio to this
 let _ambient=null, _ambientLoading=false;
 let _ambientOn = localStorage.getItem('porch.ambient')!=='off';   // default ON, persisted per browser
