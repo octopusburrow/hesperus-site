@@ -812,9 +812,8 @@ window.__setStarNames = setStarNames;
   else _wireStars();
   // DEFAULT ON (Nix 2026-07-11 "still not working, what gives" — remove the toggle from the
   // equation entirely; the labels are pretty anyway). dbg lines say exactly what happened.
-  setTimeout(()=>{ try{ setStarNames(true);
-    if(typeof dbg==='function') dbg('stars','auto-on: labels requested (☆ menu toggles off)','k'); }catch(e){
-    if(typeof dbg==='function') dbg('stars','auto-on FAILED: '+e.message,'e'); } }, 4000);
+  // auto-on REMOVED (Nix 2026-07-12: "star names keep getting turned back on") — this was a
+  // debugging-era force-enable that overrode the menu 4s after boot. The ☆ toggle is now law.
 }
 
 // ---- the playa: cracked-earth PHOTO texture (First Light's CC0 ground, Nix's ask
@@ -3234,7 +3233,7 @@ window.__POSES = {
     const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
     ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.15); set(s+'LowerLeg', env*1.85); set(s+'Foot', -env*0.70); });
     set('spine', env*0.18); set('hips', -env*0.12);
-    vrm.scene.position.y = -env*(window.__crouchDrop||0.52); } },   // hips travel DOWN to the feet (Nix: -0.32 left you squatting in midair); __crouchDrop = live-tunable per body
+    vrm.scene.position.y = -env*(window.__crouchDrop||0.36); } },   // 0.52 put the soles THROUGH the deck once the janitor stopped eating the drop (Nix); 0.36 ≈ standing leg extent minus folded extent. __crouchDrop = live-tunable
   sit: { eyeDrop: 0.78, apply(vrm, env){
     const h=vrm.humanoid; if(!h) return;
     const set=(nm,x,z=0)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,z,'YXZ')); };
