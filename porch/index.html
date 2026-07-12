@@ -2088,6 +2088,14 @@ if(_residentPick){
         set('spine', env*0.18); set('hips', -env*0.12);
         vrm.scene.position.y = -env*0.32;                     // env rests at 0 both ends → clean return
       }},
+      sit: { dur:14, fn:(e,dur)=>{                            // settle onto the ground, dwell, rise
+        const h=vrm.humanoid; if(!h) return;
+        const p=Math.min(1,e/dur), env=Math.min(1, Math.sin(Math.PI*p)*2.2);   // long plateau: mostly sitting
+        const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
+        ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.62); set(s+'LowerLeg', env*1.38); set(s+'Foot', -env*0.25); });
+        set('spine', env*0.10); set('hips', -env*0.06);
+        vrm.scene.position.y = -env*0.56;                      // same measured numbers as the player sit
+      }},
       standingwave: { dur:3.6, fn:(e,dur)=>{
         const h=vrm.humanoid; if(!h) return;
         const p=Math.min(1,e/dur), env=Math.sin(Math.PI*p);      // 0→1→0: starts and ends at rest
@@ -2142,6 +2150,7 @@ if(_residentPick){
       if(/\b(cheer|celebrate|hooray|woo+)\b/.test(low)) return emote('cheer');
       if(/\braise (your )?hand\b|\bhand up\b|\braise\b/.test(low)) return emote('raise');
       if(/\bdance\b/.test(low)) return emote('dance');
+      if(/\b(sit|sit down|take a seat|have a seat)\b/.test(low)) return procEmote('sit');
       if(/\b(crouch|kneel|duck|squat)\b/.test(low)) return procEmote('crouch');
       if(/\bwink\b/.test(low)) return wink();
       { const om=low.match(/\b(take off|remove|put on|wear)\b[^.]*\b(jacket|shirt|pants|shoes|tie)\b/);
