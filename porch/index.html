@@ -6171,7 +6171,10 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   flame.scale.y = 0.8 + (f-3.25)*0.6;
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
-  playaUniforms.uSpecPos.value.set(Math.sin(t*0.35)*6.0, 1.6, -10);
+  // (spec wanderer parked underground 2026-07-11 — the SHADER half of the parade light survived
+  //  the first retirement; Nix caught the ghost glow. uSpecPos stays as a capability for future
+  //  real light sources — point it at anything that should glint the playa.)
+  playaUniforms.uSpecPos.value.set(0, -999, 0);
   if(window.__agentUpdate) window.__agentUpdate(dt);
   if(window.__musicboxTick) window.__musicboxTick(dt);       // music box: drum/crank spin + glow while playing
   if(window.__blobTick) window.__blobTick();                 // avatar drop-shadows follow their bodies
