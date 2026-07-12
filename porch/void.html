@@ -15,9 +15,11 @@
   #fade{position:fixed;inset:0;background:#000;transition:opacity 2.2s ease;opacity:1;pointer-events:none;z-index:5}
   #hint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);color:#8a7f96;font-size:13px;
         letter-spacing:0.08em;opacity:0.85;z-index:6;text-align:center;user-select:none}
-  #girihframe{position:fixed;left:0;top:0;width:960px;height:960px;border:0;opacity:0.0;
+  #girihframe{position:fixed;left:0;top:0;width:1440px;height:1440px;border:0;opacity:0.0;
               pointer-events:none;z-index:1}  /* in-viewport (rAF keeps running) but alpha-0; SIZE = the
-              canvas backing store = the wall's texture resolution (220px looked like mush at 90m) */
+              canvas backing store = the wall's texture resolution (220px looked like mush at 90m;
+              960 was 10px/METER on the 96m wall — Nix called the pixelation 2026-07-11; 1440 +
+              30Hz uploads + no mipmap regen nets out cheaper AND sharper. Real fix = vector mode.) */
 </style></head><body>
 <div id="fade"></div>
 <div id="hint">drag to look · WASD to walk · the arch behind you leads home</div>
@@ -43,7 +45,7 @@ player.position.set(0,0,6);                        // spawn: wall ahead, portico
 
 // ---- the wall of light: girih canvas → one side of the sky ----
 const frame = document.getElementById('girihframe');
-let girihTex=null, wallMat=new THREE.MeshBasicMaterial({color:0x120a18});
+let girihTex=null, _gAcc=0, wallMat=new THREE.MeshBasicMaterial({color:0x120a18});
 function initGirih(){
   try{
     const idoc = frame.contentDocument;
@@ -54,6 +56,8 @@ function initGirih(){
     idoc.head.appendChild(style);
     const src = idoc.getElementById('c');
     girihTex = new THREE.CanvasTexture(src); girihTex.colorSpace = THREE.SRGBColorSpace;
+    girihTex.generateMipmaps = false; girihTex.minFilter = THREE.LinearFilter;   // per-frame texture: mipmap pyramid regen was a hidden 60Hz cost
+    girihTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
     wallMat = new THREE.MeshBasicMaterial({map:girihTex}); wall.material = wallMat;
     return true;
   }catch(e){ console.warn('girih embed unavailable', e); return false; }
@@ -163,7 +167,7 @@ renderer.setAnimationLoop(()=>{
   }
   // the veil breathes; the texture streams
   if(portico.userData.veil) portico.userData.veil.material.opacity = 0.12+0.07*Math.sin(clock.elapsedTime*1.4);
-  if(girihTex) girihTex.needsUpdate = true;
+  _gAcc = (_gAcc||0) + dt; if(girihTex && _gAcc >= 1/30){ _gAcc = 0; girihTex.needsUpdate = true; }  // 30Hz uploads: half the bus traffic, invisible on a slow-breathing pattern
   checkPortico();
   renderer.render(scene, camera);
 });
