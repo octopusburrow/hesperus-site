@@ -1131,6 +1131,9 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   // jitter walks the table's boards across a face boundary, popping their shadow on/off.
   // frustumCulled=false includes them in every shadow face. Cheap: it's one table.
   tableG.traverse(o=>{ if(o.isMesh) o.frustumCulled = false; });
+  // rev.2 (flicker survived the table-only exemption): the popping caster may not be the table
+  // at all — exempt EVERY shadow caster in the room from per-face culling. Small scene, cheap.
+  setTimeout(()=>{ scene.traverse(o=>{ if(o.isMesh && o.castShadow) o.frustumCulled = false; }); }, 4000);
 }
 
 // ---- physics v0: grabbable props on the table — pick up, hold, put down. Desktop: E grabs the
@@ -3270,7 +3273,23 @@ window.__playerPoseTick = (dt)=>{
     window._poseDbgT = (window._poseDbgT||0) + dt;
     if(window._poseDbgT > 1){ window._poseDbgT = 0;
       dbg('pose', `${_poseApplied} env=${_poseEnv.toFixed(2)} rootY(survived)=${playerVrm.scene.position.y.toFixed(3)} want=${(-(_poseEnv)*(P===__POSES.crouch?(window.__crouchDrop||0.52):0.5)).toFixed(2)}`, 'k'); } }
-  if(P && playerVrm && _poseEnv>0.001) P.apply(playerVrm, _poseEnv);
+  if(P && playerVrm && _poseEnv>0.001){
+    P.apply(playerVrm, _poseEnv);
+    // WRITE TRAP (2026-07-12, the levitation hunt, rev.3): rootY(survived)=0.000 exact, and the
+    // gait + IK anchor both have alibis. So: intercept the .y property itself and photograph the
+    // stack of whoever writes ~0 while a pose is held. The culprit names its own line number.
+    if(!playerVrm.userData._yTrap){
+      playerVrm.userData._yTrap = true;
+      const pos = playerVrm.scene.position; let _yv = pos.y; let _lastLog = 0;
+      Object.defineProperty(pos, 'y', { configurable: true,
+        get(){ return _yv; },
+        set(nv){ _yv = nv;
+          if(window.__netPose && Math.abs(nv) < 0.02 && performance.now() - _lastLog > 1500){
+            _lastLog = performance.now();
+            const st = (new Error().stack||'').split('\n').slice(2,5).map(s=>s.trim().replace(/^at /,'').slice(0,60)).join(' ← ');
+            if(typeof dbg==='function') dbg('pose', '⚠ rootY ZEROED by: '+st, 'w'); } } });
+    }
+  }
   if(!renderer.xr.isPresenting) camera.position.y = 1.6 - (P ? _poseEnv*P.eyeDrop : 0);   // feel the crouch
 };
 window.__applyNetPose = (r, dt)=>{                             // remotes hold the same poses
