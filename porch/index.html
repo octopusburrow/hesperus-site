@@ -5481,7 +5481,9 @@ let _mbox = null;
   // Windows Loudness EQ had been secretly closing that 27dB gap; with enhancements off the box
   // vanished). HOUSE STANDARD from now on: every porch audio asset ships at −23 LUFS integrated
   // (ffmpeg loudnorm=I=-23:TP=-1.5:LRA=11); point sources rely on distance gain, not file gain.
-  new THREE.AudioLoader().load('./assets/musicbox4.wav', buf=>{
+  // .ogg again (2026-07-12): codec was proven innocent (crunch = pan zipper), so WAV's 3.3MB
+  // debugging insurance goes back to a 487KB vorbis — same -22.8 LUFS. Bandwidth watch hit 61%.
+  new THREE.AudioLoader().load('./assets/musicbox4.ogg', buf=>{
     pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0);
     flat.setBuffer(buf); flat.setLoop(true); flat.setVolume(0.4);
     if(_mbox) _mbox.ready = true;
