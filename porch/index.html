@@ -1165,7 +1165,7 @@ function sendProp(g){ const now=performance.now();
   _psend({t:'prop', pid:g.pid, x:g.mesh.position.x, y:g.mesh.position.y, z:g.mesh.position.z,
           q:[+q.x.toFixed(3),+q.y.toFixed(3),+q.z.toFixed(3),+q.w.toFixed(3)]}); }   // rotation rides along (2026-07-10)
 function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; claimProp(g); return g; }  // optimistic + claim
-function dropProp(g){ if(!g) return; g.carrying=false;               // owner stays mine; propPhysics arcs it + releases on rest
+function dropProp(g){ if(!g) return; g.carrying=false; g._hy0=undefined;   // owner stays mine; propPhysics arcs it + releases on rest. _hy0: fresh rotate-with-holder baseline next grab
   if(g.isImage || g.isModel){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;   // images & 3D models don't fall — placed, not tossed
     _psend({t:'release', pid:g.pid}); return; }
   if(g.vel.length()<0.6) g.vel.set(0,0,0); else g.vel.multiplyScalar(1.1); }   // throw threshold + slight gain (Basis)
@@ -1276,6 +1276,10 @@ function _propHoldUpdate(dt){                          // glue carried props to 
     _trackVel(g,p,dt); g.mesh.position.copy(p); sendProp(g); }
   else if(heldProp){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
     const p=new THREE.Vector3(player.position.x+f.x*0.55, player.position.y+1.02, player.position.z+f.z*0.55);
+    // ROTATE WITH THE HOLDER (Nix 2026-07-12): the carried object keeps its grip orientation
+    // relative to YOU — turn your body and it turns too, so you can aim/reposition it.
+    if(heldProp._hy0===undefined){ heldProp._hy0 = player.rotation.y; heldProp._hq0 = heldProp.mesh.quaternion.clone(); }
+    heldProp.mesh.quaternion.setFromAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y - heldProp._hy0).multiply(heldProp._hq0);
     _trackVel(heldProp,p,dt); heldProp.mesh.position.copy(p); sendProp(heldProp); }
   for(const hand of ['left','right']){ const g=_heldHand[hand]; if(!g) continue;
     try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
@@ -3237,10 +3241,14 @@ window.__POSES = {
   sit: { eyeDrop: 0.78, apply(vrm, env){
     const h=vrm.humanoid; if(!h) return;
     const set=(nm,x,z=0)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,z,'YXZ')); };
-    // ground sit, knees up, slight recline; feet flat-ish
-    ['left','right'].forEach(s=>{ set(s+'UpperLeg', -env*1.62); set(s+'LowerLeg', env*1.38); set(s+'Foot', -env*0.25); });
+    // sit-ground v2 (Nix 2026-07-12): hips lower, feet higher (knees more up), hands flat on
+    // the knees. All numbers live-tunable via window.__sitTune = {drop, thigh, shin, uArm, lArm, hand}.
+    const T = window.__sitTune || {};
+    ['left','right'].forEach(s=>{
+      set(s+'UpperLeg', -env*(T.thigh||1.78)); set(s+'LowerLeg', env*(T.shin||1.52)); set(s+'Foot', -env*0.15);
+      set(s+'UpperArm', -env*(T.uArm||0.55)); set(s+'LowerArm', -env*(T.lArm||0.50)); set(s+'Hand', env*(T.hand||0.35)); });
     set('spine', env*0.10); set('hips', -env*0.06);
-    vrm.scene.position.y = -env*0.56; } },
+    vrm.scene.position.y = -env*(T.drop||0.64); } },
   chairsit: { eyeDrop: 0.42, apply(vrm, env){                // bench/chair height (the swing): thighs level,
     const h=vrm.humanoid; if(!h) return;                     // shins down, feet dangling just off the deck
     const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
@@ -5655,9 +5663,14 @@ let _ambientOn = localStorage.getItem('porch.ambient')!=='off';   // default ON,
 function _startAmbient(){
   if(_ambient || _ambientLoading || !_ambientOn) return; _ambientLoading=true;
   new THREE.AudioLoader().load('./assets/porch_ambient.ogg', (buf)=>{
-    _ambient = new THREE.Audio(_audioListener);
+    _ambient = new THREE.Audio(_audioListener); window.__ambient = _ambient;   // window: headless gain probes
     _ambient.setBuffer(buf); _ambient.setLoop(true); _ambient.setVolume(0.0);
-    if(_ambientOn && _audioListener.context.state==='running'){ _ambient.play(); _ambientFade(_ambientVol, 4); }
+    // GENTLE ENTRANCE (Nix 2026-07-12, "routinely jumpscared on reload"): hold silence for 2s
+    // after arrival, then an 8s fade — the room should seem to have always been playing, felt
+    // before noticed, rather than a track that STARTS.
+    if(_ambientOn && _audioListener.context.state==='running'){
+      _ambient.play(); _ambient.gain.gain.value = 0;
+      setTimeout(()=>_ambientFade(_ambientVol, 8), 2000); }
   }, undefined, (e)=>{ _ambientLoading=false; console.warn('ambient load failed', e); });
 }
 function _ambientFade(to, secs){                            // gentle ramp instead of an abrupt start/stop
@@ -5671,7 +5684,8 @@ window.__setAmbient = setAmbient;
 function _audioGesture(){                                   // autoplay gate: resume context + start on first interaction
   if(_audioListener.context.state==='suspended') _audioListener.context.resume().catch(()=>{});
   if(_ambientOn){ if(!_ambient) _startAmbient();
-    else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambientFade(_ambientVol, 4); } }
+    else if(!_ambient.isPlaying && _ambient.buffer){ _ambient.play(); _ambient.gain.gain.value = 0;
+      setTimeout(()=>_ambientFade(_ambientVol, 8), 2000); } }   // same gentle entrance on the gesture path
 }
 ['pointerdown','keydown','touchstart'].forEach(ev=>addEventListener(ev, _audioGesture));
 // ---- AUDIO DEBUG CAPTURE (Nix 2026-07-11, "can you capture the exact audio in my headphones?"):
