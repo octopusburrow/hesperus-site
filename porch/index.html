@@ -187,6 +187,7 @@
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
+  <label class="mrow"><button id="lrTestBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">◐ L/R channel test (3s each)</button></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
@@ -5387,6 +5388,21 @@ function _mboxToggle(){
   _mbox.playing=true; return 'music box: playing ♪';
 }
 window.__toggleMusicbox = _mboxToggle;
+// L/R CHANNEL TEST (2026-07-11): Nix hears "perfect" at a yaw that pans the box hard-left and
+// "garbo" one degree off — the one-bad-output-channel hypothesis. Plays the box melody hard
+// LEFT 3s, then hard RIGHT 3s, bypassing the panner entirely. If one side crunches → the
+// corruption is in her output path (driver / Windows enhancement / hardware), not the Porch.
+(function(){ const b=document.getElementById('lrTestBtn'); if(!b) return;
+  b.addEventListener('click', ()=>{
+    const ctx=_audioListener.context, buf=_mbox&&_mbox.audio.buffer;
+    if(!buf){ dbg('mbox','L/R test: buffer not loaded yet','w'); return; }
+    if(ctx.state!=='running') ctx.resume().catch(()=>{});
+    const mk=(pan,at)=>{ const s=ctx.createBufferSource(); s.buffer=buf;
+      const p=new StereoPannerNode(ctx,{pan}); s.connect(p).connect(ctx.destination);
+      s.start(at); s.stop(at+3); };
+    const t=ctx.currentTime+0.1; mk(-1,t); mk(1,t+3.2);
+    dbg('mbox','L/R test: LEFT now… RIGHT in 3s. Which side crunches?','k'); });
+})();
 window.__musicboxTick = (dt)=>{                             // called from the render loop
   if(!_mbox) return;
   const lvl = _mbox.lvl += ((_mbox.playing?1:0) - _mbox.lvl) * Math.min(1, dt*3);
