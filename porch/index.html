@@ -3255,6 +3255,13 @@ window.__playerPoseTick = (dt)=>{
   }
   window.__netPose = (want && _poseEnv>0.05) ? _poseApplied : undefined;   // travels in the 10Hz pose msg
   const P = _poseApplied && window.__POSES[_poseApplied];
+  // FORENSIC (Nix 2026-07-12, levitating crouch): read rootY BEFORE this frame's apply — this is
+  // the value that SURVIVED everything that ran after last frame's apply. If it reads ~0 while
+  // env is ~1, something downstream resets the root every frame and this line photographs it.
+  if(P && playerVrm && typeof dbg==='function'){
+    window._poseDbgT = (window._poseDbgT||0) + dt;
+    if(window._poseDbgT > 1){ window._poseDbgT = 0;
+      dbg('pose', `${_poseApplied} env=${_poseEnv.toFixed(2)} rootY(survived)=${playerVrm.scene.position.y.toFixed(3)} want=${(-(_poseEnv)*(P===__POSES.crouch?(window.__crouchDrop||0.52):0.5)).toFixed(2)}`, 'k'); } }
   if(P && playerVrm && _poseEnv>0.001) P.apply(playerVrm, _poseEnv);
   if(!renderer.xr.isPresenting) camera.position.y = 1.6 - (P ? _poseEnv*P.eyeDrop : 0);   // feel the crouch
 };
