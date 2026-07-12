@@ -1450,8 +1450,14 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   const sitHull = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 0.6), new THREE.MeshBasicMaterial({visible:false}));
   sitHull.position.set(0, -1.35, 0.02); H.add(sitHull);
   sitHull.userData.action = ()=>{
-    const wp = seat.getWorldPosition(new THREE.Vector3());
-    player.position.set(wp.x, 0, wp.z);
+    // THREE SEATS (Nix 2026-07-12, twitter-pic hack): left / middle / right of the bench —
+    // you get the one nearest to where you're standing, so two people can flank each other.
+    let best=null, bd=1e9;
+    for(const off of [-0.5, 0, 0.5]){
+      const wp = seat.localToWorld(new THREE.Vector3(off/ (seat.scale.x||1), 0, 0));
+      const d = Math.hypot(wp.x-player.position.x, wp.z-player.position.z);
+      if(d<bd){ bd=d; best=wp; } }
+    player.position.set(best.x, 0, best.z);
     player.rotation.y = G.rotation.y + Math.PI;            // player fwd is -Z: +π = face where the swing faces
     return (window.__playerPose ? window.__playerPose('chairsit') : 'no pose system') + ' — the swing'; };
   _clickables.push(sitHull);
@@ -5873,11 +5879,17 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   function _rtRender(rt, cam){
     const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
     const old = renderer.getRenderTarget();
+    // MIRROR RULES (Nix 2026-07-12): a camera photographing you shows your whole head — undo
+    // the first-person shrunken-head trick for the duration of this render, like the mirror does.
+    if(avatar && !playerVrm) avatar.visible = true;
+    if(window.__setHeadScale) window.__setHeadScale(1);
     renderer.setRenderTarget(rt); renderer.render(scene, cam); renderer.setRenderTarget(old);
+    if(avatar) avatar.visible = false;
+    if(window.__setHeadScale) window.__setHeadScale(0);
     renderer.xr.enabled = wasXR; }
   // ---- HTML viewfinder HUD (desktop): live preview + red shutter, bottom-right
   const vfHud = document.createElement('div');
-  vfHud.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:30;display:none;'+
+  vfHud.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:46;display:none;'+
     'background:#14171f;border:2px solid #3a4152;border-radius:12px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,.55)';
   const vfCanvas = document.createElement('canvas'); vfCanvas.width=vfW; vfCanvas.height=vfH;
   vfCanvas.style.cssText = 'display:block;width:280px;border-radius:6px;background:#000';
@@ -5893,6 +5905,12 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   vfBtn.addEventListener('click', e=>{ e.stopPropagation(); _cameraSnap(G, true); });
   const vf2d = vfCanvas.getContext('2d');
   const vfBuf = new Uint8Array(vfW*vfH*4), vfImg = vf2d.createImageData(vfW, vfH);
+  // readRenderTargetPixels hands back LINEAR values; the 2D canvas expects sRGB — without this
+  // LUT the HUD preview reads ~2 stops dark (Nix 2026-07-12; the in-world screen was fine
+  // because it goes through the renderer's own output encoding).
+  const _sLUT = new Uint8ClampedArray(256);
+  for(let i=0;i<256;i++){ const c=i/255;
+    _sLUT[i] = Math.round(255*(c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055)); }
   let _vfAcc = 0, _wasHeld = false;
   window.__cameraTick = (dt)=>{
     const held = !!(window.__heldProp && __heldProp()===g && !renderer.xr.isPresenting);
@@ -5905,7 +5923,7 @@ window.__musicboxTick = (dt)=>{                             // called from the r
     renderer.readRenderTargetPixels(vfRT, 0, 0, vfW, vfH, vfBuf);
     for(let y=0;y<vfH;y++){ const sy=vfH-1-y;
       for(let x=0;x<vfW;x++){ const s=(sy*vfW+x)*4, d=(y*vfW+x)*4;
-        vfImg.data[d]=vfBuf[s]; vfImg.data[d+1]=vfBuf[s+1]; vfImg.data[d+2]=vfBuf[s+2]; vfImg.data[d+3]=255; } }
+        vfImg.data[d]=_sLUT[vfBuf[s]]; vfImg.data[d+1]=_sLUT[vfBuf[s+1]]; vfImg.data[d+2]=_sLUT[vfBuf[s+2]]; vfImg.data[d+3]=255; } }
     vf2d.putImageData(vfImg, 0, 0); };
   function _cameraSnap(root, instant){
     if(_snapBusy) return 'camera busy';
@@ -6710,6 +6728,32 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   _applyTouchFx();                                    // pats: head squish envelopes (all touched VRMs)
   if(residentVrm) applyFaceLife(residentVrm, t);      // face life: blink + expressions (pre-update, composes in)
   if(residentVrm && window.__residentGaze) window.__residentGaze();   // eyes track whoever's near
+  // LOOK-TARGET PRIORITY STACK v1 (Nix 2026-07-12): the BODY turns, not just the eyes.
+  //   1) the world camera, if it's near and aimed at the resident (selfie/photo awareness)
+  //   2) the nearest person within 5m (social baseline until latency-driven facing is solved)
+  //   3) nobody near → yaw stays with network/idle
+  if(residentVrm && !window.__noResidentFacing){
+    const rp = residentVrm.scene.position; let ftgt = null;
+    const camP = window.__worldCamProp && __worldCamProp.mesh;
+    if(camP){
+      const cw = camP.getWorldPosition(new THREE.Vector3());
+      const cfwd = new THREE.Vector3(0,0,1).applyQuaternion(camP.getWorldQuaternion(new THREE.Quaternion()));
+      const to = new THREE.Vector3().subVectors(rp, cw); const cd = to.length();
+      if(cd < 8 && cd > 0.3 && cfwd.dot(to.normalize()) > 0.9) ftgt = cw;   // in frame → face the lens
+    }
+    if(!ftgt){
+      let bd = 25;                                            // 5m²
+      const cands = [player.position]; if(typeof remotes!=='undefined') for(const r of remotes.values()) cands.push(r.group.position);
+      for(const p of cands){ const dx=p.x-rp.x, dz=p.z-rp.z, d2=dx*dx+dz*dz;
+        if(d2 > 0.09 && d2 < bd){ bd = d2; ftgt = p; } }
+    }
+    if(ftgt){
+      const want = _yawToward(rp, ftgt) + (window.__resFaceFlip||0);   // __resFaceFlip: live-tunable if the convention is backwards
+      let dy = want - residentVrm.scene.rotation.y;
+      while(dy >  Math.PI) dy -= 2*Math.PI; while(dy < -Math.PI) dy += 2*Math.PI;
+      residentVrm.scene.rotation.y += dy * Math.min(1, dt*3);
+    }
+  }
   if(residentVrm) residentVrm.update(dt);
   if(playerMixer) playerMixer.update(dt);                     // idle keeps arms/legs alive (even under head-tracking)
   if(window.__playerPoseTick) __playerPoseTick(dt);           // held poses (crouch/sit) overwrite post-mixer
