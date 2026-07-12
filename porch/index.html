@@ -342,6 +342,11 @@ let _clickConsumed=false;                                           // a world-b
 addEventListener('mouseup', e=>{
   if(e.button!==0) return;                                          // RMB is EXCLUSIVELY the object menu (Nix 2026-07-12:
                                                                     // it was ALSO running this grab path first — the delete bug)
+  if(window._softCursor){                                           // LMB with the soft cursor: row under it fires; empty space dismisses (back to reticle — lock never broke)
+    const row = _softCursor.rowAt();
+    if(row && row.onpointerdown) row.onpointerdown({stopPropagation(){}});
+    else _closeObjMenu();
+    return; }
   if(e.target && e.target.tagName!=='CANVAS') return;               // UI clicks stay UI clicks
   if(Math.hypot(e.clientX-_cdX, e.clientY-_cdY)>6 || performance.now()-_cdT>400) return;  // that was a drag
   if(document.pointerLockElement){ _clickRC.setFromCamera({x:0,y:0}, camera); }
@@ -2767,6 +2772,10 @@ let pitch = 0, dragging = false;
 renderer.domElement.addEventListener('pointerdown', ()=>{ dragging = true; });
 addEventListener('pointerup', ()=> dragging = false);
 addEventListener('pointermove', e=>{
+  if(window._softCursor){                                  // menu open from reticle: mouse drives the soft cursor, not the camera
+    _softCursor.x = Math.max(0, Math.min(innerWidth,  _softCursor.x + e.movementX));
+    _softCursor.y = Math.max(0, Math.min(innerHeight, _softCursor.y + e.movementY));
+    _softCursor.place(); return; }
   if((!dragging && !document.pointerLockElement) || renderer.xr.isPresenting) return;
   player.rotation.y -= e.movementX * 0.0035;
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0035));
@@ -2795,7 +2804,8 @@ addEventListener('pointermove', e=>{
         renderer.domElement.requestPointerLock(); }                        // menus placed here appear AT the cursor (Nix)
     } _plClick=false; _clickConsumed=false; });
   document.addEventListener('pointerlockchange', ()=>{
-    xh.style.display = document.pointerLockElement ? 'block' : 'none'; });
+    xh.style.display = document.pointerLockElement ? 'block' : 'none';
+    if(!document.pointerLockElement && window._softCursor) _closeObjMenu(); });   // Esc during soft-cursor menu: browser restores the real cursor to its frozen spot (spec clause 4); tidy up
 }
 const keys = {}; window.__keys = keys;                     // exposed for headless WASD-stuck test
 let _spawnKinds = ['cube','sphere','cone','cylinder'], _spawnI = 0;
@@ -2803,7 +2813,8 @@ let _spawnKinds = ['cube','sphere','cone','cylinder'], _spawnI = 0;
 // Works on the hover-glowed prop in both mouse and pointer-lock/reticule aim (that's what _hoverG
 // already is). v0: Delete (networked delobj when it has a sid) + Grab/Drop. Radial later if it earns it.
 let _objMenu = null;
-function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; } window._menuNav = null; }
+function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; }
+  if(window._softCursor){ _softCursor.el.remove(); window._softCursor = null; } }
 addEventListener('contextmenu', e=>{
   const g = (typeof _hoverG!=='undefined' && _hoverG) || heldProp;
   if(!g){                                                  // aimed at nothing:
@@ -2826,14 +2837,15 @@ addEventListener('contextmenu', e=>{
     }
   }
   const m = document.createElement('div'); _objMenu = m;
-  // CURSOR-MODE MENU (Nix 2026-07-12, rev.3 — her call after living with rev.2): RMB from
-  // reticle drops to HUD and you keep a real cursor for the menu — same feel as RMB in HUD.
-  // The menu opens where Chrome RESTORES the cursor (recorded at lock time), so cursor and
-  // menu arrive at the same spot. Click a row, or click away to dismiss.
-  const _lc = document.pointerLockElement && window._lockCursor;
-  const px = document.pointerLockElement ? (_lc ? _lc.x : innerWidth/2) : e.clientX;
-  const py = document.pointerLockElement ? (_lc ? _lc.y : innerHeight/2) : e.clientY;
-  if(document.pointerLockElement) document.exitPointerLock();
+  // SOFTWARE-CURSOR MENU (Nix's full spec, rev.4 — the keeper): from reticle mode, the cursor
+  // should SNAP TO CENTER with the menu beside it — but browsers can't warp the real cursor.
+  // Dodge: never unlock. Draw a software cursor at center, drive it with mouse deltas, hit-test
+  // clicks ourselves. Feels identical to HUD point-and-click; menu-close returns you to reticle
+  // seamlessly (lock never broke); Esc still does the browser-native exit that restores the
+  // real cursor to where it froze at lock time — exactly the spec's fourth clause, for free.
+  const _menuLocked = !!document.pointerLockElement;
+  const px = _menuLocked ? innerWidth/2+18 : e.clientX;
+  const py = _menuLocked ? innerHeight/2 : e.clientY;
   m.style.cssText = `position:fixed;left:${px}px;top:${py}px;z-index:40;background:rgba(14,18,25,.96);`+
     `border-radius:10px;padding:6px;box-shadow:0 4px 16px rgba(0,0,0,.5);font:13px Georgia,serif;color:#e8dcc0`;
   const row = (label, fn)=>{ const b=document.createElement('div');
@@ -2856,7 +2868,23 @@ addEventListener('contextmenu', e=>{
     else removeObj(sid); });
   else dbg('objmenu', '⚠ no sid on this object — Delete row hidden', 'w');
   document.body.appendChild(m);
-  setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
+  if(_menuLocked){                                         // software cursor: snapped to center, delta-driven
+    const el = document.createElement('div');
+    el.style.cssText = 'position:fixed;z-index:42;pointer-events:none;font:20px sans-serif;'+
+      'color:#fff;text-shadow:0 1px 3px #000;transform:translate(-3px,-2px)';
+    el.textContent = '➤'; el.style.rotate = '-125deg';     // arrow tip at the hotspot
+    document.body.appendChild(el);
+    window._softCursor = { x: innerWidth/2, y: innerHeight/2, el, menu: m,
+      place(){ el.style.left = this.x+'px'; el.style.top = this.y+'px';
+        [...m.children].forEach(r=>{ const b=r.getBoundingClientRect();
+          r.style.background = (this.x>=b.left && this.x<=b.right && this.y>=b.top && this.y<=b.bottom)
+            ? 'rgba(90,80,60,.5)' : ''; }); },
+      rowAt(){ return [...m.children].find(r=>{ const b=r.getBoundingClientRect();
+        return this.x>=b.left && this.x<=b.right && this.y>=b.top && this.y<=b.bottom; }); } };
+    _softCursor.place();
+  } else {
+    setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
+  }
 });
 addEventListener('keydown', e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;  // typing ≠ walking
