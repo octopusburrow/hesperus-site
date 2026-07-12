@@ -185,6 +185,7 @@
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
   <label class="mrow"><input type="checkbox" id="starNamesToggle" checked><span>☆ Star names</span></label>
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
+  <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
   <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
@@ -733,21 +734,30 @@ let _starLabels = null; const _slQ = new THREE.Quaternion(), _slV = new THREE.Ve
 function _buildStarLabels(){
   if(_starLabels) { _starLabels.visible = true; return; }
   _starLabels = new THREE.Group(); scene.add(_starLabels);   // unrotated: positions are PRE-rotated
+  // rev.2 (2026-07-11): SPRITES, not troika text — troika rendered in every harness but never
+  // on Nix's client. Canvas-drawn name → SpriteMaterial: the most boring, unbreakable path in
+  // three.js. Auto-billboards, no shader derivatives, no font SDF, no lookAt loop.
+  const _mkLabel = (name)=>{ const c=document.createElement('canvas');
+    const px=44, pad=12; const ctx=c.getContext('2d'); ctx.font=`${px}px system-ui, sans-serif`;
+    const w=Math.ceil(ctx.measureText(name).width)+pad*2; c.width=w; c.height=px+pad*2;
+    const x=c.getContext('2d'); x.font=`${px}px system-ui, sans-serif`;
+    x.fillStyle='rgba(207,224,242,0.85)'; x.textBaseline='middle';
+    x.shadowColor='rgba(0,0,0,0.8)'; x.shadowBlur=6;
+    x.fillText(name, pad, c.height/2);
+    const tx=new THREE.CanvasTexture(c); tx.colorSpace=THREE.SRGBColorSpace;
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tx, transparent:true, depthTest:false, fog:false}));
+    const SC=0.34; sp.scale.set(c.width*SC, c.height*SC, 1); sp.renderOrder=3; return sp; };
   fetch('./assets/stars_named.json').then(r=>r.json()).then(list=>{
     const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
     for(const s of list){
       if(s.n === 'Sol') continue;                          // no Sun label in the night sky
       const wx = (s.x*cy + s.z*sy)*R, wy = s.y*R, wz = (-s.x*sy + s.z*cy)*R;   // rotate into world
-      const t = makeTextMesh(s.n, {size:11, color:0xcfe0f2, font:'sans', renderOrder:3});
-      t.position.set(wx, wy + 10, wz);                     // float the name just above the star
-      t.material.opacity = 0.78; t.material.transparent = true; t.material.depthTest = false;
-      t.material.fog = false;                              // CRITICAL: scene fog (far 130) is way inside R=420 → fog would erase them
-      t.frustumCulled = false;                             // troika's pre-sync bounds can cull labels that are on-screen
-      if(t.sync) t.sync();                                 // force glyph build now, not lazily
-      _starLabels.add(t);                                  // billboarded in the render loop (onBeforeRender is too late — matrix already built)
+      const sp = _mkLabel(s.n);
+      sp.position.set(wx, wy + 10, wz);                    // float the name just above the star
+      _starLabels.add(sp);
     }
     window.__starLabelCount = list.length;
-    if(typeof dbg==='function') dbg('stars', `labels built: ${list.length-1}`, 'k');
+    if(typeof dbg==='function') dbg('stars', `labels built (sprites): ${list.length-1}`, 'k');
   }).catch(e=>console.warn('star labels failed', e));
 }
 function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
@@ -819,7 +829,7 @@ const playa = new THREE.Mesh(
           float lum = dot(tex, vec3(0.299, 0.587, 0.114));
           tex = mix(vec3(lum), tex, 0.32);                         // DESAT: kill the orange cast
           tex = pow(tex, vec3(0.9));                               // even LESS contrast — lift the crack darks (Nix rev.4)
-          tex = tex*0.82 + 0.085;                                  // rev.5 de-contrast: gentle playa — cracks read, never pit-black (Nix)
+          tex = tex*0.70 + 0.145;                                  // rev.9 de-contrast pass 2: even gentler (Nix: "cracks still too harsh")
           vec3 texCol = tex * (0.16 + 0.05*n) * (0.9 + 0.2*mottle) * vec3(0.94, 0.96, 1.04);
           col = mix(col, texCol, 0.6);                             // PHOTO_MIX: dialed down so cracks read as soft detail, not lines
           specMask = mix(0.22, 1.0, smoothstep(0.22, 0.68, lum));  // plates glint fully, cracks still whisper (was hard-off → harsh black, Nix rev.5)
@@ -849,10 +859,10 @@ const playa = new THREE.Mesh(
         float fw = pow(fdaz, 3.0);
         // rev.4 (Nix): womb-dark — ground sinks toward BLACK sooner, with only a breath of the
         // horizon color at the very end so the seam still marries the sky.
-        vec3 horizonCol = mix(vec3(0.010,0.012,0.020), vec3(0.115,0.056,0.026), fw);   // warmer/brighter rim sunward — meets the sky's seam dab (Nix rev.6)
-        float fogf = smoothstep(10.0, 55.0, dcam);
-        col = mix(col, vec3(0.004,0.004,0.007), fogf*0.92);          // to near-black, early
-        col = mix(col, horizonCol, smoothstep(55.0, 95.0, dcam));    // last breath: tie into the sky seam
+        // rev.9 (Nix): ground dies to BLACK in every direction — no orange breath ("it fights
+        // the intention"). The sky alone owns the glow.
+        float fogf = smoothstep(10.0, 60.0, dcam);
+        col = mix(col, vec3(0.003,0.003,0.005), fogf);
         // inspection specular (Nix sweetener #1): a parading light 10m out — glints on raised grain
         vec3 sL = uSpecPos - vWorld; float sD = length(sL); sL /= max(sD, 0.001);
         vec3 sV = normalize(cameraPosition - vWorld);
@@ -5304,19 +5314,29 @@ let _mbox = null;
   G.add(pa);
   // musicbox2.wav (2026-07-11): remade from scratch — fresh mono WAV straight from the original
   // loop render, ZERO codec artifacts, new filename busts every cache layer (Nix: "still crunchy").
+  // A/B RIG (Nix): a parallel NON-spatial player of the same buffer. Menu toggle swaps them live —
+  // if 'flat' is clean and 'spatial' crunches, the panner is guilty; if both crunch, it's downstream.
+  const flat = new THREE.Audio(_audioListener);
   new THREE.AudioLoader().load('./assets/musicbox2.wav', buf=>{
-    pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0); if(_mbox) _mbox.ready = true;
+    pa.setBuffer(buf); pa.setLoop(true); pa.setVolume(1.0);
+    flat.setBuffer(buf); flat.setLoop(true); flat.setVolume(0.4);
+    if(_mbox) _mbox.ready = true;
   }, undefined, e=>console.warn('musicbox load failed', e));
+  window.__mboxFlat = flat;
   _mbox = { group:G, spin, brass, comb:comb.material, audio:pa, glow, ready:false, playing:false, lvl:0 };
 })();
 window.__mbox = _mbox;                                        // debug: headless audio-graph probe
+function _mboxFlatMode(){ return document.getElementById('mboxFlatToggle')?.checked; }
 function _mboxToggle(){
   if(!_mbox) return 'no music box';
   if(!_mbox.ready) return 'music box: still winding up…';
-  const pa = _mbox.audio;
-  if(pa.isPlaying){ pa.stop(); _mbox.playing=false; return 'music box: stopped'; }
+  const pa = _mbox.audio, fl = window.__mboxFlat;
+  if(pa.isPlaying || (fl && fl.isPlaying)){ if(pa.isPlaying) pa.stop(); if(fl && fl.isPlaying) fl.stop();
+    _mbox.playing=false; return 'music box: stopped'; }
   if(_audioListener.context.state!=='running') _audioListener.context.resume().catch(()=>{});
-  pa.play(); _mbox.playing=true; return 'music box: playing ♪';
+  if(_mboxFlatMode() && fl){ fl.play(); if(typeof dbg==='function') dbg('mbox','A/B: FLAT (no panner)','k'); }
+  else { pa.play(); if(typeof dbg==='function') dbg('mbox','A/B: SPATIAL (panner)','k'); }
+  _mbox.playing=true; return 'music box: playing ♪';
 }
 window.__toggleMusicbox = _mboxToggle;
 window.__musicboxTick = (dt)=>{                             // called from the render loop
@@ -6071,18 +6091,8 @@ window.__capturePOV = capturePOV;
 let t = 0, _last = 0, netAccum = 0;
 let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
 const _VEN = new THREE.Vector3(0.62, 0, -0.78).normalize();   // venus azimuth, horizontal
-{ // THE FILM MATTE (Nix 2026-07-11, "if I were doing this in a short film"): a huge gaussian
-  // blob pegged to the western horizon, obscuring the razor line where ground meets sky.
-  const c = document.createElement('canvas'); c.width=256; c.height=128;
-  const x = c.getContext('2d');
-  const g = x.createRadialGradient(128,64,4,128,64,120);
-  g.addColorStop(0,'rgba(226,120,40,0.42)'); g.addColorStop(0.4,'rgba(160,70,28,0.22)'); g.addColorStop(1,'rgba(120,50,20,0)');
-  x.save(); x.translate(128,64); x.scale(1,0.42); x.translate(-128,-64);   // squash: wide, low
-  x.fillStyle=g; x.fillRect(0,0,256,128); x.restore();
-  const mt = new THREE.Mesh(new THREE.PlaneGeometry(560, 120),
-    new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c), transparent:true, depthWrite:false, fog:false}));
-  mt.renderOrder = 2; scene.add(mt); window.__horizonMatte = mt;
-}
+// (film-matte blob REMOVED 2026-07-11 — its plane edge drew a hard line in the sky, worse than
+// the seam it was hiding. The sky shader's gaussian seam glow carries the soften alone now.)
 renderer.setAnimationLoop((now, xrFrame)=>{
   const dt = _last ? Math.min((now - _last)/1000, 0.05) : 0.016;
   _last = now;
@@ -6091,10 +6101,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   fenceMat.uniforms.uTime.value = t;
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
   if(_starMat) _starMat.uniforms.uTime.value = t;          // star twinkle
-  if(_starLabels && _starLabels.visible && _starLabels.children.length){   // billboard star-name labels to the camera (before draw)
-    // per-label lookAt, not a shared quaternion: labels >90° off-axis showed their BACKS
-    // (mirrored text — headless shot, 2026-07-11). lookAt makes every label face the eye.
-    camera.getWorldPosition(_slV); for(const c of _starLabels.children) c.lookAt(_slV); }
+  // (star labels are Sprites now — auto-billboarded, no per-frame work. 2026-07-11 rev.2)
   if(_imgLoaders>0) _imgLoadMat.uniforms.uTime.value = t;  // image loading placeholders sweep/shimmer
   if(_pendingImg.size){ for(const [cid,e] of _pendingImg) if(now-e.t0 > 20000) _clearPendingImg(cid); }  // echo never came
   for(const m of _porticoMotes){ const a=m.geo.attributes.position, c=m.geo.attributes.color; // motes drift up + wrap, slight sway
@@ -6133,7 +6140,8 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       d.id='dbgperf'; d.style.cssText='position:fixed;right:10px;top:74px;z-index:9;font:11px ui-monospace,monospace;color:#8fc98f;background:rgba(8,10,14,.82);border:1px solid #2a3040;border-radius:6px;padding:2px 8px;display:none';
       document.body.appendChild(d); return d; })();
     const inf = renderer.info;
-    el.textContent = `${Math.round(_perfFrames/(t-_perfT0))} fps · ${inf.render.calls} calls · ${(inf.render.triangles/1000).toFixed(0)}k tris`;
+    const _tris = Number.isFinite(inf.render.triangles) ? (inf.render.triangles/1000).toFixed(0)+'k' : '—';
+    el.textContent = `${Math.round(_perfFrames/(t-_perfT0))} fps · ${inf.render.calls} calls · ${_tris} tris`;
     el.style.display = document.getElementById('dbgfeed')?.style.display==='block' ? 'block' : 'none';
     _perfFrames = 0; _perfT0 = t;
   }
@@ -6143,8 +6151,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     sky.position.set(cp.x, 0, cp.z);
     if(window.__stars) __stars.position.set(cp.x, 0, cp.z);
     if(_starLabels) _starLabels.position.set(cp.x, 0, cp.z);
-    if(window.__horizonMatte){ __horizonMatte.position.set(cp.x + _VEN.x*400, 6, cp.z + _VEN.z*400);
-      __horizonMatte.lookAt(cp.x, 20, cp.z); } }
+  }
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
   _applyTouchFx();                                    // pats: head squish envelopes (all touched VRMs)
