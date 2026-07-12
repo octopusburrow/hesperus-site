@@ -332,7 +332,12 @@ function _tryClickables(raycaster){
   return false;
 }
 let _cdX=0, _cdY=0, _cdT=0;
-addEventListener('mousedown', e=>{ _cdX=e.clientX; _cdY=e.clientY; _cdT=performance.now(); });
+addEventListener('mousedown', e=>{ _cdX=e.clientX; _cdY=e.clientY; _cdT=performance.now();
+  // Chrome doesn't dispatch contextmenu during pointer lock — synthesize it so RMB works from
+  // reticle mode too (the handler exits the lock and shows a clickable menu). (Nix 2026-07-12)
+  if(e.button===2 && document.pointerLockElement)
+    dispatchEvent(new MouseEvent('contextmenu', {clientX: innerWidth/2, clientY: innerHeight/2}));
+});
 let _clickConsumed=false;                                           // a world-button click shouldn't ALSO lock the pointer
 addEventListener('mouseup', e=>{
   if(e.button!==0) return;                                          // RMB is EXCLUSIVELY the object menu (Nix 2026-07-12:
@@ -1206,10 +1211,17 @@ function _updateHover(){
       for(const sb of _shelfBooks){ if(sb.taken) continue;
         const t=_hovRC.ray.direction.dot(_hovTmp.subVectors(sb.pos,_hovRC.ray.origin));
         if(t>0 && t<bt && _hovRC.ray.distanceToPoint(sb.pos)<0.18){ bt=t; rayShelf=sb; } } }
-  } else if(!held){ g=grabNearest(_reachPoint(),0.85); }      // unlocked keeps proximity hover (E-grab)
+  } else if(!held){ g=grabNearest(_reachPoint(),0.85);        // unlocked keeps proximity hover (E-grab)…
+    if(!g && typeof _hovRC!=='undefined'){                    // …PLUS cursor ray to 3.5m (Nix 2026-07-12: RMB
+      _hovNDC.set((_hovMX/innerWidth)*2-1, -(_hovMY/innerHeight)*2+1);   // in HUD only worked at arm's length)
+      _hovRC.setFromCamera(_hovNDC, camera);
+      const loose=grabbables.filter(p=>p.mesh && p.owner==null && !(p._cool>0));
+      const hits=_hovRC.intersectObjects(loose.map(p=>p.mesh), false);
+      if(hits.length && hits[0].distance<3.5) g=loose.find(p=>p.mesh===hits[0].object)||null; } }
   if(typeof _rayShelf!=='undefined') _rayShelf=rayShelf;      // publish for the LMB handler (typeof: harness-safe)
   if(g!==_hoverG){ if(_hoverG&&_hoverG.mat&&_hoverG.mat.emissive) _hoverG.mat.emissive.setHex(0x000000);
     if(g&&g.mat&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; }   // g.mat undefined for a Group (GLB model) — guard
+  window.__hoverPid = _hoverG ? (_hoverG.pid||'?') : null;    // debug: what would RMB menu target right now
   // clickable highlight (Nix 2026-07-09: telegraph the interaction BEFORE the click — objects only,
   // never avatars): aim = pointer-lock center, else the mouse. Same warm glow as grabbable hover.
   if(typeof _clickables==='undefined' || typeof _hovRC==='undefined') return;  // extraction harness lacks the whole hover family
@@ -1327,7 +1339,7 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
       .replace('#include <map_fragment>', ['#include <map_fragment>',
         'vec3 ironCell = floor(vWP * 32.0);',                        // 32px/m, square by construction
         'float ironH = ironHash(ironCell);',
-        'diffuseColor.rgb *= 0.72 + 0.42*ironH;',                    // cast-iron mottle
+        'diffuseColor.rgb *= 0.76 + 0.17*ironH;',                    // cast-iron mottle (Nix: flecks were too bright — compressed toward the dark cells)
         'float ironRust = step(0.972, ironHash(ironCell + 17.0));',  // sparse rust cells
         'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.33,0.19,0.10), ironRust*0.55);'].join('\n'));
   };
@@ -1403,11 +1415,24 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   // hanger: pivots at the beam so the whole bench sways as a pendulum
   const H = new THREE.Group(); H.position.set(0, 2.02, 0); G.add(H);
   const seat = oak(1.45, 0.055, 0.48); seat.position.set(0, -1.44, 0.02); H.add(seat);
-  const back = oak(1.45, 0.50, 0.045); back.position.set(0, -1.18, -0.235); back.rotation.x = -0.18; H.add(back);
+  // back: three SLATS, not a flat panel (Nix: "consistency!" — the seat reads slatted, the back didn't)
+  for(let i=0;i<3;i++){
+    const slat = oak(1.45, 0.13, 0.045);
+    slat.position.set(0, -1.36 + i*0.165, -0.235 - i*0.030);  // stepped back along the recline
+    slat.rotation.x = -0.18; H.add(slat);
+  }
+  // chains: true segments ANCHORED to the beam (Nix + screenshot: they floated past it. Each is
+  // computed endpoint→endpoint — beam anchor above, seat corner below — no eyeballed tilts.)
   const chain = new THREE.MeshStandardMaterial({color:0x2a2a30, roughness:0.6, metalness:0.6});
-  for(const sx of [-0.66, 0.66]) for(const [sz, tilt] of [[0.22, 0.10], [-0.20, -0.06]]){
-    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 1.44, 6), chain);
-    c.position.set(sx, -0.72, sz*0.55); c.rotation.x = tilt; H.add(c);
+  const _up = new THREE.Vector3(0,1,0);
+  for(const sx of [-0.66, 0.66]) for(const cz of [0.24, -0.19]){
+    const A = new THREE.Vector3(sx, -0.02, 0);               // beam underside (hanger space: beam at y≈0)
+    const B = new THREE.Vector3(sx, -1.415, cz);             // seat corner
+    const dir = B.clone().sub(A); const L = dir.length();
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, L, 6), chain);
+    c.position.copy(A).addScaledVector(dir, 0.5);
+    c.quaternion.setFromUnitVectors(_up, dir.normalize());
+    H.add(c);
   }
   G.traverse(o=>{ if(o.isMesh) o.castShadow = true; });
   G.position.set(-2.4, 0, 2.2);
@@ -2794,7 +2819,9 @@ addEventListener('contextmenu', e=>{
   const row = (label, fn)=>{ const b=document.createElement('div');
     b.textContent=label; b.style.cssText='padding:6px 14px;border-radius:7px;cursor:pointer';
     b.onmouseenter=()=>b.style.background='rgba(90,80,60,.35)'; b.onmouseleave=()=>b.style.background='';
-    b.onclick=()=>{ _closeObjMenu(); fn(); }; m.appendChild(b); };
+    b.onpointerdown=(ev)=>{ ev.stopPropagation(); _closeObjMenu(); fn(); }; m.appendChild(b); };
+    // ^ pointerdown, NOT click (2026-07-12): the window-level close-on-pointerdown removed the menu
+    // from the DOM at mousedown, so the row's click event never fired — rows had NEVER worked.
   dbg('objmenu', `open: target=${g.pid||'?'} sid=${sid||'NONE'} held=${heldProp===g}`, 'k');   // delete-bug forensics (Nix 2026-07-11: photo delete "didn't work" — this names the failing step)
   row(heldProp===g ? '⬇ Put down' : '✋ Pick up', ()=>{      // TARGETED (was grab-nearest — grabbed the wrong thing)
     if(heldProp===g) __grab.grabToggleDesktop();             // holding it → toggle = drop
