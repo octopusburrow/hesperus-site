@@ -1340,8 +1340,8 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
         'vec3 ironCell = floor(vWP * 32.0);',                        // 32px/m, square by construction
         'float ironH = ironHash(ironCell);',
         'diffuseColor.rgb *= 0.76 + 0.17*ironH;',                    // cast-iron mottle (Nix: flecks were too bright — compressed toward the dark cells)
-        'float ironRust = step(0.972, ironHash(ironCell + 17.0));',  // sparse rust cells
-        'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.33,0.19,0.10), ironRust*0.55);'].join('\n'));
+        'float ironRust = step(0.988, ironHash(ironCell + 17.0));',  // rarer rust, and DARK oxide — the old warm-bright cells caught the firelight like confetti (Nix screenshot)
+        'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.16,0.10,0.07), ironRust*0.5);'].join('\n'));
   };
   const g = new THREE.Group();
   // legs: four stubby angled feet, spread for the bigger pot
@@ -2806,8 +2806,21 @@ function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; } }
 addEventListener('contextmenu', e=>{
   const g = (typeof _hoverG!=='undefined' && _hoverG) || heldProp;
   if(!g) return;                                           // nothing aimed at → default browser menu
+  // RMB-hold/drag is not a menu request (Nix 2026-07-12) — only a clean click opens it.
+  // (Skip the check under pointer lock: clientX is frozen there and the synthetic event uses center.)
+  if(!document.pointerLockElement && Math.hypot(e.clientX-_cdX, e.clientY-_cdY) > 6) return;
   e.preventDefault(); _closeObjMenu();
-  const sid = g.sid || (spawnedObjs && [...spawnedObjs.entries()].find(([,m])=>m===g.mesh)?.[0]);
+  // sid lookup walks ANCESTRY both ways (2026-07-12): spawned objects are Groups — the grabbable
+  // holds an inner mesh while the registry holds the root, so identity match hid the Delete row.
+  let sid = g.sid;
+  if(!sid && typeof spawnedObjs!=='undefined'){
+    for(const [k, m] of spawnedObjs.entries()){
+      let n = g.mesh; while(n && n!==m) n = n.parent;
+      if(n===m){ sid = k; break; }
+      let q = m;      while(q && q!==g.mesh) q = q.parent;
+      if(q===g.mesh){ sid = k; break; }
+    }
+  }
   const m = document.createElement('div'); _objMenu = m;
   const px = document.pointerLockElement ? innerWidth/2+14 : e.clientX;
   const py = document.pointerLockElement ? innerHeight/2 : e.clientY;
