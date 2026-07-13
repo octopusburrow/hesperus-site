@@ -5044,7 +5044,7 @@ function buildEmotePanel(){
   [['wave','👋'],['cheer','🎉'],['dance','💃'],['raise','🙌'],['calibrate','🎯']].forEach(([name,emoji],i)=>{
     const m=new THREE.Mesh(new THREE.PlaneGeometry(0.12,0.12),
       new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
-    m.position.set((i-2)*0.145, 0, 0); m.renderOrder=999;
+    m.renderOrder=999;   // position assigned by the ring layout below
     m.userData.action = name==='calibrate'
       ? ()=>{ window.__toggleEmotePanel(false);                 // 🎯 wrist cal: 5s to T-pose, then capture
           if(typeof dbg==='function') dbg('cal','T-POSE now — capturing wrists in 5s…','k');
@@ -5066,15 +5066,43 @@ function buildEmotePanel(){
   ].forEach(([name,emoji,fn],i)=>{
     const m=new THREE.Mesh(new THREE.PlaneGeometry(0.12,0.12),
       new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
-    m.position.set((i-1.5)*0.145, -0.155, 0); m.renderOrder=999;
+    m.renderOrder=999;
     m.userData.action = fn;
     grp.add(m); EMOTE_PANEL.buttons.push(m);
   });
+  // STICK-RADIAL LAYOUT (Nix 2026-07-12, "TTS is always a bit weird — a stick-radial menu is
+  // better"): buttons on a ring; the right thumbstick POINTS at a sector, releasing the stick
+  // selects it (VRChat grammar). Laser-click still works on every button.
+  const N = EMOTE_PANEL.buttons.length, R = 0.24;
+  EMOTE_PANEL.buttons.forEach((m,i)=>{ const a = -Math.PI/2 + i*(2*Math.PI/N);   // slot 0 at 12 o'clock, clockwise
+    m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0); m.userData._ring = a; });
   grp.visible=false; grp.position.set(0,-0.18,-0.55);  // in front of the FACE: camera-parented like the loading
   camera.add(grp); EMOTE_PANEL.group=grp; return grp;  // bar — rig-parented spawned at the FEET/rig origin, which in
                                                        // VR can be meters from the head (Nix: 'right stick does nothing'
                                                        // — it toggled, somewhere she wasn't)
 }
+// stick-radial driver: called each XR frame with the right stick while the panel is open.
+// Deflect >0.5 → highlight the sector the stick points at; release (<0.35) → fire it.
+EMOTE_PANEL.sel = -1;
+window.__radialStick = (x, y)=>{
+  if(!EMOTE_PANEL.on || !EMOTE_PANEL.buttons.length) return;
+  const mag = Math.hypot(x, y);
+  if(mag > 0.5){
+    const a = Math.atan2(y, x);                          // stick angle (y up is negative on WebXR pads — matches ring's -sin)
+    let best = -1, bd = 9;
+    EMOTE_PANEL.buttons.forEach((m,i)=>{ let d = Math.abs(Math.atan2(Math.sin(a-m.userData._ring), Math.cos(a-m.userData._ring)));
+      if(d < bd){ bd = d; best = i; } });
+    if(best !== EMOTE_PANEL.sel){
+      EMOTE_PANEL.buttons.forEach((m,i)=>m.scale.setScalar(i===best ? 1.45 : 1));
+      EMOTE_PANEL.sel = best;
+    }
+  } else if(mag < 0.35 && EMOTE_PANEL.sel >= 0){         // release = commit
+    const m = EMOTE_PANEL.buttons[EMOTE_PANEL.sel];
+    EMOTE_PANEL.buttons.forEach(b=>b.scale.setScalar(1)); EMOTE_PANEL.sel = -1;
+    try{ const r = m.userData.action(); if(typeof dbg==='function') dbg('radial', String(r), 'k'); }
+    catch(e){ if(typeof dbg==='function') dbg('radial','action failed: '+e.message,'e'); }
+  }
+};
 window.__toggleEmotePanel=(f)=>{
   const g=buildEmotePanel();
   const on=(f!==undefined)?!!f:!EMOTE_PANEL.on;
@@ -6684,7 +6712,8 @@ function xrLocomotion(dt){
         player.position.addScaledVector(_right, x * MOVE_SPEED * dt);
       }
     } else if(src.handedness === 'right'){
-      if(Math.abs(x) > 0.12) player.rotation.y -= x * TURN_SPEED * dt;  // smooth analog turn (ramps w/ deflection)
+      if(typeof EMOTE_PANEL!=='undefined' && EMOTE_PANEL.on) window.__radialStick(x, y);   // panel open: stick points, release selects
+      else if(Math.abs(x) > 0.12) player.rotation.y -= x * TURN_SPEED * dt;  // smooth analog turn (ramps w/ deflection)
     }
     const b = src.gamepad.buttons;
     if(b[4] && b[4].pressed) jumpBtn = true;                          // A / X = jump
