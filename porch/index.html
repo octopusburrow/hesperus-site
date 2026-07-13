@@ -355,8 +355,11 @@ addEventListener('mouseup', e=>{
   // LMB grab (Nix 2026-07-10): pointer-locked + no button hit → grab what the reticle hovers
   // (up to 3.5m — the prop flies to your hand), or drop what you're holding. E still works.
   if(!_clickConsumed && document.pointerLockElement && !renderer.xr.isPresenting){
-    if(heldProp){ const p=heldProp.pid; dropProp(heldProp); heldProp=null; _clickConsumed=true;
-      if(typeof dbg==='function') dbg('grab','LMB dropped '+p,'k'); }
+    if(heldProp){ _clickConsumed=true;
+      // LMB drop routes through the SAME minecraft rules as E (Nix's console cracked it,
+      // 2026-07-12: "LMB dropped" — this path bypassed aim-place/lob entirely, so throws
+      // "dropped right at my feet" no matter where she aimed. grabToggleDesktop = one drop law.
+      if(typeof dbg==='function') dbg('grab','LMB '+ (window.__grabToggle ? __grabToggle() : 'no toggle'),'k'); }
     else{ const g=_hoverG || (_rayShelf && _materializeShelfBook(_rayShelf)) || null;
       if(g){ heldProp=grabProp(g); _clickConsumed=true;
         if(typeof dbg==='function') dbg('grab','LMB grabbed '+g.pid,'k'); } }
@@ -1039,7 +1042,7 @@ function _populateShelves(cases){
     const pls = byPal[pcol]; if(!pls.length) continue;
     const tpl = _bookTemplates[pcol];
     const im = new THREE.InstancedMesh(tpl.geo, tpl.mat, pls.length);
-    im.castShadow = im.receiveShadow = true; im.name = 'books_'+pcol; imeshes++;
+    im.castShadow = false; im.receiveShadow = true; im.name = 'books_'+pcol; imeshes++;   // shelf books stopped casting (Nix 2026-07-12: candle's new spot projected fat black bars above the spines — misprojected book shadows on the backboard; the shelf reads cleaner without)
     pls.forEach((pl,i)=>{ m4.compose(pl.pos, pl.quat, sc); im.setMatrixAt(i, m4);
       _shelfBooks.push({ imesh:im, idx:i, pos:pl.pos.clone(), quat:pl.quat.clone(), palette:pcol,
                          pid:'book_'+_shelfBooks.length, taken:false }); });
@@ -2987,7 +2990,7 @@ addEventListener('keydown', e=>{
   if(e.code==='KeyE'){                                     // holding the camera → E = selfie flip; else grab/drop as before
     if(!(window.__cameraFlip && window.__cameraFlip()) && window.__grabToggle) dbg('grab', window.__grabToggle()); }
   if(e.code==='KeyF' && window.__cameraSnapIfHeld){ window.__cameraSnapIfHeld(); }  // F = shutter while holding the camera
-  if(e.code==='KeyC' && !e.repeat && window.__setCrouch){ window.__setCrouch(true);
+  if(e.code==='KeyC' && !e.ctrlKey && !e.metaKey && !e.repeat && window.__setCrouch){ window.__setCrouch(true);   // plain C only — Ctrl+C is copy (Nix)
     if(typeof dbg==='function') dbg('pose', 'crouch DOWN', 'k'); }
   // Ctrl-crouch REMOVED (2026-07-12, RIP one Chrome tab): crouch-walking forward = Ctrl+W = the
   // browser closes the window, and preventDefault can't intercept it in a normal tab. Shooter
