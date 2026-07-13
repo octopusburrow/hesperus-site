@@ -1171,17 +1171,26 @@ function dropProp(g){ if(!g) return; g.carrying=false; g._hy0=undefined;   // ow
   if(g.vel.length()<0.6) g.vel.set(0,0,0); else g.vel.multiplyScalar(1.1); }   // throw threshold + slight gain (Basis)
 function grabToggleDesktop(){                         // E: drop what I hold, else grab nearest in front
   if(heldProp){ const g=heldProp, p=g.pid; heldProp=null;
-    // Reticule mode (Nix 2026-07-11, "minecraft rules"): place AT the aim point when the ray
-    // meets ground within reach; too far → LOB it toward the aim (lobbing is a feature).
-    const locked = document.pointerLockElement && !renderer.xr.isPresenting;
-    if(locked && !(g.isImage || g.isModel)){
-      const dir = camera.getWorldDirection(new THREE.Vector3());
-      const o = camera.getWorldPosition(new THREE.Vector3());
+    // Minecraft rules rev.2 (Nix 2026-07-12): place AT the aim point in BOTH desktop modes —
+    // reticle (locked: camera-forward ray) and HUD (unlocked: ray through the mouse cursor).
+    // Within reach → set down on the surface under the aim (groundHeight knows furniture tops).
+    // Too far → LOB with tumble. Upright kinds (text/pictures/video) place upright, never
+    // tumble; "can it tumble" becomes a per-object setting when objects get editable.
+    const upright = g.isImage || g.isText || g.isVideo;
+    if(!renderer.xr.isPresenting && !g.isModel){
+      const locked = !!document.pointerLockElement;
+      const dir = new THREE.Vector3(), o = camera.getWorldPosition(new THREE.Vector3());
+      if(locked) camera.getWorldDirection(dir);
+      else { const nx=(_hovMX/innerWidth)*2-1, ny=-(_hovMY/innerHeight)*2+1;   // HUD: through the cursor
+        dir.set(nx, ny, 0.5).unproject(camera).sub(o).normalize(); }
       for(let s=0.4; s<=5; s+=0.2){ const px=o.x+dir.x*s, py=o.y+dir.y*s, pz=o.z+dir.z*s;
         const gy = groundHeight(px,pz)+g.hh;
         if(py <= gy+0.02){ g.carrying=false; g.mesh.position.set(px, gy, pz); g.vel.set(0,0,0);
-          _levelProp(g); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g);
+          if(upright){ const yaw = g.mesh.rotation.y; g.mesh.rotation.set(0, yaw, 0); }   // pictures/text stand up straight
+          else _levelProp(g);
+          g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g);
           return 'placed '+p; } }
+      if(upright){ dropProp(g); return 'dropped '+p; }   // upright kinds don't get lobbed — they hang where released (tumble-toggle comes with editable objects)
       g.carrying=false; g.vel.copy(dir).multiplyScalar(11); g.vel.y += 2.2;   // out of reach → full send
       g.spin = new THREE.Vector3((Math.random()-0.5)*7,(Math.random()-0.5)*7,(Math.random()-0.5)*7);
       return 'lobbed '+p; }
