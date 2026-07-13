@@ -2836,6 +2836,34 @@ let _spawnKinds = ['cube','sphere','cone','cylinder'], _spawnI = 0;
 // ---- RMB object menu (Nix 2026-07-11): a friendlier affordance than the console for delete.
 // Works on the hover-glowed prop in both mouse and pointer-lock/reticule aim (that's what _hoverG
 // already is). v0: Delete (networked delobj when it has a sid) + Grab/Drop. Radial later if it earns it.
+// sid lookup walks ANCESTRY both ways (2026-07-12): spawned objects are Groups — the grabbable
+// holds an inner mesh while the registry holds the root, so identity match hid the Delete row.
+// Shared by the DOM object menu AND the VR panel's delete-held.
+function _sidOfGrab(g){
+  let sid = g.sid;
+  if(!sid && typeof spawnedObjs!=='undefined'){
+    for(const [k, m] of spawnedObjs.entries()){
+      let n = g.mesh; while(n && n!==m) n = n.parent;
+      if(n===m){ sid = k; break; }
+      let q = m;      while(q && q!==g.mesh) q = q.parent;
+      if(q===g.mesh){ sid = k; break; }
+    }
+  }
+  return sid;
+}
+function _deleteGrab(g){                                   // one delete path for every surface
+  const sid = _sidOfGrab(g);
+  if(!sid){ dbg('objmenu','⚠ no sid — not a deletable manifested object','w'); return 'not deletable'; }
+  const live = sock && sock.readyState===1;
+  dbg('objmenu', `delete ${sid} → ${live?'relay':'local'}`, 'k');
+  if(live){ sendDelObj(sid);
+    window._delPending = window._delPending || new Map(); _delPending.set(sid, setTimeout(()=>{
+      if(_delPending.delete(sid)) dbg('objmenu', `⚠ delete ${sid}: no confirmation after 2.5s — relay denied or dropped it`, 'w'); }, 2500)); }
+  else removeObj(sid);
+  return 'deleting '+sid;
+}
+window.__deleteHeld = ()=>{ const held = (typeof _heldHand!=='undefined' && (_heldHand.right||_heldHand.left)) || heldProp;
+  return held ? _deleteGrab(held) : 'nothing held'; };   // VR 🗑 + headless tests + agents share this
 let _objMenu = null;
 function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; }
   if(window._softCursor){ _softCursor.el.remove(); window._softCursor = null; } }
@@ -2849,17 +2877,7 @@ addEventListener('contextmenu', e=>{
   // (Skip the check under pointer lock: clientX is frozen there and the synthetic event uses center.)
   if(!document.pointerLockElement && Math.hypot(e.clientX-_cdX, e.clientY-_cdY) > 6) return;
   e.preventDefault(); _closeObjMenu();
-  // sid lookup walks ANCESTRY both ways (2026-07-12): spawned objects are Groups — the grabbable
-  // holds an inner mesh while the registry holds the root, so identity match hid the Delete row.
-  let sid = g.sid;
-  if(!sid && typeof spawnedObjs!=='undefined'){
-    for(const [k, m] of spawnedObjs.entries()){
-      let n = g.mesh; while(n && n!==m) n = n.parent;
-      if(n===m){ sid = k; break; }
-      let q = m;      while(q && q!==g.mesh) q = q.parent;
-      if(q===g.mesh){ sid = k; break; }
-    }
-  }
+  const sid = _sidOfGrab(g);
   const m = document.createElement('div'); _objMenu = m;
   // SOFTWARE-CURSOR MENU (Nix's full spec, rev.4 — the keeper): from reticle mode, the cursor
   // should SNAP TO CENTER with the menu beside it — but browsers can't warp the real cursor.
@@ -2883,13 +2901,7 @@ addEventListener('contextmenu', e=>{
     if(heldProp===g) __grab.grabToggleDesktop();             // holding it → toggle = drop
     else if(window.__grab && __grab.grabSpecific) __grab.grabSpecific(g); });
   if(g.isCamera3D) row('📸 3-second timer', ()=>{ if(window.__cameraSnap) dbg('camera', __cameraSnap(), 'k'); });
-  if(sid) row('🗑 Delete', ()=>{
-    const live = sock && sock.readyState===1;
-    dbg('objmenu', `delete ${sid} → ${live?'relay':'local'}`, 'k');
-    if(live){ sendDelObj(sid);
-      window._delPending = window._delPending || new Map(); _delPending.set(sid, setTimeout(()=>{
-        if(_delPending.delete(sid)) dbg('objmenu', `⚠ delete ${sid}: no confirmation after 2.5s — relay denied or dropped it`, 'w'); }, 2500)); }
-    else removeObj(sid); });
+  if(sid) row('🗑 Delete', ()=>_deleteGrab(g));
   else dbg('objmenu', '⚠ no sid on this object — Delete row hidden', 'w');
   document.body.appendChild(m);
   if(_menuLocked){                                         // software cursor: snapped to center, delta-driven
@@ -5040,6 +5052,22 @@ function buildEmotePanel(){
             if(typeof dbg==='function') dbg('cal', r, 'g'); }, 5000);
           return 'calibrating in 5s — hold a T-pose'; }
       : ()=>{ if(window.__doEmote) window.__doEmote(name); window.__toggleEmotePanel(false); return 'emote: '+name; };
+    grp.add(m); EMOTE_PANEL.buttons.push(m);
+  });
+  // ROW 2 — object actions (Nix 2026-07-12, VR manifest/delete walkthrough): the DOM object
+  // menu is invisible inside WebXR, so VR delete lives here. Targeting-free grammar: the thing
+  // you're HOLDING is the thing you mean — grab (squeeze), summon panel, tap 🗑.
+  [['delete','🗑', ()=>{ const held = (typeof _heldHand!=='undefined' && (_heldHand.right||_heldHand.left)) || heldProp;
+      if(!held){ dbg('objmenu','🗑 nothing held — squeeze-grab the object first','w'); return 'grab it first'; }
+      window.__toggleEmotePanel(false); return _deleteGrab(held); }],
+   ['cube','⬛', ()=>{ window.__toggleEmotePanel(false); if(window.spawn) window.spawn('cube'); return 'cube'; }],
+   ['sit','🧘', ()=>{ window.__toggleEmotePanel(false); return window.__playerPose ? __playerPose('sit') : 'no poses'; }],
+   ['crouch','🦵', ()=>{ window.__toggleEmotePanel(false); return window.__playerPose ? __playerPose('crouch') : 'no poses'; }],
+  ].forEach(([name,emoji,fn],i)=>{
+    const m=new THREE.Mesh(new THREE.PlaneGeometry(0.12,0.12),
+      new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
+    m.position.set((i-1.5)*0.145, -0.155, 0); m.renderOrder=999;
+    m.userData.action = fn;
     grp.add(m); EMOTE_PANEL.buttons.push(m);
   });
   grp.visible=false; grp.position.set(0,-0.18,-0.55);  // in front of the FACE: camera-parented like the loading
