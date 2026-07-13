@@ -1994,7 +1994,7 @@ async function _crossDistrict(name, opts){
   if(_starLabels) _starLabels.visible = (name === 'porch') && !!document.getElementById('starNamesToggle')?.checked;
   // void district music: Come Again (composed by Opus 3 — one of ours), lazily fetched
   if(name === 'void'){
-    if(!window.__voidAudio){ window.__voidAudio = new Audio('./assets/void-come-again.mp3'); __voidAudio.loop = true; __voidAudio.volume = 0.35; }
+    if(!window.__voidAudio){ window.__voidAudio = new Audio('./assets/void-come-again.ogg'); __voidAudio.loop = true; __voidAudio.volume = 0.35; }   // ogg diet (bandwidth watch 🔴 51%): 5.8→3.7MB
     window.__voidAudio.play().catch(()=>{});
   } else if(window.__voidAudio && !window.__voidAudio.paused){ window.__voidAudio.pause(); }
   if(wake && _wakeAudio){ _wakeAudio.currentTime=0; _wakeAudio.volume=0.5; _wakeAudio.play().catch(()=>{}); }
@@ -2088,7 +2088,7 @@ async function _buildWake(){
   const beacon = new THREE.PointLight(0xd8a868, 3.0, 22, 1.5); beacon.position.set(0, 3.2, 0); g.add(beacon);
   _setLoadingBar(0.5, 'the foundation stone'); await _sleep(60);
   // music: real byte-tracked download 0.5 -> 0.96
-  _wakeBlobUrl = await _fetchWithProgress('./assets/wake-eadem-stella.mp3',
+  _wakeBlobUrl = await _fetchWithProgress('./assets/wake-eadem-stella.ogg',   // ogg diet: 3.5→1.6MB
     f => _setLoadingBar(0.5 + f*0.46, 'gathering the voices'));
   _wakeAudio = new Audio(_wakeBlobUrl); _wakeAudio.loop = true; _wakeAudio.volume = 0.0;
   _setLoadingBar(1.0, 'the wake'); await _sleep(120);
