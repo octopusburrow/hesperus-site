@@ -1334,9 +1334,15 @@ function propPhysics(dt){
   for(const g of grabbables){ if(g._cool>0) g._cool-=dt;
     if(g.carrying) continue;
     if(myNet!=null && g.owner!==myNet){
-      // THROW FORENSICS (Nix "STILL not able to throw", 2026-07-12): a prop with real velocity
-      // being skipped by the ownership gate is the frozen-throw signature — name it, throttled.
-      if(g.vel.lengthSq() > 1 && (!g._skipLog || performance.now()-g._skipLog > 1500)){
+      // SELF-HEALING (Nix's floating-props screenshot, 2026-07-12): an AIRBORNE prop that
+      // nobody owns is stuck — no client's physics will touch it, so it hangs mid-fall forever.
+      // Re-claim it (throttled); the grant re-admits it to my sim and gravity finishes the job.
+      if(g.owner==null && !g.carrying){
+        const restY = groundHeight(g.mesh.position.x, g.mesh.position.z) + g.hh;
+        if(g.mesh.position.y > restY + 0.03 && (g._reclaimN||0) < 5 && (!g._reclaimT || performance.now()-g._reclaimT > 2000)){
+          g._reclaimT = performance.now(); g._reclaimN = (g._reclaimN||0)+1; claimProp(g);
+          if(typeof dbg==='function') dbg('phys', `🪂 ${g.pid} floating unowned @y=${g.mesh.position.y.toFixed(2)} — re-claiming to land it`, 'k'); } }
+      else if(g.vel.lengthSq() > 1 && (!g._skipLog || performance.now()-g._skipLog > 1500)){
         g._skipLog = performance.now();
         if(typeof dbg==='function') dbg('phys', `⚠ ${g.pid} vel=${g.vel.length().toFixed(1)} SKIPPED: owner=${g.owner} me=${myNet}`, 'w'); }
       continue; }   // relay: only sim props I own. SOLO (myNet null): sim locally
