@@ -6199,10 +6199,15 @@ window.__musicboxTick = (dt)=>{                             // called from the r
           const wp = root.getWorldPosition(new THREE.Vector3());   // (2026-07-12: the _poseFrom unification deleted the old
                                                                     // pose block that declared wp — snap died silently in the
                                                                     // catch for an hour. Nix noticed the missing save dialog.)
-          const px = wp.x, pz = wp.z, ry = Math.atan2(-(camCam.getWorldDirection(new THREE.Vector3()).x), -(camCam.getWorldDirection(new THREE.Vector3()).z));
+          // polaroid develops 1.2m OUT FRONT of the lens (Nix 2026-07-12: handheld shots "splashed
+          // a big version across the whole window" — the old fixed spot was the camera's own
+          // position ≈ your face when the camera is in hand). It faces back at the photographer.
+          const vd = camCam.getWorldDirection(new THREE.Vector3());
+          const px = wp.x + vd.x*1.2, pz = wp.z + vd.z*1.2, py = Math.max(1.1, wp.y);
+          const ry = Math.atan2(-vd.x, -vd.z);
           if(sock && sock.readyState===1)
-            sendObj('image', {dataURL, aspect:CAM_W/CAM_H, x:px, y:1.5, z:pz, ry, cid:'cam'+Date.now()%100000});
-          else applyObj({t:'obj', kind:'image', sid:'cam_'+Date.now()%100000, id:myNet, dataURL, aspect:CAM_W/CAM_H, x:px, y:1.5, z:pz, ry});
+            sendObj('image', {dataURL, aspect:CAM_W/CAM_H, x:px, y:py, z:pz, ry, cid:'cam'+Date.now()%100000});
+          else applyObj({t:'obj', kind:'image', sid:'cam_'+Date.now()%100000, id:myNet, dataURL, aspect:CAM_W/CAM_H, x:px, y:py, z:pz, ry});
           if(window.__logChat) __logChat('camera', '📸 click! photo manifested', 'sys');
           { const a=document.createElement('a'); a.href=dataURL;   // offline copy → Downloads (Nix 2026-07-11)
             a.download='porch-photo-'+new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)+'.jpg';
