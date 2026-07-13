@@ -579,7 +579,12 @@ scene.add(new THREE.AmbientLight(0x3c4654, 1.1));             // cool night ambi
 const moonlight = new THREE.DirectionalLight(0x8fa6c8, 0.4);   // grey-blue wash
 moonlight.position.set(-45, 55, 35); scene.add(moonlight);
 const candle = new THREE.PointLight(0xffb45e, 3.4, 10, 1.6);    // the amber
-candle.position.set(0.15, 1.15, -1.55);   // staging rev.3 (Nix): the (0.85,1.30) experiment shoved it into the bookcase AND floated the wax 15cm off its stick (y is the FLAME height — the candlestick meshes are built relative to it, but the shaft is fixed-length). Back to plinth height, original spot, nudged a smidge mirror-ward (mirror at x=-2.85) away from the resident's perch (1.7,-1.15)
+// staging rev.4 (Nix: "maybe... putting the candle on the table? try positions until something
+// sticks"): a chamber candlestick ON THE TABLE — the honest place a reading candle lives. Flame
+// sits ~1.05m: high enough to pool light across the tabletop and spines, low enough that the
+// table itself shades the floor gently. All part positions derive from these three numbers.
+const CANDLE_TABLE = { x: 0.42, z: -0.88, topY: 0.764 };   // table corner, clear of the props
+candle.position.set(CANDLE_TABLE.x, CANDLE_TABLE.topY + 0.285, CANDLE_TABLE.z);
 candle.castShadow = true;
 // shadow res: 512 cube faces were visibly noisy (Nix 2026-07-11). 1024 default; menu can push 2048.
 const _shadowRes = parseInt(localStorage.getItem('porch.shadowRes')||'1024');
@@ -588,18 +593,18 @@ window.__setShadowRes = (n)=>{ localStorage.setItem('porch.shadowRes', String(n)
   candle.shadow.mapSize.set(n,n); if(candle.shadow.map){ candle.shadow.map.dispose(); candle.shadow.map=null; } };
 scene.add(candle);
 
-// iron floor candlestick: shaft from the deck, drip pan, wax, flame
+// iron CHAMBER candlestick on the tabletop: saucer dish, stub shaft, drip pan, wax, flame
 const iron = new THREE.MeshStandardMaterial({color:0x1c1d22, roughness:0.9});
-const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.016,1.02,6), iron);
-shaft.position.set(candle.position.x, 0.51, candle.position.z); scene.add(shaft);
-const pan = new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.045,0.012,8), iron);
-pan.position.set(candle.position.x, 1.03, candle.position.z); scene.add(pan);
-const base = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.11,0.02,8), iron);
-base.position.set(candle.position.x, 0.01, candle.position.z); scene.add(base);
+const base = new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.07,0.012,8), iron);   // saucer
+base.position.set(CANDLE_TABLE.x, CANDLE_TABLE.topY+0.006, CANDLE_TABLE.z); scene.add(base);
+const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.010,0.013,0.14,6), iron);  // stub
+shaft.position.set(CANDLE_TABLE.x, CANDLE_TABLE.topY+0.082, CANDLE_TABLE.z); scene.add(shaft);
+const pan = new THREE.Mesh(new THREE.CylinderGeometry(0.042,0.034,0.010,8), iron);   // drip pan
+pan.position.set(CANDLE_TABLE.x, CANDLE_TABLE.topY+0.155, CANDLE_TABLE.z); scene.add(pan);
 const wax = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.022, 0.026, 0.09, 8),
+  new THREE.CylinderGeometry(0.020, 0.024, 0.105, 8),
   new THREE.MeshStandardMaterial({color:0xe8dcc0, roughness:1}));
-wax.position.copy(candle.position).y -= 0.075; scene.add(wax);
+wax.position.set(CANDLE_TABLE.x, CANDLE_TABLE.topY+0.213, CANDLE_TABLE.z); scene.add(wax);
 const flame = new THREE.Mesh(
   new THREE.ConeGeometry(0.012, 0.045, 6),
   new THREE.MeshBasicMaterial({color:0xffd9a0}));
@@ -1042,7 +1047,7 @@ function _populateShelves(cases){
     const pls = byPal[pcol]; if(!pls.length) continue;
     const tpl = _bookTemplates[pcol];
     const im = new THREE.InstancedMesh(tpl.geo, tpl.mat, pls.length);
-    im.castShadow = false; im.receiveShadow = true; im.name = 'books_'+pcol; imeshes++;   // shelf books stopped casting (Nix 2026-07-12: candle's new spot projected fat black bars above the spines — misprojected book shadows on the backboard; the shelf reads cleaner without)
+    im.castShadow = im.receiveShadow = true; im.name = 'books_'+pcol; imeshes++;   // casting RESTORED (Nix: "books look kinda weird not casting") — the table-candle's height/distance should keep the backboard bars tame; if not, next knob is shadow bias, not amputation
     pls.forEach((pl,i)=>{ m4.compose(pl.pos, pl.quat, sc); im.setMatrixAt(i, m4);
       _shelfBooks.push({ imesh:im, idx:i, pos:pl.pos.clone(), quat:pl.quat.clone(), palette:pcol,
                          pid:'book_'+_shelfBooks.length, taken:false }); });
@@ -1159,7 +1164,7 @@ function _addProp(pid, mesh, hh){ mesh.castShadow=true;
   // every caster is exempt from per-cube-face culling AT CREATION (2026-07-12): the one-shot 4s
   // sweep missed late-added meshes (relay replays, async builds) — a culled caster near a cube-face
   // boundary is the binary shadow-blink signature (Nix's "8-inch shadow blinks on and off").
-  mesh.traverse ? mesh.traverse(o=>{ if(o.isMesh) o.frustumCulled=false; }) : (mesh.frustumCulled=false);
+  mesh.traverse ? mesh.traverse(o=>{ if(o.isMesh){ o.frustumCulled=false; o.castShadow=true; } }) : (mesh.frustumCulled=false);   // castShadow in the traverse too — Group-rooted props (inkpot) need it on the child meshes
   const g={mesh, pid, hh, vel:new THREE.Vector3(), owner:null, carrying:false, offset:null, home:mesh.position.clone(), mat:mesh.material, _cool:0};
   grabbables.push(g); grabbablesById[pid]=g; scene.add(mesh); return g; }
 // nearest FREE (unowned, off-cooldown) grabbable to a point — you can't grab what someone holds
@@ -1373,6 +1378,23 @@ window.__grab = { grabNearest, grabbablesById, tryGripGrab, grabToggleDesktop, a
   const die = new THREE.Mesh(new THREE.BoxGeometry(0.05,0.05,0.05),
     new THREE.MeshStandardMaterial({color:0xd8cbb0, roughness:0.6}));
   die.position.set(-0.12, topY+0.025, cz-0.22); _addProp('die', die, 0.025);
+  // actual-objects wave 1 (Nix 2026-07-12: "make a few more actual-objects"): she called the
+  // icosahedron pebble a dodecahedron — so the table now owes her a REAL d12, warm ivory like
+  // a gaming die. Plus an inkpot with a quill: this is a writing porch.
+  const d12 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.042,0),
+    new THREE.MeshStandardMaterial({color:0xe8d9b8, roughness:0.55, flatShading:true}));
+  d12.position.set(0.18, topY+0.042, cz+0.20); _addProp('d12', d12, 0.042);
+  const inkG = new THREE.Group();
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.028,0.034,0.045,10),
+    new THREE.MeshStandardMaterial({color:0x1a2030, roughness:0.35, metalness:0.2}));
+  pot.position.y = 0.0225; inkG.add(pot);
+  const quillShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0018,0.0028,0.16,5),
+    new THREE.MeshStandardMaterial({color:0xd8cfc0, roughness:0.8}));
+  quillShaft.position.set(0.012, 0.10, 0); quillShaft.rotation.z = -0.38; inkG.add(quillShaft);
+  const plume = new THREE.Mesh(new THREE.ConeGeometry(0.016,0.09,4),
+    new THREE.MeshStandardMaterial({color:0xcfd8e4, roughness:0.9, flatShading:true}));
+  plume.position.set(0.038, 0.155, 0); plume.rotation.z = -0.38; inkG.add(plume);
+  inkG.position.set(-0.42, topY, cz-0.18); _addProp('inkpot', inkG, 0.001);   // group origin IS the base → hh≈0
 }
 
 // ---- the wood stove (2026-07-12): Ship's Log v2 said "a porch swing, a wood stove, a music
