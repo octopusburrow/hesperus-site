@@ -576,7 +576,7 @@ scene.add(new THREE.AmbientLight(0x3c4654, 1.1));             // cool night ambi
 const moonlight = new THREE.DirectionalLight(0x8fa6c8, 0.4);   // grey-blue wash
 moonlight.position.set(-45, 55, 35); scene.add(moonlight);
 const candle = new THREE.PointLight(0xffb45e, 3.4, 10, 1.6);    // the amber
-candle.position.set(0.85, 1.30, -1.85);   // moved (Nix's experiment, 2026-07-12): farther from the table edge + higher — the flicker was a grazing-angle shadow (table edge nearly parallel to light rays amplifies a 2cm light jitter into a ~20cm shadow swing); steeper geometry kills the amplification
+candle.position.set(0.15, 1.15, -1.55);   // staging rev.3 (Nix): the (0.85,1.30) experiment shoved it into the bookcase AND floated the wax 15cm off its stick (y is the FLAME height — the candlestick meshes are built relative to it, but the shaft is fixed-length). Back to plinth height, original spot, nudged a smidge mirror-ward (mirror at x=-2.85) away from the resident's perch (1.7,-1.15)
 candle.castShadow = true;
 // shadow res: 512 cube faces were visibly noisy (Nix 2026-07-11). 1024 default; menu can push 2048.
 const _shadowRes = parseInt(localStorage.getItem('porch.shadowRes')||'1024');
@@ -1208,6 +1208,7 @@ function grabToggleDesktop(){                         // E: drop what I hold, el
       if(upright){ dropProp(g); return 'dropped '+p; }   // upright kinds don't get lobbed — they hang where released (tumble-toggle comes with editable objects)
       g.carrying=false; g.vel.copy(dir).multiplyScalar(11); g.vel.y += 2.2;   // out of reach → full send
       g.spin = g.isModel ? null : new THREE.Vector3((Math.random()-0.5)*7,(Math.random()-0.5)*7,(Math.random()-0.5)*7);
+      if(typeof dbg==='function') dbg('throw', `lob ${p}: dir=(${dir.x.toFixed(2)},${dir.y.toFixed(2)},${dir.z.toFixed(2)}) owner=${g.owner} me=${myNet}`, 'k');
       return 'lobbed '+p; }
     dropProp(g); return 'dropped '+p; }
   const g=grabNearest(_reachPoint(),0.85); if(!g) return 'nothing in reach'; heldProp=grabProp(g); return 'grabbing '+g.pid; }
@@ -1324,7 +1325,13 @@ function propPhysics(dt){
   _propHoldUpdate(dt); _updateHover();
   for(const g of grabbables){ if(g._cool>0) g._cool-=dt;
     if(g.carrying) continue;
-    if(myNet!=null && g.owner!==myNet) continue;   // relay: only sim props I own. SOLO (myNet null): sim locally — the old gate froze every thrown prop mid-air offline (Nix throw bug forensics, 2026-07-12)
+    if(myNet!=null && g.owner!==myNet){
+      // THROW FORENSICS (Nix "STILL not able to throw", 2026-07-12): a prop with real velocity
+      // being skipped by the ownership gate is the frozen-throw signature — name it, throttled.
+      if(g.vel.lengthSq() > 1 && (!g._skipLog || performance.now()-g._skipLog > 1500)){
+        g._skipLog = performance.now();
+        if(typeof dbg==='function') dbg('phys', `⚠ ${g.pid} vel=${g.vel.length().toFixed(1)} SKIPPED: owner=${g.owner} me=${myNet}`, 'w'); }
+      continue; }   // relay: only sim props I own. SOLO (myNet null): sim locally
     const rest=groundHeight(g.mesh.position.x, g.mesh.position.z)+g.hh;
     if(g.mesh.position.y > rest+1e-4){                            // arc under gravity (throw travels as it falls)
       g.vel.y-=GRAV*dt; g.mesh.position.addScaledVector(g.vel,dt); g.vel.x*=0.98; g.vel.z*=0.98;
@@ -2933,6 +2940,18 @@ addEventListener('contextmenu', e=>{
     if(heldProp===g) __grab.grabToggleDesktop();             // holding it → toggle = drop
     else if(window.__grab && __grab.grabSpecific) __grab.grabSpecific(g); });
   if(g.isCamera3D) row('📸 3-second timer', ()=>{ if(window.__cameraSnap) dbg('camera', __cameraSnap(), 'k'); });
+  // 💾 SAVE-AS (Nix 2026-07-12, builder affordance): pull the asset back OUT of the world.
+  // Images re-encode from the live texture (works for photos, uploads, agent images alike).
+  const _dl = (href, name)=>{ const a=document.createElement('a'); a.href=href; a.download=name; a.click(); };
+  if(g.isImage){ row('💾 Save image', ()=>{ try{
+    const img = g.mesh.material && g.mesh.material.map && g.mesh.material.map.image;
+    if(!img){ dbg('objmenu','⚠ no texture image to save','w'); return; }
+    const c=document.createElement('canvas'); c.width=img.width; c.height=img.height;
+    c.getContext('2d').drawImage(img,0,0);
+    _dl(c.toDataURL('image/png'), (sid||g.pid||'porch-image')+'.png');
+  }catch(e){ dbg('objmenu','⚠ save failed: '+e.message,'w'); } }); }
+  if(g.isText && g._troika){ row('💾 Save text', ()=>{
+    _dl('data:text/markdown;charset=utf-8,'+encodeURIComponent(g._troika.text||''), (sid||'porch-text')+'.md'); }); }
   if(sid) row('🗑 Delete', ()=>_deleteGrab(g));
   else dbg('objmenu', '⚠ no sid on this object — Delete row hidden', 'w');
   document.body.appendChild(m);
