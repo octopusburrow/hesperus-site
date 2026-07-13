@@ -602,6 +602,14 @@ const flame = new THREE.Mesh(
   new THREE.MeshBasicMaterial({color:0xffd9a0}));
 flame.position.copy(candle.position).y += 0.005; scene.add(flame);
 const _candleBase = candle.position.clone();               // jitter anchor (sweetener #2)
+// SHADOW-FLICKER ROOT CAUSE (Nix red-circles ×2, 2026-07-12): sweetener #2's positional jitter
+// moved the SHADOW-CASTING light — a 2cm hop at 1.15m swings the table-edge shadow centimeters
+// across the floor, and the 1024 cube map quantizes that into popping. Both frustum-culling
+// exorcisms were chasing a bystander. Split: `candle` stays STATIC and casts stable shadows
+// (intensity breathing is safe — it dims edges, never moves them); `candleDancer` carries the
+// positional wander, shadowless, so the light still feels alive on surfaces.
+const candleDancer = new THREE.PointLight(0xffb45e, 0.9, 6, 1.8);
+candleDancer.position.copy(_candleBase); scene.add(candleDancer);
 { // sweetener #1: visible marker so the parading spec light can be found and inspected
   // (parade light + marker RETIRED 2026-07-11 — served its purpose: spec verified, GI lesson learned.)
 }
@@ -3415,6 +3423,11 @@ async function embodyPlayer(bodyName){
     const _hideNames = new Set(['flower','face','Cube','Cube_1','Cube_2']);
     const _headMeshes = [];
     vrm.scene.traverse(o=>{ if((o.isMesh||o.isSkinnedMesh) && _hideNames.has(o.name)) _headMeshes.push(o); });
+    // BLINKING 8-INCH SHADOW (Nix 2026-07-12, second red-circle report): mirror/spectator/camera-
+    // preview passes restore these meshes mid-frame, and each pass re-renders the shadow map —
+    // catching the head VISIBLE at preview cadence, strobing its shadow blob on the floor.
+    // Own head never casts (VRChat convention); remote avatars are separate instances, unaffected.
+    _headMeshes.forEach(m=>{ m.castShadow = false; });
     window.__setHeadScale = (s)=>{
       const show = s > 0.5;
       _headMeshes.forEach(m=>{ m.visible = show; });
@@ -6829,10 +6842,11 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   const f = 3.25 + Math.sin(t*0.7)*0.14 + Math.sin(t*1.7)*0.15    // slow drift (long, layered)
           + Math.sin(t*5.3)*0.17 + Math.sin(t*8.9)*0.11           // faster visible flicker
           + (Math.random()-0.5)*0.18;                             // sputter
-  candle.intensity = f + 0.9;
-  // positional jitter matched to the brightness noise (Nix sweetener #2): the light source
-  // wanders ~2cm with the same layered cadence, so shadows flicker and SHIFT, not just dim.
-  candle.position.set(                                            // rev.2 (Nix): faster + half the travel
+  candle.intensity = f + 0.4;                                     // shadow caster: breathes, never moves
+  // positional jitter (sweetener #2) now rides the shadowless dancer — the glow wanders,
+  // the shadows hold still (rev.3, the actual fix for the phantom flicker).
+  candleDancer.intensity = 0.5 + (f - 3.25)*0.8;
+  candleDancer.position.set(
     _candleBase.x + Math.sin(t*8.7)*0.007 + Math.sin(t*3.1)*0.004 + (Math.random()-0.5)*0.003,
     _candleBase.y + Math.sin(t*13.9)*0.005 + (Math.random()-0.5)*0.002,
     _candleBase.z + Math.cos(t*8.3)*0.007 + Math.cos(t*3.7)*0.004 + (Math.random()-0.5)*0.003);
