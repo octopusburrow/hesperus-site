@@ -576,7 +576,7 @@ scene.add(new THREE.AmbientLight(0x3c4654, 1.1));             // cool night ambi
 const moonlight = new THREE.DirectionalLight(0x8fa6c8, 0.4);   // grey-blue wash
 moonlight.position.set(-45, 55, 35); scene.add(moonlight);
 const candle = new THREE.PointLight(0xffb45e, 3.4, 10, 1.6);    // the amber
-candle.position.set(0.5, 1.15, -1.5);
+candle.position.set(0.85, 1.30, -1.85);   // moved (Nix's experiment, 2026-07-12): farther from the table edge + higher — the flicker was a grazing-angle shadow (table edge nearly parallel to light rays amplifies a 2cm light jitter into a ~20cm shadow swing); steeper geometry kills the amplification
 candle.castShadow = true;
 // shadow res: 512 cube faces were visibly noisy (Nix 2026-07-11). 1024 default; menu can push 2048.
 const _shadowRes = parseInt(localStorage.getItem('porch.shadowRes')||'1024');
@@ -1189,7 +1189,10 @@ function grabToggleDesktop(){                         // E: drop what I hold, el
     // Too far → LOB with tumble. Upright kinds (text/pictures/video) place upright, never
     // tumble; "can it tumble" becomes a per-object setting when objects get editable.
     const upright = g.isImage || g.isText || g.isVideo;
-    if(!renderer.xr.isPresenting && !g.isModel){
+    // models/cubes join the minecraft rules (Nix 2026-07-12 "still can't get any throwing"):
+    // they place at the aim like everything else; on far aim they lob WITHOUT spin (a sculpture
+    // shouldn't cartwheel; per-object tumble permission arrives with editable objects).
+    if(!renderer.xr.isPresenting){
       const locked = !!document.pointerLockElement;
       const dir = new THREE.Vector3(), o = camera.getWorldPosition(new THREE.Vector3());
       if(locked) camera.getWorldDirection(dir);
@@ -1204,7 +1207,7 @@ function grabToggleDesktop(){                         // E: drop what I hold, el
           return 'placed '+p; } }
       if(upright){ dropProp(g); return 'dropped '+p; }   // upright kinds don't get lobbed — they hang where released (tumble-toggle comes with editable objects)
       g.carrying=false; g.vel.copy(dir).multiplyScalar(11); g.vel.y += 2.2;   // out of reach → full send
-      g.spin = new THREE.Vector3((Math.random()-0.5)*7,(Math.random()-0.5)*7,(Math.random()-0.5)*7);
+      g.spin = g.isModel ? null : new THREE.Vector3((Math.random()-0.5)*7,(Math.random()-0.5)*7,(Math.random()-0.5)*7);
       return 'lobbed '+p; }
     dropProp(g); return 'dropped '+p; }
   const g=grabNearest(_reachPoint(),0.85); if(!g) return 'nothing in reach'; heldProp=grabProp(g); return 'grabbing '+g.pid; }
@@ -1320,7 +1323,8 @@ function _levelProp(g){                               // rest flat: keep yaw, dr
 function propPhysics(dt){
   _propHoldUpdate(dt); _updateHover();
   for(const g of grabbables){ if(g._cool>0) g._cool-=dt;
-    if(myNet==null || g.owner!==myNet || g.carrying) continue;   // only simulate props I own & have let go
+    if(g.carrying) continue;
+    if(myNet!=null && g.owner!==myNet) continue;   // relay: only sim props I own. SOLO (myNet null): sim locally — the old gate froze every thrown prop mid-air offline (Nix throw bug forensics, 2026-07-12)
     const rest=groundHeight(g.mesh.position.x, g.mesh.position.z)+g.hh;
     if(g.mesh.position.y > rest+1e-4){                            // arc under gravity (throw travels as it falls)
       g.vel.y-=GRAV*dt; g.mesh.position.addScaledVector(g.vel,dt); g.vel.x*=0.98; g.vel.z*=0.98;
@@ -1601,7 +1605,12 @@ const _veilMat = new THREE.ShaderMaterial({
       float a = horizon * (0.14 + 0.16*rings + 0.05*shimmer);
       vec3 col = uColor * (0.7 + 0.6*rings) + vec3(0.10,0.06,0.16)*shimmer;
       gl_FragColor = vec4(col, a);
+      #include <colorspace_fragment>
     }`
+    // ^ colorspace include (Nix 2026-07-12, "veil is brighter in the mirror — and I like it"):
+    // same fix as the sky/playa/fence saga — without it the world pass rendered the veil dim
+    // (values skipped the linear→sRGB lift the Reflector applied). Now BOTH passes encode:
+    // world brightens to the mirror's look, and mirror becomes true to the world. Two birds.
 });
 const _smokeMat = new THREE.ShaderMaterial({
   transparent:true, side:THREE.DoubleSide, depthWrite:false,
@@ -1623,6 +1632,7 @@ const _smokeMat = new THREE.ShaderMaterial({
       float sm = h2(floor(p*9.0 + uTime*0.35)) * 0.5 + h2(floor(p*17.0 - uTime*0.22)) * 0.5;  // slow curling grain
       float a = fill * (0.34 + 0.12*sm + throat + rim);
       gl_FragColor = vec4(vec3(0.055, 0.045, 0.095) + vec3(0.05,0.03,0.09)*sm - vec3(0.02,0.015,0.02)*throat, a);
+      #include <colorspace_fragment>
     }`
 });
 function addPortico(dest, x, z, label, kind, ry=0){
