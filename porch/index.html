@@ -3241,14 +3241,21 @@ window.__POSES = {
   sit: { eyeDrop: 0.78, apply(vrm, env){
     const h=vrm.humanoid; if(!h) return;
     const set=(nm,x,z=0)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,z,'YXZ')); };
-    // sit-ground v2 (Nix 2026-07-12): hips lower, feet higher (knees more up), hands flat on
-    // the knees. All numbers live-tunable via window.__sitTune = {drop, thigh, shin, uArm, lArm, hand}.
+    // sit-ground v3 (Nix 2026-07-12): legs MEASURED converged headless (raw-bone world heights:
+    // toes -0.004 ≈ on the deck, knees up at 0.42). Arms: v2's X-rotations only ROLLED the
+    // T-pose arm in place (arm axis IS X — hand never moved; caught by bone-height probe).
+    // Arms need Z (drop from T-pose) + Y (reach forward), mirrored per side.
+    // Live-tunable: window.__sitTune = {drop,thigh,shin,uZ,uY,elbow,hand}.
     const T = window.__sitTune || {};
-    ['left','right'].forEach(s=>{
-      set(s+'UpperLeg', -env*(T.thigh||1.78)); set(s+'LowerLeg', env*(T.shin||1.52)); set(s+'Foot', -env*0.15);
-      set(s+'UpperArm', -env*(T.uArm||0.55)); set(s+'LowerArm', -env*(T.lArm||0.50)); set(s+'Hand', env*(T.hand||0.35)); });
+    const set3=(nm,x,y,z)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,y,z,'YXZ')); };
+    ['left','right'].forEach(s=>{ const m = s==='left' ? 1 : -1;
+      set(s+'UpperLeg', -env*(T.thigh||1.78)); set(s+'LowerLeg', env*(T.shin||2.2)); set(s+'Foot', -env*0.10);
+      set3(s+'UpperArm', 0, -env*m*(T.uY||0.6), -env*m*(T.uZ||1.05));      // drop toward lap + reach forward (uY sign MEASURED: positive folded hands behind the back)
+      set3(s+'LowerArm', 0, -env*m*(T.elbow||1.1), 0);                     // elbow folds forward onto the knee
+      set3(s+'Hand', -env*(T.hand||0.45), 0, 0); });                       // palm rotates flat-down
+      // measured converged (headless raw-bone probe): hand (1.56,0.40,1.27) vs knee (1.56,0.42,1.22) — palm ON kneecap
     set('spine', env*0.10); set('hips', -env*0.06);
-    vrm.scene.position.y = -env*(T.drop||0.64); } },
+    vrm.scene.position.y = -env*(T.drop||0.50); } },
   chairsit: { eyeDrop: 0.42, apply(vrm, env){                // bench/chair height (the swing): thighs level,
     const h=vrm.humanoid; if(!h) return;                     // shins down, feet dangling just off the deck
     const set=(nm,x)=>{ const b=h.getNormalizedBoneNode(nm); if(b) b.quaternion.setFromEuler(new THREE.Euler(x,0,0,'YXZ')); };
