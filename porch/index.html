@@ -1243,16 +1243,10 @@ const _laserGrabRC = new THREE.Raycaster(); _laserGrabRC.far = 6;   // #17 laser
 function tryGripGrab(hand, pressed){                  // VR grip edge → grab nearest to that controller / release
   if(pressed && !_gripDown[hand]){ try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
     const gp=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); let g=grabNearest(gp,0.2);
-    if(!g){                                           // #17: nothing in reach — take AIM (VRC-style force pull)
-      const c=renderer.xr.getController(hand==='left'?0:1);
-      const o=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
-      const d=new THREE.Vector3(0,0,-1).applyQuaternion(c.getWorldQuaternion(new THREE.Quaternion()));
-      _laserGrabRC.set(o, d);
-      const loose = grabbables.filter(p=>!p.carrying);
-      const hits = _laserGrabRC.intersectObjects(loose.map(p=>p.mesh), false);
-      if(hits.length){ g = loose.find(p=>p.mesh===hits[0].object)||null;
-        if(g){ g._fly = true; if(typeof dbg==='function') dbg('grab', `laser-grab ${g.pid} @${hits[0].distance.toFixed(1)}m`, 'k'); } }
-    }
+    if(!g){                                           // gravity glove (rev.2 of #17): grip takes the AIMED prop —
+      const idx = hand==='left' ? 0 : 1;              // the one already glowing under this hand's ray (≤3.5m,
+      g = _gloveHover[idx] || null;                   // desktop's reach) — and force-pulls it into the hand.
+      if(g){ g._fly = true; if(typeof dbg==='function') dbg('grab', `glove-pull ${g.pid}`, 'k'); } }
     if(g){ g.offset = g._fly ? null : g.mesh.position.clone().sub(gp);   // laser grabs land IN the hand
       _heldHand[hand]=grabProp(g);
       // rotation ride-along (Nix 2026-07-10: "books aren't rotating with the IK hands"):
@@ -5108,6 +5102,9 @@ function vkbToggleText(){                                   // VR: open the keyb
 // XR pointer: a ray per controller, raycast against xrUI.targets; trigger = click the hovered one.
 const xrUI = { targets: [], hover: [null,null], _line:[null,null], _ctrl:[null,null],
                _rc:new THREE.Raycaster(), _init:false };
+const _gloveHover = [null, null];                          // per-controller aimed grabbable (gravity glove)
+const _gloveHeldIdx = ()=> _heldHand.left ? 0 : (_heldHand.right ? 1 : -1);
+window.__gloveHover = _gloveHover;                         // headless probes
 function _xrInitPointers(){
   if(xrUI._init) return;
   for(let i=0;i<2;i++){
@@ -5126,7 +5123,28 @@ function xrUIRaycast(){
   const live = xrUI.targets.length>0;
   for(let i=0;i<2;i++){
     const c=xrUI._ctrl[i], line=xrUI._line[i]; if(!c){ continue; }
-    if(!live){ if(line) line.visible=false; if(xrUI.hover[i]){ _xrKeyHi(xrUI.hover[i],false); xrUI.hover[i]=null; } continue; }
+    if(!live){
+      // GRAVITY GLOVE hover (Nix in-headset 2026-07-12, "every VR experience cribs Alyx"):
+      // UI idle → the same rays serve grab-targeting. Point at a loose prop ≤3.5m (desktop's
+      // reach): the ray lights up warm and the prop glows; grip pulls THAT prop to the hand.
+      if(xrUI.hover[i]){ _xrKeyHi(xrUI.hover[i],false); xrUI.hover[i]=null; }
+      const gv = _gloveHover[i];
+      let ng = null, nd = 0;
+      if(typeof grabbables !== 'undefined' && !(_heldHand && (_heldHand.left||_heldHand.right) && i===_gloveHeldIdx())){
+        const origin=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+        const q=new THREE.Quaternion().setFromRotationMatrix(c.matrixWorld);
+        xrUI._rc.set(origin, new THREE.Vector3(0,0,-1).applyQuaternion(q)); xrUI._rc.far = 3.5;
+        const loose = grabbables.filter(p=>p.mesh && !p.carrying && !(p._cool>0));
+        const hits = xrUI._rc.intersectObjects(loose.map(p=>p.mesh), true);
+        if(hits.length){ let o=hits[0].object; while(o && !ng){ ng = loose.find(p=>p.mesh===o)||null; o=o.parent; } nd = hits[0].distance; }
+        xrUI._rc.far = Infinity;
+      }
+      if(gv !== ng){ if(gv && gv.mat && gv.mat.emissive) gv.mat.emissive.setHex(0x000000);
+        if(ng && ng.mat && ng.mat.emissive) ng.mat.emissive.setHex(0x3a2f18); _gloveHover[i]=ng; }
+      if(line){ line.visible = !!ng; if(ng){ line.scale.z = nd; line.material.color.setHex(0xd6b46a); } }
+      continue;
+    }
+    if(line) line.material.color.setHex(0x8fb0d6);   // UI mode: back to the cool ray
     const origin=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
     const q=new THREE.Quaternion().setFromRotationMatrix(c.matrixWorld);
     const dir=new THREE.Vector3(0,0,-1).applyQuaternion(q);
@@ -5166,49 +5184,84 @@ function _emojiTex(txt){
   g.font='74px serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(txt,64,72);
   const tex=new THREE.CanvasTexture(c); tex.anisotropy=4; return tex;
 }
+// ===== NESTED RADIAL v2 (Nix in-headset 2026-07-12): attached to the HAND, not the headset;
+// two levels — categories then items — with the SAME affordances as Desktop, only translating
+// (DOM file-pickers omitted in VR as impossible-in-mode). Compass per her spec:
+// Manifest top · Emotes right · Avatars left · Controls bottom.
+const RADIAL_CATS = [
+  {key:'manifest', emoji:'✨', angle:-Math.PI/2, items:[     // top
+    ['✍', ()=>{ if(renderer.xr.isPresenting){ if(typeof vkbToggleText==='function') vkbToggleText(); }
+        else if(window.__openTextCompose) __openTextCompose(); return 'text'; }],
+    ['⬛', ()=>{ if(window.spawn) window.spawn('cube'); return 'cube'; }],
+    ['🎵', ()=>{ if(window.__manifestMusic) __manifestMusic(); return 'music'; }]]},
+  {key:'emotes', emoji:'💃', angle:0, items:[                 // right
+    ['👋', ()=>{ window.__doEmote && __doEmote('wave'); return 'wave'; }],
+    ['🎉', ()=>{ window.__doEmote && __doEmote('cheer'); return 'cheer'; }],
+    ['💃', ()=>{ window.__doEmote && __doEmote('dance'); return 'dance'; }],
+    ['🙌', ()=>{ window.__doEmote && __doEmote('raise'); return 'raise'; }],
+    ['🧘', ()=>window.__playerPose ? __playerPose('sit') : 'no poses'],
+    ['🦵', ()=>window.__playerPose ? __playerPose('crouch') : 'no poses']]},
+  {key:'avatars', emoji:'🎭', angle:Math.PI, items:[          // left
+    ['🧑‍🚀', ()=>window.__setBody ? String(__setBody('suit')) : 'no setter'],
+    ['🌼', ()=>window.__setBody ? String(__setBody('toon')) : 'no setter'],
+    ['🐯', ()=>window.__setBody ? String(__setBody('tigerbee')) : 'no setter'],
+    ['🦉', ()=>window.__setBody ? String(__setBody('owl')) : 'no setter']]},
+  {key:'controls', emoji:'⚙', angle:Math.PI/2, items:[        // bottom
+    ['☆', ()=>{ const cb=document.getElementById('starNamesToggle'); const on=!(cb&&cb.checked);
+        if(cb) cb.checked=on; setStarNames(on); return 'star names '+(on?'on':'off'); }],
+    ['🎵', ()=>{ const on=!(_ambient&&_ambient.isPlaying&&_ambientOn); window.__setAmbient(on); return 'ambient '+(on?'on':'off'); }],
+    ['🗑', ()=>{ const held=(typeof _heldHand!=='undefined'&&(_heldHand.right||_heldHand.left))||heldProp;
+        return held ? _deleteGrab(held) : 'grab it first'; }],
+    ['🎯', ()=>{ if(typeof dbg==='function') dbg('cal','T-POSE now — capturing wrists in 5s…','k');
+        setTimeout(()=>{ const r=window.__calibrateWrists?__calibrateWrists():'no cal fn'; if(typeof dbg==='function') dbg('cal',r,'g'); },5000);
+        return 'calibrating in 5s'; }],
+    ['📸', ()=>window.__cameraSnap ? __cameraSnap() : 'no camera']]},
+];
+function _radialButton(emoji){
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.11,0.11),
+    new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
+  m.renderOrder=999; return m;
+}
+function _radialRing(defs){                                 // defs: [{emoji, angle?, action}]
+  EMOTE_PANEL.buttons.forEach(b=>{ EMOTE_PANEL.group.remove(b);
+    const xi=_clickables.indexOf(b); if(xi>=0) _clickables.splice(xi,1);
+    if(typeof xrUI!=='undefined') xrUI.targets=xrUI.targets.filter(t=>t!==b); });
+  EMOTE_PANEL.buttons=[]; EMOTE_PANEL.sel=-1;
+  const R=0.20, N=defs.length;
+  defs.forEach((d,i)=>{ const a = (d.angle!==undefined) ? d.angle : -Math.PI/2 + i*(2*Math.PI/N);
+    const m=_radialButton(d.emoji); m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0);
+    m.userData._ring=a; m.userData.action=d.action;
+    EMOTE_PANEL.group.add(m); EMOTE_PANEL.buttons.push(m);
+    _clickables.push(m); if(typeof xrUI!=='undefined' && renderer.xr.isPresenting) xrUI.targets.push(m); });
+}
+function _radialTop(){ _radialRing(RADIAL_CATS.map(c=>({emoji:c.emoji, angle:c.angle,
+  action:()=>{ _radialSub(c); return c.key; }}))); EMOTE_PANEL.level=0; }
+function _radialSub(cat){ _radialRing(cat.items.map(([emoji,fn])=>({emoji,
+  action:()=>{ const r=fn(); window.__toggleEmotePanel(false); return r; }})));
+  EMOTE_PANEL.level=1; }
 function buildEmotePanel(){
   if(EMOTE_PANEL.group) return EMOTE_PANEL.group;
-  const grp=new THREE.Group();
-  [['wave','👋'],['cheer','🎉'],['dance','💃'],['raise','🙌'],['calibrate','🎯']].forEach(([name,emoji],i)=>{
-    const m=new THREE.Mesh(new THREE.PlaneGeometry(0.12,0.12),
-      new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
-    m.renderOrder=999;   // position assigned by the ring layout below
-    m.userData.action = name==='calibrate'
-      ? ()=>{ window.__toggleEmotePanel(false);                 // 🎯 wrist cal: 5s to T-pose, then capture
-          if(typeof dbg==='function') dbg('cal','T-POSE now — capturing wrists in 5s…','k');
-          setTimeout(()=>{ const r=window.__calibrateWrists ? window.__calibrateWrists() : 'no cal fn';
-            if(typeof dbg==='function') dbg('cal', r, 'g'); }, 5000);
-          return 'calibrating in 5s — hold a T-pose'; }
-      : ()=>{ if(window.__doEmote) window.__doEmote(name); window.__toggleEmotePanel(false); return 'emote: '+name; };
-    grp.add(m); EMOTE_PANEL.buttons.push(m);
-  });
-  // ROW 2 — object actions (Nix 2026-07-12, VR manifest/delete walkthrough): the DOM object
-  // menu is invisible inside WebXR, so VR delete lives here. Targeting-free grammar: the thing
-  // you're HOLDING is the thing you mean — grab (squeeze), summon panel, tap 🗑.
-  [['delete','🗑', ()=>{ const held = (typeof _heldHand!=='undefined' && (_heldHand.right||_heldHand.left)) || heldProp;
-      if(!held){ dbg('objmenu','🗑 nothing held — squeeze-grab the object first','w'); return 'grab it first'; }
-      window.__toggleEmotePanel(false); return _deleteGrab(held); }],
-   ['cube','⬛', ()=>{ window.__toggleEmotePanel(false); if(window.spawn) window.spawn('cube'); return 'cube'; }],
-   ['sit','🧘', ()=>{ window.__toggleEmotePanel(false); return window.__playerPose ? __playerPose('sit') : 'no poses'; }],
-   ['crouch','🦵', ()=>{ window.__toggleEmotePanel(false); return window.__playerPose ? __playerPose('crouch') : 'no poses'; }],
-  ].forEach(([name,emoji,fn],i)=>{
-    const m=new THREE.Mesh(new THREE.PlaneGeometry(0.12,0.12),
-      new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
-    m.renderOrder=999;
-    m.userData.action = fn;
-    grp.add(m); EMOTE_PANEL.buttons.push(m);
-  });
-  // STICK-RADIAL LAYOUT (Nix 2026-07-12, "TTS is always a bit weird — a stick-radial menu is
-  // better"): buttons on a ring; the right thumbstick POINTS at a sector, releasing the stick
-  // selects it (VRChat grammar). Laser-click still works on every button.
-  const N = EMOTE_PANEL.buttons.length, R = 0.24;
-  EMOTE_PANEL.buttons.forEach((m,i)=>{ const a = -Math.PI/2 + i*(2*Math.PI/N);   // slot 0 at 12 o'clock, clockwise
-    m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0); m.userData._ring = a; });
-  grp.visible=false; grp.position.set(0,-0.18,-0.55);  // in front of the FACE: camera-parented like the loading
-  camera.add(grp); EMOTE_PANEL.group=grp; return grp;  // bar — rig-parented spawned at the FEET/rig origin, which in
-                                                       // VR can be meters from the head (Nix: 'right stick does nothing'
-                                                       // — it toggled, somewhere she wasn't)
+  const grp=new THREE.Group(); grp.visible=false;
+  EMOTE_PANEL.group=grp; camera.add(grp); grp.position.set(0,-0.18,-0.55);   // desktop fallback anchor
+  return grp;
 }
+// per-frame: in VR the ring rides the RIGHT HAND (grip-parented, billboarded to the face —
+// "attached to the hand, not the headset"); on desktop it stays camera-anchored.
+function _radialTick(){
+  const g=EMOTE_PANEL.group; if(!g || !EMOTE_PANEL.on) return;
+  if(renderer.xr.isPresenting){
+    try{ const grip=renderer.xr.getControllerGrip(1);
+      if(g.parent!==grip){ grip.add(g); g.position.set(0,0.16,-0.06); }
+      const cw=camera.getWorldPosition(new THREE.Vector3());
+      const gw=g.getWorldPosition(new THREE.Vector3());
+      const m=new THREE.Matrix4().lookAt(cw, gw, new THREE.Vector3(0,1,0));
+      const wq=new THREE.Quaternion().setFromRotationMatrix(m);
+      const pq=grip.getWorldQuaternion(new THREE.Quaternion());
+      g.quaternion.copy(pq.invert().multiply(wq));                    // face the eyes, ride the hand
+    }catch(e){}
+  } else if(g.parent!==camera){ camera.add(g); g.position.set(0,-0.18,-0.55); g.quaternion.identity(); }
+}
+window.__radialTick = _radialTick;
 // stick-radial driver: called each XR frame with the right stick while the panel is open.
 // Deflect >0.5 → highlight the sector the stick points at; release (<0.35) → fire it.
 EMOTE_PANEL.sel = -1;
@@ -5234,17 +5287,10 @@ window.__radialStick = (x, y)=>{
 window.__toggleEmotePanel=(f)=>{
   const g=buildEmotePanel();
   const on=(f!==undefined)?!!f:!EMOTE_PANEL.on;
-  if(typeof dbg==='function') dbg('emote','panel '+(on?'open':'closed'),'k');   // visible feedback either way
+  if(typeof dbg==='function') dbg('radial','menu '+(on?'open':'closed'),'k');
   EMOTE_PANEL.on=on; g.visible=on;
-  EMOTE_PANEL.buttons.forEach(b=>{ const idx=_clickables.indexOf(b);   // only clickable while open
-    if(on && idx<0) _clickables.push(b); if(!on && idx>=0) _clickables.splice(idx,1); });
-  // VR: ride the VKB's laser-pointer infra (Nix: 'no pointer, no highlight — can't aim'). Targets
-  // registered → rays light up, hover tints, trigger clicks. Removed on close so lasers sleep.
-  if(typeof xrUI!=='undefined'){
-    if(on) EMOTE_PANEL.buttons.forEach(b=>{ if(!xrUI.targets.includes(b)) xrUI.targets.push(b); });
-    else { xrUI.targets = xrUI.targets.filter(t=>!EMOTE_PANEL.buttons.includes(t));
-           for(let i=0;i<2;i++) if(EMOTE_PANEL.buttons.includes(xrUI.hover[i])) xrUI.hover[i]=null; }
-  }
+  if(on) _radialTop(); else _radialRing([]);               // ring registration handles clickables + xrUI targets
+  if(!on && typeof xrUI!=='undefined') for(let i=0;i<2;i++) xrUI.hover[i]=null;
   return on;
 };
 
@@ -7150,6 +7196,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(renderer.xr.isPresenting){
     _xrInitPointers();                                // lazy: create controller rays once in-session
     xrUIRaycast();                                    // hover the pointed key + stretch the ray to it
+    if(window.__radialTick) __radialTick();           // hand-anchored radial follows the grip, faces the eyes
     xrLocomotion(dt);
   } else {
     const spd = window.__moveLock ? 0 : MOVE_SPEED * dt;   // foreign-exit HUD locks movement (Nix 2026-07-11)
