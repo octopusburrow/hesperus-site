@@ -589,6 +589,12 @@ candle.castShadow = true;
 // shadow res: 512 cube faces were visibly noisy (Nix 2026-07-11). 1024 default; menu can push 2048.
 const _shadowRes = parseInt(localStorage.getItem('porch.shadowRes')||'1024');
 candle.shadow.mapSize.set(_shadowRes,_shadowRes); candle.shadow.radius = 3;
+// near=0.05 (Nix 2026-07-12, "light through the table"): point-shadow near defaults to 0.5m —
+// on the FLOOR stand nothing sat that close, but on the table the tabletop itself (0.29m) and
+// every nearby prop fell INSIDE the near plane → invisible to the shadow map → light sailed
+// through the table onto the rug, and close props threw finicky half-shadows. This is also the
+// general answer to "why are close shadows so finicky": they were inside the camera's blind zone.
+candle.shadow.camera.near = 0.05;
 window.__setShadowRes = (n)=>{ localStorage.setItem('porch.shadowRes', String(n));
   candle.shadow.mapSize.set(n,n); if(candle.shadow.map){ candle.shadow.map.dispose(); candle.shadow.map=null; } };
 scene.add(candle);
@@ -1161,6 +1167,9 @@ const grabbables = [];                               // {mesh, pid, hh, vel, own
 const grabbablesById = {};
 window.__grabbables = grabbables; window.__heldProp = ()=> heldProp;   // debug: grab/throw verification
 function _addProp(pid, mesh, hh){ mesh.castShadow=true;
+  // hover-glow isolation (Nix 2026-07-12: hovering one book lit ALL its siblings): props built
+  // from a shared palette material glowed together — every prop gets its OWN material instance.
+  if(mesh.material && mesh.material.clone) mesh.material = mesh.material.clone();
   // every caster is exempt from per-cube-face culling AT CREATION (2026-07-12): the one-shot 4s
   // sweep missed late-added meshes (relay replays, async builds) — a culled caster near a cube-face
   // boundary is the binary shadow-blink signature (Nix's "8-inch shadow blinks on and off").
