@@ -1153,6 +1153,10 @@ const grabbables = [];                               // {mesh, pid, hh, vel, own
 const grabbablesById = {};
 window.__grabbables = grabbables; window.__heldProp = ()=> heldProp;   // debug: grab/throw verification
 function _addProp(pid, mesh, hh){ mesh.castShadow=true;
+  // every caster is exempt from per-cube-face culling AT CREATION (2026-07-12): the one-shot 4s
+  // sweep missed late-added meshes (relay replays, async builds) — a culled caster near a cube-face
+  // boundary is the binary shadow-blink signature (Nix's "8-inch shadow blinks on and off").
+  mesh.traverse ? mesh.traverse(o=>{ if(o.isMesh) o.frustumCulled=false; }) : (mesh.frustumCulled=false);
   const g={mesh, pid, hh, vel:new THREE.Vector3(), owner:null, carrying:false, offset:null, home:mesh.position.clone(), mat:mesh.material, _cool:0};
   grabbables.push(g); grabbablesById[pid]=g; scene.add(mesh); return g; }
 // nearest FREE (unowned, off-cooldown) grabbable to a point — you can't grab what someone holds
