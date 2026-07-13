@@ -2075,6 +2075,7 @@ if(_residentPick){
     let vrm = gltf.userData.vrm;         // LET, not const: agent.setBody reassigns it and every closure in this harness follows
     vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData — every measurement stash needs this (found live 2026-07-09)
     VRMUtils.rotateVRM0(vrm);                       // no-op on VRM1
+    vrm.scene.traverse(o=>{ if(o.isMesh||o.isSkinnedMesh){ o.castShadow=true; o.frustumCulled=false; } });   // resident casts a shadow too
     const vb = new THREE.Box3().setFromObject(vrm.scene);
     const vs = vb.getSize(new THREE.Vector3());
     vrm.scene.position.set(1.7, 0, -1.15);           // by the candle, host's spot
@@ -3234,6 +3235,7 @@ async function upgradeAvatarToVrm(r, model, body){
     const BODY = AVATAR_BODIES[body] || AVATAR_BODIES.suit;
     const gltf = await vl.loadAsync(BODY.url);
     const vrm = gltf.userData.vrm; VRMUtils.rotateVRM0(vrm);
+    vrm.scene.traverse(o=>{ if(o.isMesh||o.isSkinnedMesh){ o.castShadow=true; o.frustumCulled=false; } });   // remote avatars cast too
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt);   // remote avatars lacked the proxy — the console warning Nix pasted
       px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
     vrm.userData = vrm.userData || {};   // three-vrm VRM has NO userData (found live 2026-07-09)
@@ -3382,6 +3384,9 @@ async function embodyPlayer(bodyName){
     const petals = new URLSearchParams(location.search).get('petals') || 'blue';   // human default
     if(SPEC.bloom && petals !== 'orange') recolorBloom(vrm.scene, petals==='blue' ? '#4f83e8' : petals);
     vrm.scene.rotation.y = Math.PI;                    // face player-forward (-Z)
+    // avatars cast shadows (Nix 2026-07-12: "shadows on avatars would look cool"). frustumCulled
+    // off too — skinned bounds are unreliable and cube-face culling of casters = the blink bug.
+    vrm.scene.traverse(o=>{ if(o.isMesh||o.isSkinnedMesh){ o.castShadow=true; o.frustumCulled=false; } });
     player.add(vrm.scene);                             // rides the player rig
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt); px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
     playerMixer=new THREE.AnimationMixer(vrm.scene); const pAct={}; let pCur=null;
@@ -6846,11 +6851,11 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   const f = 3.25 + Math.sin(t*0.7)*0.14 + Math.sin(t*1.7)*0.15    // slow drift (long, layered)
           + Math.sin(t*5.3)*0.17 + Math.sin(t*8.9)*0.11           // faster visible flicker
           + (Math.random()-0.5)*0.18;                             // sputter
-  candle.intensity = f + 0.4;                                     // shadow caster: breathes, never moves
-  // positional jitter (sweetener #2) now rides the shadowless dancer — the glow wanders,
-  // the shadows hold still (rev.3, the actual fix for the phantom flicker).
-  candleDancer.intensity = 0.5 + (f - 3.25)*0.8;
-  candleDancer.position.set(
+  candle.intensity = f + 0.9;
+  // jitter RESTORED to the shadow caster (Nix: "bring back the candle jitter! I liked that") —
+  // the blink was the creation-time culling hole, not the dance. Dancer light retired to 0.
+  candleDancer.intensity = 0;
+  candle.position.set(
     _candleBase.x + Math.sin(t*8.7)*0.007 + Math.sin(t*3.1)*0.004 + (Math.random()-0.5)*0.003,
     _candleBase.y + Math.sin(t*13.9)*0.005 + (Math.random()-0.5)*0.002,
     _candleBase.z + Math.cos(t*8.3)*0.007 + Math.cos(t*3.7)*0.004 + (Math.random()-0.5)*0.003);
