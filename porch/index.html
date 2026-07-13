@@ -460,7 +460,7 @@ function _makePixelBox(W, H, D, drawFace, matOpts){
     ctx.restore(); y += c.h;
   }
   const tex = new THREE.CanvasTexture(cv);
-  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;  // square, crisp, no mush
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipmapLinearFilter; tex.anisotropy = 8;  // crisp up close; mipmapped at distance (Nix in-headset 2026-07-12: pure-Nearest minification is the "pixels crawling on the spines" — every head micro-motion resamples the texel grid. The avatar doesn't shimmer because its textures aren't Nearest.)
   tex.generateMipmaps = false; tex.colorSpace = THREE.SRGBColorSpace;
   const geo = new THREE.BoxGeometry(W, H, D);
   const uv = geo.attributes.uv;                          // remap each face's 4 corners → its atlas cell
@@ -513,7 +513,7 @@ window.__checkerScene = (rep)=>{                       // stamp a world checker 
   scene.traverse(o=>{ if(!o.isMesh || !o.material) return;
     if(o.material.uniforms) return;                     // skip ShaderMaterials (sky/candle) — they need their uniforms
     o.userData._omat = o.material;
-    const t=new THREE.CanvasTexture(c); t.magFilter=t.minFilter=THREE.NearestFilter;
+    const t=new THREE.CanvasTexture(c); t.magFilter=THREE.NearestFilter; t.minFilter=THREE.NearestMipmapLinearFilter; t.anisotropy=8;
     t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rep,rep); t.generateMipmaps=false;
     o.material = new THREE.MeshBasicMaterial({map:t}); });
   return 'checker on scene, repeat '+rep; };
@@ -552,6 +552,10 @@ applyAA();
 renderer.xr.addEventListener('sessionend', ()=>{
   camera.position.set(0, 1.6, -0.14);   // at the EYES, not the spine: z=0 sat inside the torso, so look-down showed your own back shell (Nix live 2026-07-09)
   camera.rotation.set(0, 0, 0);
+  // FISHEYE FIX (Nix 2026-07-12): WebXR overwrites the camera's projection with the headset's
+  // wide-FOV matrices; position/rotation were reset but the projection kept the HMD's ~110°.
+  camera.fov = 65; camera.aspect = innerWidth/innerHeight; camera.zoom = 1;
+  camera.updateProjectionMatrix();
 });
 
 // upright billboard: face the rendering camera in yaw+pitch but NEVER roll (world-up locked),
@@ -747,7 +751,13 @@ let _starMat = null;
           // 2-4px points — tiny stars twinkle by SIZE, not tint. Second incommensurate phase so
           // size and brightness beat against each other like real scintillation.
           float twS = 0.90 + 0.10*sin(uTime*2.7 + sphase*11.0);
-          gl_PointSize = max(1.8, ssize * uPx * 4.6 * twS);   // 2x (was 2.3); floor so faint stars still register; ?starsize= to retune
+          // SOFT-KNEE size ramp (Nix in-headset 2026-07-12: "brightest stars are hyuuuge in VR,
+          // but uniform shrink makes the faint ones invisible on Desktop"): below 6px untouched,
+          // beyond 6px only 40% of the excess survives. VR's higher uPx pushes the giants into
+          // the knee hard; desktop's faint 2-4px stars never feel it.
+          float ps = ssize * uPx * 4.6 * twS;
+          if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
+          gl_PointSize = max(1.8, ps);   // floor so faint stars still register; ?starsize= to retune
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r = length(d);
@@ -949,7 +959,7 @@ function plankTexture(){
   }
   for(let p=0;p<4;p++){g.fillStyle='rgb(24,18,12)';g.fillRect(0,p*16,64,1);}
   const t = new THREE.CanvasTexture(c);
-  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
+  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestMipmapLinearFilter; t.anisotropy = 8;   // book spines were the loudest VR crawlers
   t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5,5);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -1815,12 +1825,12 @@ function checkPorticos(){
       _crossing = true;
       const dn = (typeof p.dest === 'object' && p.dest.district) ? p.dest.district : null;
       if(dn && DISTRICTS[dn] && DISTRICTS[dn].ephemeral){         // dispose-lifecycle world: loading bar IS the veil
-        _crossDistrict(dn).then(()=>{ _crossing = false; });
+        _crossDistrict(dn, {viaPortico:true}).then(()=>{ _crossing = false; });
       } else if(dn){                                              // persistent district: quick black fade
         const f = document.createElement('div');
         f.style.cssText = 'position:fixed;inset:0;background:#000;opacity:0;transition:opacity 0.9s ease;z-index:99;pointer-events:none';
         document.body.appendChild(f); requestAnimationFrame(()=>{ f.style.opacity = 1; });
-        setTimeout(async ()=>{ await _crossDistrict(dn);
+        setTimeout(async ()=>{ await _crossDistrict(dn, {viaPortico:true});
           f.style.opacity = 0; setTimeout(()=>{ f.remove(); _crossing = false; }, 1000);
         }, 950);
       }
@@ -1949,7 +1959,7 @@ function _ensureVoidDistrict(){
     _voidGlow.intensity = 6 + ((0.30*d[0]+0.55*d[1]+0.15*d[2])/255)*26;
     _voidGlow.color.setRGB(0.35+d[0]/510, 0.30+d[1]/510, 0.45+d[2]/510);
   }catch(e){} }, 400);
-  const home = addPortico({district:'porch'}, VX+6, 6, 'The Porch', 'home', Math.PI/2);   // face the girih axis (was perpendicular — Nix 2026-07-11)
+  const home = addPortico({district:'porch'}, VX+6, 6, 'The Porch', 'home', 0);   // rot rev.3 (Nix in-headset 2026-07-12: "rotated 90° from where I'd expect") — the dome rebuild changed the approach axis; back to 0
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
 }
 const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
@@ -1962,7 +1972,25 @@ async function _crossDistrict(name, opts){
   if(wake) await _buildWake();                              // lazy build with the loading bar
   const D = DISTRICTS[name]; if(!D){ _hideLoadingBar(); return; }
   _district = name;
-  player.position.set(D.sx, 0, D.sz); player.rotation.y = D.sry;
+  // AUDIO TAKEOVER (Nix 2026-07-12: porch ambient followed her into the girih): the porch
+  // ambient belongs to the porch — leaving fades it out, coming home fades it back. Districts
+  // with their own beds (void music, wake) take the floor uncontested.
+  try{ if(_ambient){ if(name === 'porch'){ if(_ambientOn){ if(!_ambient.isPlaying && _ambient.buffer) _ambient.play(); _ambientFade(_ambientVol, 3); } }
+    else _ambientFade(0.0, 1.2); } }catch(e){}
+  // LINKED PORTICOS (Nix 2026-07-12: "porticos become linked — a portico sends you to its
+  // matched portico"): arriving VIA a doorway lands you at the destination's portico that
+  // points BACK where you came from, stepped 1.7m toward the district's interior and facing
+  // it. Menu/history travel, or no matched door → the district spawn point, VRC-style.
+  let _landed = false;
+  if(opts.viaPortico && prev){
+    const back = _porticos.find(pp => !pp.foreign && pp.dest && pp.dest.district === prev
+      && Math.hypot(pp.x - D.sx, pp.z - D.sz) < 900);   // the match must belong to THIS district's area
+    if(back){
+      const vx = D.sx - back.x, vz = D.sz - back.z, vl = Math.hypot(vx, vz) || 1;
+      player.position.set(back.x + (vx/vl)*1.7, 0, back.z + (vz/vl)*1.7);
+      player.rotation.y = Math.atan2(-(vx/vl), -(vz/vl));   // face into the district (forward = (-sin ry, -cos ry))
+      _landed = true; } }
+  if(!_landed){ player.position.set(D.sx, 0, D.sz); player.rotation.y = D.sry; }
   scene.fog = wake ? _wakeFog : (name === 'void') ? _voidFog : _porchFog;
   scene.background = wake ? _wakeBg : (name === 'void') ? _voidBg : _porchBg;
   if(typeof sky !== 'undefined') sky.visible = (name === 'porch');
