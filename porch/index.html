@@ -4110,8 +4110,12 @@ function updatePlayerIK(dt){
     }
   }
   if(typeof fingerTick!=='undefined') fingerTick(vrm);         // curls compose onto the animated pose
-  const _armOn = window.__armIK===true ||                      // typeof-guarded: extraction harness has no renderer
-    (typeof renderer!=='undefined' && renderer.xr && renderer.xr.isPresenting && window.__armIK!==false);
+  // EMOTES TRUMP IK (Nix 2026-07-13 #3, her rule: "emotes explicitly played by the user always
+  // trump other animation"): while an emote clip is playing, the arm IK yields to the mixer —
+  // head/eye anchor and feet stay tracked (she's still looking around), arms perform the clip.
+  const _emoting = window._myEmote && performance.now() < window._myEmote.until;
+  const _armOn = !_emoting && (window.__armIK===true ||        // typeof-guarded: extraction harness has no renderer
+    (typeof renderer!=='undefined' && renderer.xr && renderer.xr.isPresenting && window.__armIK!==false));
   if(_armOn){                                                  // arm reach-IK: VR DEFAULT ON (2026-07-09). History: the
                                                                // 07-08 live test showed arms-behind-back, so it was parked
                                                                // behind ?armik — then the morning session fixed that bug's
@@ -5167,6 +5171,13 @@ function xrUIRaycast(){
   }
 }
 function xrUISelect(i){
+  // TRIGGER = SHUTTER while that hand holds the camera (Nix 2026-07-13 #5 — "no indication for
+  // how to use it"; now the dbg line announces it on pickup and the trigger just IS the button).
+  try{ const srcs=[...renderer.xr.getSession().inputSources];
+    const hand = srcs[i] && srcs[i].handedness;
+    const heldHere = hand && typeof _heldHand!=='undefined' && _heldHand[hand];
+    if(heldHere && heldHere.isCamera3D){ if(window.__cameraSnapIfHeldVR) __cameraSnapIfHeldVR(heldHere); return; }
+  }catch(e){}
   if(window.__tryTouchAt){                                   // reach out and boop: trigger while hand in a zone
     try{ const g=renderer.xr.getControllerGrip(i);
       const hp=new THREE.Vector3().setFromMatrixPosition(g.matrixWorld);
@@ -6238,13 +6249,20 @@ window.__musicboxTick = (dt)=>{                             // called from the r
     _sLUT[i] = Math.round(255*(c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055)); }
   let _vfAcc = 0, _wasHeld = false;
   window.__cameraTick = (dt)=>{
-    const held = !!(window.__heldProp && __heldProp()===g && !renderer.xr.isPresenting);
-    if(held !== _wasHeld){ _wasHeld = held; vfHud.style.display = held?'block':'none';
+    // VR CAMERA (Nix 2026-07-13 #5, "doesn't work in VR at all"): the old gate hard-excluded
+    // XR. Now: held = desktop hold OR either VR hand; the in-world screen on the camera back
+    // IS the VR viewfinder (texture direct — no pixel readback); the DOM HUD stays desktop-only.
+    const inXR = renderer.xr.isPresenting;
+    const vrHeld = typeof _heldHand!=='undefined' && (_heldHand.left===g || _heldHand.right===g);
+    const held = !!((window.__heldProp && __heldProp()===g) || vrHeld);
+    if(held !== _wasHeld){ _wasHeld = held; vfHud.style.display = (held && !inXR)?'block':'none';
       screenMat.map = held ? vfRT.texture : null; screenMat.color.setHex(held?0xffffff:0x0a0c10);
-      screenMat.needsUpdate = true; }
+      screenMat.needsUpdate = true;
+      if(held && inXR && typeof dbg==='function') dbg('camera','🎥 viewfinder live on the camera back — TRIGGER = shutter','k'); }
     if(!held) return;
     _vfAcc += dt; if(_vfAcc < 0.12) return; _vfAcc = 0;       // ~8 Hz: alive, not expensive
     _poseFrom(G, vfCam); _rtRender(vfRT, vfCam);
+    if(inXR) return;                                          // in-world screen already shows vfRT; skip the DOM readback
     renderer.readRenderTargetPixels(vfRT, 0, 0, vfW, vfH, vfBuf);
     for(let y=0;y<vfH;y++){ const sy=vfH-1-y;
       for(let x=0;x<vfW;x++){ const s=(sy*vfW+x)*4, d=(y*vfW+x)*4;
@@ -6313,6 +6331,7 @@ window.__musicboxTick = (dt)=>{                             // called from the r
     if(window.__heldProp && __heldProp()===g){ dbg('camera', _cameraSnap(G, true)||'snap', 'k'); return true; }
     return false; };
   window.__worldCamProp = g;                                  // headless dogfood probes
+  window.__cameraSnapIfHeldVR = (held)=>{ if(held===g){ dbg('camera', _cameraSnap(G, true)||'snap', 'k'); return true; } return false; };   // VR trigger-shutter
 })();
 
 // make.music: the PLACEABLE music object (upload/compose → grab it, positional) still needs a spine
@@ -7157,9 +7176,25 @@ renderer.setAnimationLoop((now, xrFrame)=>{
         if(gp && (src.handedness==='left'||src.handedness==='right'))
           window.__fingerCurl[src.handedness] = {index:(gp.buttons[0]?.value)||0, grip:(gp.buttons[1]?.value)||0};
       }
+      // HAND TUNE (Nix in-headset 2026-07-13 #1: "hands feel a bit low, need ~15° in on the
+      // thumb–index axis"): grip-local offset + roll applied to both IK hand targets.
+      // OpenXR background: the GRIP pose origin is the controller handle centroid, NOT the palm —
+      // every runtime/controller differs (Quest vs Index vs Touch), which is why VRChat et al ship
+      // per-controller offsets. Live-tunable: window.__handTune = {dy, dz, roll} (m, m, rad);
+      // dy +up, dz -toward palm, roll +rotates inward about the grip X (thumb→index) axis.
+      // Persisted per-browser once she dials it (localStorage porch.handTune via __saveHandTune).
+      const HT = window.__handTune || (window.__handTune =
+        JSON.parse(localStorage.getItem('porch.handTune')||'null') || {dy:0.03, dz:0.01, roll:0.26});
+      window.__saveHandTune = window.__saveHandTune || (()=>{ localStorage.setItem('porch.handTune', JSON.stringify(window.__handTune)); return 'saved '+JSON.stringify(window.__handTune); });
+      const _htQ = new THREE.Quaternion(), _htOff = new THREE.Vector3();
+      const _applyHT = (ik, mirror)=>{ _htQ.setFromAxisAngle(new THREE.Vector3(1,0,0), HT.roll * (mirror?-1:1));
+        ik.quaternion.multiply(_htQ);
+        _htOff.set(0, HT.dy, HT.dz).applyQuaternion(ik.quaternion); ik.position.add(_htOff); };
       if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld);
+              _applyHT(ikHandL, true);
               if(!window.__noscale) _scaleTracked(ikHandL, player, _devScale); }
       if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld);
+              _applyHT(ikHandR, false);
               if(!window.__noscale) _scaleTracked(ikHandR, player, _devScale); }
       // ?rawgrips — hands Plan B (ik-verdicts #3, 2026-07-09): bypass three's controller slots
       // entirely and read frame.getPose(gripSpace, refSpace) ourselves. If telemetry shows the
