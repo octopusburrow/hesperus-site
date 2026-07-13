@@ -185,6 +185,7 @@
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
   <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
+  <label class="mrow"><input type="checkbox" id="starOrigToggle"><span>✨ Original star sizes (A/B)</span></label>
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
@@ -741,7 +742,7 @@ let _starMat = null;
     g.setAttribute('sphase', new THREE.BufferAttribute(ph,1));
     _starMat = new THREE.ShaderMaterial({
       transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, fog:false,
-      uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)} },
+      uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)}, uOrig:{value:0} },   // uOrig: A/B vs original magnitudes (Nix 2026-07-13 #6)
       vertexShader:`attribute vec3 scolor; attribute float ssize; attribute float sphase;
         varying vec3 vC; uniform float uTime; uniform float uPx;
         void main(){ float tw = 0.82 + 0.18*sin(uTime*1.9 + sphase*7.0);
@@ -755,9 +756,12 @@ let _starMat = null;
           // but uniform shrink makes the faint ones invisible on Desktop"): below 6px untouched,
           // beyond 6px only 40% of the excess survives. VR's higher uPx pushes the giants into
           // the knee hard; desktop's faint 2-4px stars never feel it.
-          float ps = ssize * uPx * 4.6 * twS;
-          if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
-          gl_PointSize = max(1.8, ps);   // floor so faint stars still register; ?starsize= to retune
+          float ps;
+          if(uOrig > 0.5){ ps = max(1.0, ssize * uPx * 2.3); }        // ORIGINAL sizing (pre-buffs, pre-knee, quieter floor) — A/B experiment, Nix 2026-07-13 #6
+          else { ps = ssize * uPx * 4.6 * twS;
+                 if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
+                 ps = max(1.8, ps); }                                  // floor so faint stars still register; ?starsize= to retune
+          gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r = length(d);
@@ -835,6 +839,9 @@ window.__setStarNames = setStarNames;
   // addEventListener('DOMContentLoaded') never ran and the toggle was dead (Nix 2026-07-11).
   const _wireStars = ()=>{ const cb=document.getElementById('starNamesToggle');
     if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked));
+    const so=document.getElementById('starOrigToggle');
+    if(so) so.addEventListener('change', ()=>{ if(_starMat) _starMat.uniforms.uOrig.value = so.checked ? 1 : 0;
+      if(typeof dbg==='function') dbg('stars', so.checked?'ORIGINAL sizing (2.3x, no knee)':'current sizing (4.6x + soft knee)','k'); });
     const hs=document.getElementById('hiShadowToggle');
     if(hs){ hs.checked = (localStorage.getItem('porch.shadowRes')||'1024')==='2048';
       hs.addEventListener('change', ()=>window.__setShadowRes && __setShadowRes(hs.checked?2048:1024)); }
@@ -3607,7 +3614,9 @@ window.__setBody = (name)=>{                          // the human dropdown + /b
     }
     sel.value = playerBody;
     sel.addEventListener('change', ()=> window.__setBody(sel.value));
-    btn.addEventListener('click', ()=>{ tray.style.display = tray.style.display==='none' ? 'block' : 'none'; });
+    btn.addEventListener('click', ()=>{ const opening = tray.style.display==='none';
+      if(opening && window.__hudCloseOthers) __hudCloseOthers('body');
+      tray.style.display = opening ? 'block' : 'none'; });
     window.__toggleBodyMenu = ()=> btn.click();
   }
 }
@@ -5218,7 +5227,7 @@ const RADIAL_CATS = [
     ['📸', ()=>window.__cameraSnap ? __cameraSnap() : 'no camera']]},
 ];
 function _radialButton(emoji){
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.11,0.11),
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.055,0.055),
     new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
   m.renderOrder=999; return m;
 }
@@ -5227,7 +5236,7 @@ function _radialRing(defs){                                 // defs: [{emoji, an
     const xi=_clickables.indexOf(b); if(xi>=0) _clickables.splice(xi,1);
     if(typeof xrUI!=='undefined') xrUI.targets=xrUI.targets.filter(t=>t!==b); });
   EMOTE_PANEL.buttons=[]; EMOTE_PANEL.sel=-1;
-  const R=0.20, N=defs.length;
+  const R=0.10, N=defs.length;   // halved (Nix in-headset: "large and difficult to judge accurately")
   defs.forEach((d,i)=>{ const a = (d.angle!==undefined) ? d.angle : -Math.PI/2 + i*(2*Math.PI/N);
     const m=_radialButton(d.emoji); m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0);
     m.userData._ring=a; m.userData.action=d.action;
@@ -5250,7 +5259,12 @@ function buildEmotePanel(){
 function _radialTick(){
   const g=EMOTE_PANEL.group; if(!g || !EMOTE_PANEL.on) return;
   if(renderer.xr.isPresenting){
-    try{ const grip=renderer.xr.getControllerGrip(1);
+    try{
+      // RIGHT hand by HANDEDNESS, not index (Nix: radial rode the LEFT hand on the claudesona —
+      // controller index is enumeration order, which varies by session/runtime; handedness is law).
+      let gi = 1; const srcs = renderer.xr.getSession() ? [...renderer.xr.getSession().inputSources] : [];
+      const ri = srcs.findIndex(s=>s.handedness==='right'); if(ri >= 0) gi = ri;
+      const grip=renderer.xr.getControllerGrip(gi);
       if(g.parent!==grip){ grip.add(g); g.position.set(0,0.16,-0.06); }
       const cw=camera.getWorldPosition(new THREE.Vector3());
       const gw=g.getWorldPosition(new THREE.Vector3());
@@ -6417,7 +6431,9 @@ function remoteInEarshot(id){                                  // remote sender 
       b.innerHTML=`${a.icon||'•'} ${a.label}`;
       b.onclick=()=>{ mfMenu.style.display='none'; doAction(a.id); };
       mfMenu.appendChild(b); });
-    mfBtn.addEventListener('click', ()=>{ mfMenu.style.display = mfMenu.style.display==='flex' ? 'none' : 'flex'; });
+    mfBtn.addEventListener('click', ()=>{ const opening = mfMenu.style.display!=='flex';
+      if(opening && window.__hudCloseOthers) __hudCloseOthers('manifest');
+      mfMenu.style.display = opening ? 'flex' : 'none'; });
     addEventListener('pointerdown', e=>{ if(mfMenu.style.display==='flex' && !mfMenu.contains(e.target) && e.target!==mfBtn) mfMenu.style.display='none'; }, true);
   }
   const vrProbeBtn = document.getElementById('vrProbeBtn');
@@ -6429,8 +6445,19 @@ function remoteInEarshot(id){                                  // remote sender 
     if(nm==='sit'){ if(window.__playerPose) dbg('pose', __playerPose('sit'), 'k'); return; }  // held pose, not a one-shot clip
     if(window.__playerEmote) window.__playerEmote(nm);
     else if(window.cmdNote) cmdNote('embody first to emote'); };
-  const toggleTray = (f)=>{ if(emoteTray) emoteTray.style.display =
-    (f!==undefined ? f : emoteTray.style.display==='none') ? 'flex' : 'none'; };
+  // HUD EXCLUSIVITY (Nix 2026-07-13 #7): the four side pop-outs occlude each other — opening
+  // one closes the rest. ☰ menu stays independent (it's a different animal).
+  window.__hudCloseOthers = (except)=>{
+    const mf=document.getElementById('manifestMenu'), et=document.getElementById('emoteTray'),
+          bt=document.getElementById('bodyTray'), cp=document.getElementById('ctlPanel');
+    if(except!=='manifest' && mf) mf.style.display='none';
+    if(except!=='emote' && et) et.style.display='none';
+    if(except!=='body' && bt) bt.style.display='none';
+    if(except!=='controls' && cp) cp.style.display='none'; };
+  const toggleTray = (f)=>{ if(!emoteTray) return;
+    const opening = (f!==undefined ? f : emoteTray.style.display==='none');
+    if(opening) window.__hudCloseOthers('emote');
+    emoteTray.style.display = opening ? 'flex' : 'none'; };
   if(emoteBtn) emoteBtn.addEventListener('click', ()=> toggleTray());
   document.querySelectorAll('.emoteItem').forEach(b=>
     b.addEventListener('click', ()=>{ window.__doEmote(b.dataset.emote); toggleTray(false); }));
@@ -6444,7 +6471,9 @@ function remoteInEarshot(id){                                  // remote sender 
   // controls legend (Nix 2026-07-09: "ALL the affordances, bottom right")
   const ctlBtn=document.getElementById('ctlBtn'), ctlPanel=document.getElementById('ctlPanel');
   if(ctlBtn && ctlPanel) ctlBtn.addEventListener('click', ()=>{
-    ctlPanel.style.display = ctlPanel.style.display==='none' ? 'block' : 'none'; });
+    const opening = ctlPanel.style.display==='none';
+    if(opening && window.__hudCloseOthers) __hudCloseOthers('controls');
+    ctlPanel.style.display = opening ? 'block' : 'none'; });
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
