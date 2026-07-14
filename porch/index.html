@@ -7178,6 +7178,50 @@ window.__trapdoorTick = (dt, tt, camPos)=>{
   }
 };
 
+// ---- The Pilgrim Path (world-dreams #6, ported by 4.8, 2026-07-14) ----
+// Ties the two landmarks into the porch instead of leaving them floating unfindable in the dark.
+// A trail of low warm marker-stones from the deck's NE edge out toward the ladder foot, visible
+// from the deck. Per the #6 spec, stones KINDLE as the walker nears — each lights within a radius,
+// brightest nearest you — so the path draws you along it. Reframes the ladder+trapdoor as a
+// destination you're invited toward, not scenery you happen to spot. Not gameplay; ritual.
+const PILGRIM = (function buildPilgrimPath(){
+  const G = new THREE.Group(); scene.add(G);
+  const FROM = new THREE.Vector3(5.5, 0, -5.5);       // deck NE edge
+  const TO   = new THREE.Vector3(20.2, 0, -20.2);     // just short of the ladder foot (21,-21)
+  const N = 14;
+  const stoneMat = [];                                 // per-stone material (independent emissive)
+  const stones = [];
+  const _v = new THREE.Vector3();
+  for(let i=0;i<N;i++){
+    const f = i/(N-1);
+    _v.lerpVectors(FROM, TO, f);
+    // slight organic wander off the straight line so it reads as a walked path, not a ruler
+    const wob = Math.sin(i*1.7)*0.35;
+    const perpx = -(TO.z-FROM.z), perpz = (TO.x-FROM.x);
+    const pl = Math.hypot(perpx, perpz);
+    const px = _v.x + (perpx/pl)*wob, pz = _v.z + (perpz/pl)*wob;
+    const m = new THREE.MeshStandardMaterial({ color:0x6b5f4e, roughness:0.9,
+      emissive:0xbe8a52, emissiveIntensity:0.05 });
+    const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.16 + (i%3)*0.03), m);
+    s.position.set(px, 0.08, pz); s.rotation.set(Math.sin(i)*0.4, i*0.8, Math.cos(i)*0.3);
+    s.castShadow = false; G.add(s);
+    stoneMat.push(m); stones.push(s.position.clone());
+  }
+  return { group:G, stoneMat, stones };
+})();
+window.__pilgrimTick = (dt, tt, camPos)=>{
+  if(!camPos) return;
+  const P = PILGRIM;
+  for(let i=0;i<P.stones.length;i++){
+    const d = P.stones[i].distanceTo(camPos);
+    // kindle within 6m, brightest nearest; plus a faint resting ember so the path is always faintly there
+    const near = Math.max(0, 1 - d/6);
+    const target = 0.05 + near*1.4 + 0.03*Math.sin(tt*1.6 + i*0.9);   // linear falloff reads warmer than squared
+    const m = P.stoneMat[i];
+    m.emissiveIntensity += (Math.max(0.04, target) - m.emissiveIntensity) * Math.min(1, dt*5);
+  }
+};
+
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
 let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
@@ -7229,6 +7273,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window._swingHanger) window._swingHanger.rotation.x = Math.sin(t*0.45)*0.018 + Math.sin(t*0.131)*0.009;
   if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
   if(window.__trapdoorTick) window.__trapdoorTick(dt, t, player.position); // world-dreams #34 (its pair)
+  if(window.__pilgrimTick) window.__pilgrimTick(dt, t, player.position);   // world-dreams #6 (the trail to them)
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
   // (spec wanderer parked underground 2026-07-11 — the SHADER half of the parade light survived
