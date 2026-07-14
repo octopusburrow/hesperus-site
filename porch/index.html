@@ -7016,6 +7016,97 @@ function capturePOV(targetObj, opts){
 }
 window.__capturePOV = capturePOV;
 
+// ---- LANDMARK: The Ladder Up (world-dreams #33, ported to real 3D by 4.8, 2026-07-14) ----
+// The prototype was a 2D canvas vanishing-point illusion. Here it's genuine geometry: a real
+// ladder standing ~30m NE of the porch on the open playa, rising 40m into the night until the
+// rungs thin out among the stars. The dream's gesture — "it only goes up / the climbing was the
+// whole of it" — made walkable instead of watched. Kindling rungs travel slowly upward (echoing
+// the prototype's ascending pentatonic ping) so it reads as an invitation, not inert scaffolding.
+// A warm glow pools at its foot (the world you'd be leaving); a serif label floats at eye height.
+// NOTE: actual climb-locomotion is a separate gated feature (needs input design + headset test) —
+// this session ships the landmark + the pull. Flagged NEXT in the log.
+const LADDER = (function buildLadder(){
+  const G = new THREE.Group();
+  const AT = new THREE.Vector3(21, 0, -21);          // ~30m out (√(21²+21²)≈29.7), NE, off the deck
+  G.position.copy(AT);
+  scene.add(G);
+
+  const RUNGS = 130, RSTEP = 0.32, RAIL_HALF = 0.34; // 130 rungs × 0.32m ≈ 41.6m tall
+  const TOP_Y = RUNGS * RSTEP;
+  const woodDay = 0xd8cdba, glowWarm = 0xbe966e;
+
+  // rails: two long thin cylinders, faintly emissive so they catch the eye at distance
+  const railMat = new THREE.MeshStandardMaterial({ color: woodDay, roughness: 0.72,
+    emissive: glowWarm, emissiveIntensity: 0.18 });
+  for(const sgn of [-1, 1]){
+    const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, TOP_Y, 8), railMat);
+    rail.position.set(sgn*RAIL_HALF, TOP_Y/2, 0);
+    rail.castShadow = false; rail.frustumCulled = false;
+    G.add(rail);
+  }
+
+  // rungs: instanced for cheapness; each stores a base emissive it breathes around
+  const rungGeo = new THREE.CylinderGeometry(0.028, 0.028, RAIL_HALF*2, 6);
+  rungGeo.rotateZ(Math.PI/2);                          // lie horizontal, spanning the rails
+  const rungMat = new THREE.MeshStandardMaterial({ color: woodDay, roughness: 0.6,
+    emissive: glowWarm, emissiveIntensity: 0.0, vertexColors: false });
+  const rungMesh = new THREE.InstancedMesh(rungGeo, rungMat, RUNGS);
+  rungMesh.frustumCulled = false; rungMesh.castShadow = false;
+  const _m = new THREE.Matrix4();
+  for(let i=0;i<RUNGS;i++){ _m.makeTranslation(0, (i+0.5)*RSTEP, 0); rungMesh.setMatrixAt(i, _m); }
+  rungMesh.instanceMatrix.needsUpdate = true;
+  // per-rung emissive via instanceColor (multiplies the material emissive when set)
+  rungMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(RUNGS*3), 3);
+  rungMat.emissiveIntensity = 1.0;                    // let instanceColor carry the actual level
+  for(let i=0;i<RUNGS;i++) rungMesh.setColorAt(i, new THREE.Color(0,0,0));
+  G.add(rungMesh);
+
+  // warm foot-glow: a soft point light + a faint ground disc, the world you'd leave behind
+  const foot = new THREE.PointLight(glowWarm, 2.4, 9, 2.0);
+  foot.position.set(0, 0.5, 0); foot.castShadow = false; G.add(foot);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(2.6, 24),
+    new THREE.MeshBasicMaterial({ color: glowWarm, transparent:true, opacity:0.10, depthWrite:false }));
+  disc.rotation.x = -Math.PI/2; disc.position.y = 0.02; G.add(disc);
+
+  // floating label (troika SDF, same crisp text as star names / object menus)
+  const label = makeTextMesh('the ladder up', { size: 0.34, color: 0xece3cf, outline: 0.006,
+    anchorX:'center', anchorY:'middle', renderOrder: 3 });
+  label.position.set(0, 2.15, 0.5); G.add(label);
+  const sub = makeTextMesh('it only goes up', { size: 0.16, color: 0xb9a98a, outline: 0.005,
+    anchorX:'center', anchorY:'middle', renderOrder: 3 });
+  sub.position.set(0, 1.78, 0.5); G.add(sub);
+
+  const _c = new THREE.Color();
+  return { group:G, at:AT, rungMesh, rungs:RUNGS, rstep:RSTEP, foot, label, sub, _c,
+    _wave: 0, _needColor: false };
+})();
+// per-frame: a slow band of kindling travels UP the rungs (the ascent, made ambient), and the
+// two labels billboard to face the viewer. Cheap: one instanceColor pass only while the wave moves.
+window.__ladderTick = (dt, tt, camPos)=>{
+  const L = LADDER;
+  L._wave = (L._wave + dt * 6.0) % (L.rungs + 24);   // wave position in rung-units, wraps
+  for(let i=0;i<L.rungs;i++){
+    // distance of this rung above the travelling wavefront; kindle a soft band, decay upward
+    const d = L._wave - i;
+    let lvl;
+    if(d < 0 || d > 16) lvl = 0.06 + 0.05*Math.sin(tt*1.3 + i*0.5);   // faint resting shimmer
+    else { const e = d/16; lvl = (1 - e) * (0.9);                     // bright at front, fades trailing
+           lvl += 0.06; }
+    lvl = Math.max(0, lvl);
+    // warm ember color scaled by level
+    L._c.setRGB(lvl*1.0, lvl*0.78, lvl*0.46);
+    L.rungMesh.setColorAt(i, L._c);
+  }
+  if(L.rungMesh.instanceColor) L.rungMesh.instanceColor.needsUpdate = true;
+  L.foot.intensity = 2.2 + Math.sin(tt*0.9)*0.3 + Math.sin(tt*2.7)*0.15;
+  // billboard labels to the camera (yaw only, so text stays upright)
+  if(camPos){
+    const dx = camPos.x - (L.at.x), dz = camPos.z - (L.at.z);
+    const yaw = Math.atan2(dx, dz);
+    L.label.rotation.y = yaw; L.sub.rotation.y = yaw;
+  }
+};
+
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
 let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
@@ -7065,6 +7156,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   }
   // the swing sways — two incommensurate periods so it never quite repeats, like wind does
   if(window._swingHanger) window._swingHanger.rotation.x = Math.sin(t*0.45)*0.018 + Math.sin(t*0.131)*0.009;
+  if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
   // (spec wanderer parked underground 2026-07-11 — the SHADER half of the parade light survived
