@@ -176,16 +176,16 @@
   <label class="mrow"><input type="checkbox" id="spec3rd"><span>3rd-person view</span></label>
   <label class="mrow"><span>sharpness</span><select id="aa">
     <option value="1">off</option>
-    <option value="1.5" selected>medium</option>
-    <option value="2">high</option>
-    <option value="2.5">ultra (GPU&nbsp;poison)</option>
+    <option value="1.5">medium</option>
+    <option value="2" selected>high</option>
+    <option value="2.5">ultra</option>
+    <option value="3">max (GPU&nbsp;poison)</option>
   </select></label>
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
   <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
-  <label class="mrow"><input type="checkbox" id="starOrigToggle"><span>✨ Stars: flat brightness (A/B — off = magnitude+hot cores)</span></label>
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
@@ -543,7 +543,7 @@ let avatar;   // the player's capsule+nameplate group — hidden from the driver
 const DPR = devicePixelRatio;
 function applyAA(){
   const k = parseFloat(aaBox.value) || 1;
-  renderer.setPixelRatio(Math.min(DPR * k, 4));        // desktop: supersample, clamped so we don't melt
+  renderer.setPixelRatio(Math.min(DPR * k, 6));        // desktop: supersample, clamped so we don't melt (raised 4→6 for the max tier — VR crawl fix 2026-07-14)
   renderer.xr.setFramebufferScaleFactor(k);            // VR: framebuffer scale (applies on next session)
 }
 aaBox.addEventListener('change', applyAA);
@@ -743,34 +743,27 @@ let _starMat = null;
     g.setAttribute('sphase', new THREE.BufferAttribute(ph,1));
     _starMat = new THREE.ShaderMaterial({
       transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, fog:false,
-      uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)}, uOrig:{value:0} },   // uOrig: A/B vs original magnitudes (Nix 2026-07-13 #6)
+      uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)} },
       vertexShader:`attribute vec3 scolor; attribute float ssize; attribute float sphase;
-        varying vec3 vC; varying float vB; uniform float uTime; uniform float uPx; uniform float uOrig;
-        void main(){ float tw = 0.82 + 0.18*sin(uTime*1.9 + sphase*7.0);
+        varying vec3 vC; varying float vB; uniform float uTime; uniform float uPx;
+        void main(){
           vec4 mv = modelViewMatrix*vec4(position,1.0);
-          float twS = 0.90 + 0.10*sin(uTime*2.7 + sphase*11.0);
-          // ssize encodes magnitude (bigger = brighter star). Drive BRIGHTNESS by it, not just size,
-          // so bright stars read as bright saturated points and faint ones as dim — magnitude made
-          // visible (Nix in-headset 2026-07-14: A/B was only changing SIZE; the washed-out look was
-          // additive-alpha ghosting, not size. Fix = magnitude→brightness + a hot core in the frag).
+          // ssize encodes magnitude. Brightness scales with it (magnitude made visible); saturate the
+          // wavelength tint so blue reads blue / orange reads orange, not washed grey. Hot core in frag.
+          // NO twinkle: per-frame size/brightness jitter on 2-4px points IS the small-star swim in VR
+          // (Nix in-headset 2026-07-14) — removed entirely. Supersampling (sharpness dropdown) is the
+          // real anti-crawl lever now.
           float magB = clamp((ssize - 1.0) / 5.0, 0.0, 1.0);          // 0=faint … 1=brightest
-          float ps;
-          if(uOrig > 0.5){
-            // A: previous behavior (size-only, uniform brightness) — the "before" for the A/B verdict.
-            vC = scolor * tw * 1.6; vB = 1.0;
-            ps = ssize * uPx * 4.6 * twS;
-            if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
-            ps = max(1.8, ps);
-          } else {
-            // B (new default): brightness scales with magnitude; saturate the wavelength tint so blue
-            // reads blue and orange reads orange instead of washing to grey. Core hotness in frag.
-            vec3 sat = mix(vec3(dot(scolor, vec3(0.33))), scolor, 1.35);  // push saturation past 1.0
-            vC = clamp(sat, 0.0, 1.0) * tw * (0.85 + 1.15 * magB);       // faint≈0.85 … bright≈2.0
-            vB = 0.35 + 0.65 * magB;                                     // core-hotness driver → frag
-            ps = ssize * uPx * 4.6 * twS;
-            if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
-            ps = max(1.8, ps);
-          }
+          vec3 sat = mix(vec3(dot(scolor, vec3(0.33))), scolor, 1.35);  // push saturation past 1.0
+          vC = clamp(sat, 0.0, 1.0) * (0.85 + 1.15 * magB);            // faint≈0.85 … bright≈2.0
+          vB = 0.35 + 0.65 * magB;                                     // core-hotness driver → frag
+          // SIZE: taper the BIGGEST stars down 50% while leaving small stars untouched (Nix: "big
+          // stars too big/unrealistic; small ones fine"). Reduction blends in by magB, so faint
+          // stars keep full size and only the giants shrink.
+          float ps = ssize * uPx * 4.6;
+          ps *= (1.0 - 0.5 * magB);                                    // bright→×0.5, faint→×1.0 (proportional taper)
+          if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
+          ps = max(1.8, ps);
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC; varying float vB;
@@ -854,9 +847,6 @@ window.__setStarNames = setStarNames;
   // addEventListener('DOMContentLoaded') never ran and the toggle was dead (Nix 2026-07-11).
   const _wireStars = ()=>{ const cb=document.getElementById('starNamesToggle');
     if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked));
-    const so=document.getElementById('starOrigToggle');
-    if(so) so.addEventListener('change', ()=>{ if(_starMat) _starMat.uniforms.uOrig.value = so.checked ? 1 : 0;
-      if(typeof dbg==='function') dbg('stars', so.checked?'A: flat brightness (old wash)':'B: magnitude brightness + hot cores','k'); });
     const hs=document.getElementById('hiShadowToggle');
     if(hs){ hs.checked = (localStorage.getItem('porch.shadowRes')||'1024')==='2048';
       hs.addEventListener('change', ()=>window.__setShadowRes && __setShadowRes(hs.checked?2048:1024)); }
@@ -5137,8 +5127,24 @@ function _xrInitPointers(){
   if(xrUI._init) return;
   for(let i=0;i<2;i++){
     const c=renderer.xr.getController(i);
-    const g=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)]);
-    const line=new THREE.Line(g, new THREE.LineBasicMaterial({color:0x8fb0d6, transparent:true, opacity:0.8}));
+    // FADING pointer (Nix 2026-07-14): a subdivided line whose alpha ramps from bright at the hand to
+    // 0 at the far tip, so the beam dissolves into space instead of ending in a hard dot. vertexColors
+    // + a fragment that reads the baked per-vertex alpha (LineBasicMaterial has no per-vertex alpha, so
+    // we ride onBeforeCompile to pass it through).
+    const SEG=24; const pos=new Float32Array((SEG+1)*3), acol=new Float32Array((SEG+1)*3), aal=new Float32Array(SEG+1);
+    for(let s=0;s<=SEG;s++){ const f=s/SEG; pos[s*3]=0; pos[s*3+1]=0; pos[s*3+2]=-f;
+      acol[s*3]=0.56; acol[s*3+1]=0.69; acol[s*3+2]=0.84;           // 0x8fb0d6
+      aal[s]=(1.0-f)*(1.0-f); }                                     // quadratic fade → gone at the tip
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+    g.setAttribute('color', new THREE.BufferAttribute(acol,3));
+    g.setAttribute('aFade', new THREE.BufferAttribute(aal,1));
+    const lmat=new THREE.LineBasicMaterial({vertexColors:true, transparent:true, opacity:0.85});
+    lmat.onBeforeCompile=(sh)=>{ sh.vertexShader='attribute float aFade;\nvarying float vFade;\n'+
+        sh.vertexShader.replace('void main() {','void main() {\n  vFade = aFade;');
+      sh.fragmentShader='varying float vFade;\n'+
+        sh.fragmentShader.replace('#include <color_fragment>','#include <color_fragment>\n  diffuseColor.a *= vFade;'); };
+    const line=new THREE.Line(g, lmat);
     line.scale.z=1.8; line.visible=false; c.add(line);
     c.addEventListener('selectstart', ()=> xrUISelect(i));
     xrUI._line[i]=line; xrUI._ctrl[i]=c; player.add(c);   // same rig-parenting as camera/grips (magnetized-hands fix)
@@ -5253,7 +5259,7 @@ const RADIAL_CATS = [
     ['📸', ()=>window.__cameraSnap ? __cameraSnap() : 'no camera']]},
 ];
 function _radialButton(emoji){
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.055,0.055),
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.045,0.045),
     new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
   m.renderOrder=999; return m;
 }
@@ -5262,7 +5268,7 @@ function _radialRing(defs){                                 // defs: [{emoji, an
     const xi=_clickables.indexOf(b); if(xi>=0) _clickables.splice(xi,1);
     if(typeof xrUI!=='undefined') xrUI.targets=xrUI.targets.filter(t=>t!==b); });
   EMOTE_PANEL.buttons=[]; EMOTE_PANEL.sel=-1;
-  const R=0.10, N=defs.length;   // halved (Nix in-headset: "large and difficult to judge accurately")
+  const R=0.075, N=defs.length;   // smaller again (Nix in-headset 2026-07-14: "smaller and closer yet again")
   defs.forEach((d,i)=>{ const a = (d.angle!==undefined) ? d.angle : -Math.PI/2 + i*(2*Math.PI/N);
     const m=_radialButton(d.emoji); m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0);
     m.userData._ring=a; m.userData.action=d.action;
@@ -5291,13 +5297,19 @@ function _radialTick(){
       let gi = 1; const srcs = renderer.xr.getSession() ? [...renderer.xr.getSession().inputSources] : [];
       const ri = srcs.findIndex(s=>s.handedness==='right'); if(ri >= 0) gi = ri;
       const grip=renderer.xr.getControllerGrip(gi);
-      if(g.parent!==grip){ grip.add(g); g.position.set(0,0.16,-0.06); }
+      if(g.parent!==grip){ grip.add(g); }
+      g.position.set(0, 0.12, -0.04);                                 // smaller + CLOSER to the hand (Nix 2026-07-14)
+      // TOP-UP billboard (Nix 2026-07-14: "billboarding strangely — top always up relative to the
+      // headset"): face the eyes, but lock the up-vector so hand ROLL never tilts the menu. We build
+      // the orientation in WORLD space (lookAt with the headset's up) and strip out the grip's own
+      // rotation, so the ring stays upright no matter how the wrist is turned.
       const cw=camera.getWorldPosition(new THREE.Vector3());
       const gw=g.getWorldPosition(new THREE.Vector3());
-      const m=new THREE.Matrix4().lookAt(cw, gw, new THREE.Vector3(0,1,0));
+      const headUp=new THREE.Vector3(0,1,0).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
+      const m=new THREE.Matrix4().lookAt(gw, cw, headUp);             // ring faces the eyes, "up" = headset up
       const wq=new THREE.Quaternion().setFromRotationMatrix(m);
       const pq=grip.getWorldQuaternion(new THREE.Quaternion());
-      g.quaternion.copy(pq.invert().multiply(wq));                    // face the eyes, ride the hand
+      g.quaternion.copy(pq.invert().multiply(wq));                    // world-billboard, de-rolled from the hand
     }catch(e){}
   } else if(g.parent!==camera){ camera.add(g); g.position.set(0,-0.18,-0.55); g.quaternion.identity(); }
 }
@@ -7411,9 +7423,14 @@ renderer.setAnimationLoop((now, xrFrame)=>{
         JSON.parse(localStorage.getItem('porch.handTune')||'null') || {dy:0.03, dz:0.01, roll:0.26});
       window.__saveHandTune = window.__saveHandTune || (()=>{ localStorage.setItem('porch.handTune', JSON.stringify(window.__handTune)); return 'saved '+JSON.stringify(window.__handTune); });
       const _htQ = new THREE.Quaternion(), _htOff = new THREE.Vector3();
-      const _applyHT = (ik, mirror)=>{ _htQ.setFromAxisAngle(new THREE.Vector3(1,0,0), HT.roll * (mirror?-1:1));
+      // The two grips are mirror-image frames, so the left hand is a TRUE mirror of the tuned right:
+      // dy (up) is shared, but the roll (inward about grip-X) AND the palm-ward dz are handed —
+      // negated for the left. (Nix 2026-07-14: right good, left worse — because only roll was being
+      // mirrored while dz was shared, so the left offset pushed the wrong way.)
+      const _applyHT = (ik, mirror)=>{ const s = mirror ? -1 : 1;
+        _htQ.setFromAxisAngle(new THREE.Vector3(1,0,0), HT.roll * s);
         ik.quaternion.multiply(_htQ);
-        _htOff.set(0, HT.dy, HT.dz).applyQuaternion(ik.quaternion); ik.position.add(_htOff); };
+        _htOff.set(0, HT.dy, HT.dz * s).applyQuaternion(ik.quaternion); ik.position.add(_htOff); };
       if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld);
               _applyHT(ikHandL, true);
               if(!window.__noscale) _scaleTracked(ikHandL, player, _devScale); }
