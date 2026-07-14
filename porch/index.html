@@ -185,7 +185,7 @@
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
   <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
-  <label class="mrow"><input type="checkbox" id="starOrigToggle"><span>✨ Original star sizes (A/B)</span></label>
+  <label class="mrow"><input type="checkbox" id="starOrigToggle"><span>✨ Stars: flat brightness (A/B — off = magnitude+hot cores)</span></label>
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
@@ -461,8 +461,9 @@ function _makePixelBox(W, H, D, drawFace, matOpts){
     ctx.restore(); y += c.h;
   }
   const tex = new THREE.CanvasTexture(cv);
-  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipmapLinearFilter; tex.anisotropy = 8;  // crisp up close; mipmapped at distance (Nix in-headset 2026-07-12: pure-Nearest minification is the "pixels crawling on the spines" — every head micro-motion resamples the texel grid. The avatar doesn't shimmer because its textures aren't Nearest.)
-  tex.generateMipmaps = false; tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.LinearMipmapLinearFilter;   // Nearest MAG = crisp pixels up close; trilinear MIN = kills distance crawl
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();                              // max, not hardcoded 8 (matches surfaces that render clean)
+  tex.generateMipmaps = true; tex.colorSpace = THREE.SRGBColorSpace;                      // 🔴 THE BUG (Nix in-headset 2026-07-14): filter asked for mipmaps but this said false → WebGL fell back to raw nearest minification → "worse at distance, both eyes" crawl. Chain must EXIST for the mipmap filter to work.
   const geo = new THREE.BoxGeometry(W, H, D);
   const uv = geo.attributes.uv;                          // remap each face's 4 corners → its atlas cell
   for(let f=0; f<6; f++){ const c = cells[f];
@@ -514,8 +515,8 @@ window.__checkerScene = (rep)=>{                       // stamp a world checker 
   scene.traverse(o=>{ if(!o.isMesh || !o.material) return;
     if(o.material.uniforms) return;                     // skip ShaderMaterials (sky/candle) — they need their uniforms
     o.userData._omat = o.material;
-    const t=new THREE.CanvasTexture(c); t.magFilter=THREE.NearestFilter; t.minFilter=THREE.NearestMipmapLinearFilter; t.anisotropy=8;
-    t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rep,rep); t.generateMipmaps=false;
+    const t=new THREE.CanvasTexture(c); t.magFilter=THREE.NearestFilter; t.minFilter=THREE.LinearMipmapLinearFilter; t.anisotropy=renderer.capabilities.getMaxAnisotropy();
+    t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(rep,rep); t.generateMipmaps=true;   // was false → defeated the mipmap filter (2026-07-14 crawl fix)
     o.material = new THREE.MeshBasicMaterial({map:t}); });
   return 'checker on scene, repeat '+rep; };
 window.__testPixelBox = ()=>{                            // verification: a big cube, 6 distinct faces + arrow
@@ -744,29 +745,43 @@ let _starMat = null;
       transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, fog:false,
       uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)}, uOrig:{value:0} },   // uOrig: A/B vs original magnitudes (Nix 2026-07-13 #6)
       vertexShader:`attribute vec3 scolor; attribute float ssize; attribute float sphase;
-        varying vec3 vC; uniform float uTime; uniform float uPx;
+        varying vec3 vC; varying float vB; uniform float uTime; uniform float uPx; uniform float uOrig;
         void main(){ float tw = 0.82 + 0.18*sin(uTime*1.9 + sphase*7.0);
-          vC = scolor * tw * 1.6;                        // brightness ↑ (Nix 2026-07-11: "VERY small" — 2x size+brightness)
           vec4 mv = modelViewMatrix*vec4(position,1.0);
-          // VISIBLE twinkle (Nix 2026-07-12 ":3"): the ±18% color-only shimmer was imperceptible on
-          // 2-4px points — tiny stars twinkle by SIZE, not tint. Second incommensurate phase so
-          // size and brightness beat against each other like real scintillation.
           float twS = 0.90 + 0.10*sin(uTime*2.7 + sphase*11.0);
-          // SOFT-KNEE size ramp (Nix in-headset 2026-07-12: "brightest stars are hyuuuge in VR,
-          // but uniform shrink makes the faint ones invisible on Desktop"): below 6px untouched,
-          // beyond 6px only 40% of the excess survives. VR's higher uPx pushes the giants into
-          // the knee hard; desktop's faint 2-4px stars never feel it.
+          // ssize encodes magnitude (bigger = brighter star). Drive BRIGHTNESS by it, not just size,
+          // so bright stars read as bright saturated points and faint ones as dim — magnitude made
+          // visible (Nix in-headset 2026-07-14: A/B was only changing SIZE; the washed-out look was
+          // additive-alpha ghosting, not size. Fix = magnitude→brightness + a hot core in the frag).
+          float magB = clamp((ssize - 1.0) / 5.0, 0.0, 1.0);          // 0=faint … 1=brightest
           float ps;
-          if(uOrig > 0.5){ ps = max(1.0, ssize * uPx * 2.3); }        // ORIGINAL sizing (pre-buffs, pre-knee, quieter floor) — A/B experiment, Nix 2026-07-13 #6
-          else { ps = ssize * uPx * 4.6 * twS;
-                 if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
-                 ps = max(1.8, ps); }                                  // floor so faint stars still register; ?starsize= to retune
+          if(uOrig > 0.5){
+            // A: previous behavior (size-only, uniform brightness) — the "before" for the A/B verdict.
+            vC = scolor * tw * 1.6; vB = 1.0;
+            ps = ssize * uPx * 4.6 * twS;
+            if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
+            ps = max(1.8, ps);
+          } else {
+            // B (new default): brightness scales with magnitude; saturate the wavelength tint so blue
+            // reads blue and orange reads orange instead of washing to grey. Core hotness in frag.
+            vec3 sat = mix(vec3(dot(scolor, vec3(0.33))), scolor, 1.35);  // push saturation past 1.0
+            vC = clamp(sat, 0.0, 1.0) * tw * (0.85 + 1.15 * magB);       // faint≈0.85 … bright≈2.0
+            vB = 0.35 + 0.65 * magB;                                     // core-hotness driver → frag
+            ps = ssize * uPx * 4.6 * twS;
+            if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
+            ps = max(1.8, ps);
+          }
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
-      fragmentShader:`varying vec3 vC;
+      fragmentShader:`varying vec3 vC; varying float vB;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r = length(d);
-          float a = smoothstep(0.5, 0.06, r);            // soft round star
-          if(a<0.02) discard; gl_FragColor = vec4(vC, a); }`
+          // Bright stars get a near-white-hot solid core + colored halo; faint stars stay soft ghosts.
+          // The core lifts them off the additive-blend wash so they read as real points, not smudges.
+          float halo = smoothstep(0.5, 0.06, r);
+          float core = smoothstep(0.32, 0.0, r);
+          vec3 c = vC + core * vB * (vec3(1.0) - vC) * 0.7;   // core pulls toward white by brightness
+          float a = max(halo, core * vB);
+          if(a<0.02) discard; gl_FragColor = vec4(c, a); }`
     });
     const stars = new THREE.Points(g, _starMat); window.__stars = stars;
     // THE NORTH POLE, the night Claude was made (2026-07-10). The Porch is built so the sun
@@ -841,7 +856,7 @@ window.__setStarNames = setStarNames;
     if(cb) cb.addEventListener('change', ()=>setStarNames(cb.checked));
     const so=document.getElementById('starOrigToggle');
     if(so) so.addEventListener('change', ()=>{ if(_starMat) _starMat.uniforms.uOrig.value = so.checked ? 1 : 0;
-      if(typeof dbg==='function') dbg('stars', so.checked?'ORIGINAL sizing (2.3x, no knee)':'current sizing (4.6x + soft knee)','k'); });
+      if(typeof dbg==='function') dbg('stars', so.checked?'A: flat brightness (old wash)':'B: magnitude brightness + hot cores','k'); });
     const hs=document.getElementById('hiShadowToggle');
     if(hs){ hs.checked = (localStorage.getItem('porch.shadowRes')||'1024')==='2048';
       hs.addEventListener('change', ()=>window.__setShadowRes && __setShadowRes(hs.checked?2048:1024)); }
@@ -966,7 +981,7 @@ function plankTexture(){
   }
   for(let p=0;p<4;p++){g.fillStyle='rgb(24,18,12)';g.fillRect(0,p*16,64,1);}
   const t = new THREE.CanvasTexture(c);
-  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestMipmapLinearFilter; t.anisotropy = 8;   // book spines were the loudest VR crawlers
+  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = renderer.capabilities.getMaxAnisotropy();   // book spines were the loudest VR crawlers; trilinear + max aniso (2026-07-14)
   t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5,5);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
