@@ -332,6 +332,44 @@ function _tryClickables(raycaster){
   }
   return false;
 }
+
+// ---- UNIFIED INTERACTABLE REGISTRY (refactor step 1-2, Nix 2026-07-14) ----
+// The design: ONE affordance — every interactable carries userData.onClick(ctx); grab, sit,
+// music-box-toggle, shelf-materialize are all just onClick closures with different bodies. This
+// registry runs ADDITIVELY alongside the old _clickables/grab/shelf paths (no behavior change yet);
+// step 3 (?unigrab) flips grab over to it, step 4 shelf books, step 5 deletes the old paths.
+// See notes/interaction-refactor-plan.md.
+const INTERACTABLES = [];   window.__interactables = INTERACTABLES;
+function registerInteractable(mesh, opts={}){
+  if(!mesh) return mesh;
+  const ud = mesh.userData;
+  // onClick is the canonical name; keep .action working as an alias both directions.
+  if(opts.onClick) ud.onClick = opts.onClick;
+  if(!ud.onClick && ud.action) ud.onClick = ud.action;      // adopt an existing .action
+  if(ud.onClick && !ud.action) ud.action = ud.onClick;      // keep old dispatch (_tryClickables) working
+  if(opts.onHoverStart) ud.onHoverStart = opts.onHoverStart;
+  if(opts.onHoverEnd)   ud.onHoverEnd   = opts.onHoverEnd;
+  ud.reach = opts.reach != null ? opts.reach : (ud.reach != null ? ud.reach : 3.5);
+  if(INTERACTABLES.indexOf(mesh) < 0) INTERACTABLES.push(mesh);
+  return mesh;
+}
+function unregisterInteractable(mesh){
+  const i = INTERACTABLES.indexOf(mesh); if(i>=0) INTERACTABLES.splice(i,1);
+}
+// PURE picker (headless-testable): nearest interactable hit within its own reach. No side effects.
+function pickInteractable(raycaster, list){
+  const hits = raycaster.intersectObjects(list, true);
+  for(const h of hits){
+    let o = h.object; while(o && !(o.userData && o.userData.onClick)) o = o.parent;
+    if(o && o.userData.onClick && h.distance <= (o.userData.reach!=null?o.userData.reach:3.5)) return {mesh:o, distance:h.distance, point:h.point};
+  }
+  return null;
+}
+window.__pickInteractable = pickInteractable;
+// Keep the registry in sync with the legacy _clickables array: anything pushed there is also an
+// interactable (adopts its .action as onClick). This makes step 1-2 a pure no-op safety net.
+const _origClickPush = _clickables.push.bind(_clickables);
+_clickables.push = function(...items){ for(const it of items) registerInteractable(it); return _origClickPush(...items); };
 let _cdX=0, _cdY=0, _cdT=0;
 addEventListener('mousedown', e=>{ _cdX=e.clientX; _cdY=e.clientY; _cdT=performance.now();
   // Chrome doesn't dispatch contextmenu during pointer lock — synthesize it so RMB works from
@@ -763,8 +801,10 @@ let _starMat = null;
           // real anti-crawl lever now.
           float magB = clamp((ssize - 1.0) / 5.0, 0.0, 1.0);          // 0=faint … 1=brightest
           vec3 sat = mix(vec3(dot(scolor, vec3(0.33))), scolor, 1.35);  // push saturation past 1.0
-          vC = clamp(sat, 0.0, 1.0) * (0.85 + 1.15 * magB);            // faint≈0.85 … bright≈2.0
-          vB = 0.35 + 0.65 * magB;                                     // core-hotness driver → frag
+          // BRIGHTNESS: variance widened ±25% (Nix 2026-07-14): faint dimmer (0.85→0.64), bright
+          // brighter (2.0→2.5) so magnitude reads harder.
+          vC = clamp(sat, 0.0, 1.0) * (0.64 + 1.86 * magB);            // faint≈0.64 … bright≈2.5
+          vB = 0.28 + 0.72 * magB;                                     // core-hotness driver → frag (faint softer too)
           // SIZE: taper the biggest stars down HARD, leave small ones untouched (Nix 2026-07-14
           // round 2: "still feels the same, bump 2x"). The bug last round: the 6px knee crushed
           // giants AND tapered-giants to the same ~6px, erasing the taper. Fix: apply the knee
@@ -773,8 +813,8 @@ let _starMat = null;
           // raw×knee×taper stack let giants balloon then clamped them all to the same ~7-9px, so the
           // taper was invisible). Now: faint stars ~2.2px, brightest ~4.5px — a real, visible spread
           // where giants are genuinely small. uPx scales for VR/hi-dpi.
-          float ps = mix(2.2, 4.5, magB) * uPx;
-          ps = max(1.5, ps);
+          float ps = mix(1.65, 5.6, magB) * uPx;   // variance widened ±25% (Nix 2026-07-14): faint 2.2→1.65, bright 4.5→5.6
+          ps = max(1.3, ps);
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC; varying float vB;
