@@ -7107,6 +7107,77 @@ window.__ladderTick = (dt, tt, camPos)=>{
   }
 };
 
+// ---- LANDMARK: The Trapdoor Down (world-dreams #34, ported by 4.8, 2026-07-14) ----
+// #33's documented thematic pair: the ladder leaves the world UP into cold stars; this hatch
+// burrows DOWN into warmth. A wooden trapdoor set in the playa a few metres from the ladder's
+// foot, cracked open, warm firelight spilling UP out of the gap (a flickering glow + a point
+// light rising from below). The dream: a tiny single-seat room with a fire, no clock, "stay as
+// long as you want." Here it's the DISCOVERABLE hatch + the invitation; the descent/interior is
+// the same gated locomotion feature as the ladder's climb. Together they read as one gesture in
+// two directions — the porch's own up-and-down, standing side by side on the open playa.
+const TRAPDOOR = (function buildTrapdoor(){
+  const G = new THREE.Group();
+  const AT = new THREE.Vector3(18, 0, -24);          // ~3.6m from the ladder foot (21,-21), same NE reach
+  G.position.copy(AT);
+  scene.add(G);
+
+  const oak = new THREE.MeshStandardMaterial({ color:0x4a3524, roughness:0.85 });
+  const iron = new THREE.MeshStandardMaterial({ color:0x2a2622, roughness:0.6, metalness:0.5 });
+
+  // frame: a low square lip flush with the ground
+  const FR = 1.25;                                    // hatch half-size ~1.25m opening
+  for(const [dx,dz,w,d] of [[0,-FR,FR*2+0.2,0.18],[0,FR,FR*2+0.2,0.18],[-FR,0,0.18,FR*2],[FR,0,0.18,FR*2]]){
+    const lip=new THREE.Mesh(new THREE.BoxGeometry(w,0.09,d), oak);
+    lip.position.set(dx,0.045,dz); lip.castShadow=false; G.add(lip);
+  }
+
+  // the door itself: one leaf, hinged along the far edge, cracked OPEN ~55° so glow spills up
+  const doorPivot = new THREE.Group();
+  doorPivot.position.set(0, 0.05, -FR);               // hinge at far lip
+  G.add(doorPivot);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(FR*2, 0.10, FR*2), oak);
+  door.position.set(0, 0, FR);                         // extend forward from hinge
+  door.castShadow = false; doorPivot.add(door);
+  // plank lines + two iron bands, so it reads as a real trapdoor not a slab
+  for(const bx of [-FR*0.5, FR*0.5]){
+    const band=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.12,FR*2), iron);
+    band.position.set(bx,0,FR); doorPivot.add(band);
+  }
+  doorPivot.rotation.x = -0.96;                        // ~55° open, leaning back away from viewer
+
+  // the opening's warm interior: a glowing plane just below ground + a rising firelight
+  const glowPlane = new THREE.Mesh(new THREE.PlaneGeometry(FR*1.9, FR*1.9),
+    new THREE.MeshBasicMaterial({ color:0xffb060, transparent:true, opacity:0.9, depthWrite:false }));
+  glowPlane.rotation.x = -Math.PI/2; glowPlane.position.y = -0.35; G.add(glowPlane);
+  const fire = new THREE.PointLight(0xff9040, 2.6, 7, 2.0);
+  fire.position.set(0, -0.2, 0.2); fire.castShadow=false; G.add(fire);
+  // faint warm spill onto the playa lip around the opening
+  const spill = new THREE.Mesh(new THREE.CircleGeometry(2.2, 24),
+    new THREE.MeshBasicMaterial({ color:0xff9a50, transparent:true, opacity:0.08, depthWrite:false }));
+  spill.rotation.x=-Math.PI/2; spill.position.y=0.015; G.add(spill);
+
+  const label = makeTextMesh('the trapdoor down', { size:0.30, color:0xe8c9a0, outline:0.006,
+    anchorX:'center', anchorY:'middle', renderOrder:3 });
+  label.position.set(0, 1.7, 1.4); G.add(label);
+  const sub = makeTextMesh('stay as long as you want', { size:0.145, color:0xb98a5a, outline:0.005,
+    anchorX:'center', anchorY:'middle', renderOrder:3 });
+  sub.position.set(0, 1.4, 1.4); G.add(sub);
+
+  return { group:G, at:AT, fire, glowPlane, label, sub };
+})();
+window.__trapdoorTick = (dt, tt, camPos)=>{
+  const T = TRAPDOOR;
+  // fire flicker: layered incommensurate sines + sputter (same family as the porch stove/candle)
+  const flick = 2.3 + Math.sin(tt*0.6+0.4)*0.3 + Math.sin(tt*1.9)*0.22
+              + Math.sin(tt*4.7)*0.16 + (Math.random()-0.5)*0.12;
+  T.fire.intensity = flick;
+  T.glowPlane.material.opacity = 0.72 + (flick-2.3)*0.18;
+  if(camPos){
+    const yaw = Math.atan2(camPos.x - T.at.x, camPos.z - T.at.z);
+    T.label.rotation.y = yaw; T.sub.rotation.y = yaw;
+  }
+};
+
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
 let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
@@ -7157,6 +7228,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   // the swing sways — two incommensurate periods so it never quite repeats, like wind does
   if(window._swingHanger) window._swingHanger.rotation.x = Math.sin(t*0.45)*0.018 + Math.sin(t*0.131)*0.009;
   if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
+  if(window.__trapdoorTick) window.__trapdoorTick(dt, t, player.position); // world-dreams #34 (its pair)
   playaUniforms.uFlick.value = f;
   // sweetener #1 inspection light: parades a 12m line, 10m south of origin — go look at the glint
   // (spec wanderer parked underground 2026-07-11 — the SHADER half of the parade light survived
