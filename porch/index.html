@@ -501,6 +501,14 @@ function _bookMesh(seed){
   };
   const r = _makePixelBox(W, H, D, paint);
   r.mesh.userData.bookDims = [W,H,D];
+  // BOOK A/B PROBE (?cubeshelf=1, Nix 2026-07-14): swap the textured atlas for a plain solid-color
+  // material (no map at all) — the definitive "material/texture vs geometry" isolation from the
+  // gotchas note. If the VR swim VANISHES with this flag → it's the book texture/sampling; if it
+  // PERSISTS on solid cubes → it's the instancing/geometry/render path, not the texture.
+  if(new URLSearchParams(location.search).has('cubeshelf')){
+    const solid = new THREE.MeshStandardMaterial({ color: P.cov, roughness: 1, metalness: 0 });
+    r.mesh.material = solid; if(r.mat!==undefined) r.mat = solid;
+  }
   return r;
 }
 window.__checkerBox = (W,H,D)=>{                       // square-pixel proof for _makePixelBox surfaces
@@ -757,13 +765,16 @@ let _starMat = null;
           vec3 sat = mix(vec3(dot(scolor, vec3(0.33))), scolor, 1.35);  // push saturation past 1.0
           vC = clamp(sat, 0.0, 1.0) * (0.85 + 1.15 * magB);            // faint≈0.85 … bright≈2.0
           vB = 0.35 + 0.65 * magB;                                     // core-hotness driver → frag
-          // SIZE: taper the BIGGEST stars down 50% while leaving small stars untouched (Nix: "big
-          // stars too big/unrealistic; small ones fine"). Reduction blends in by magB, so faint
-          // stars keep full size and only the giants shrink.
-          float ps = ssize * uPx * 4.6;
-          ps *= (1.0 - 0.5 * magB);                                    // bright→×0.5, faint→×1.0 (proportional taper)
-          if(ps > 6.0) ps = 6.0 + (ps - 6.0) * 0.4;
-          ps = max(1.8, ps);
+          // SIZE: taper the biggest stars down HARD, leave small ones untouched (Nix 2026-07-14
+          // round 2: "still feels the same, bump 2x"). The bug last round: the 6px knee crushed
+          // giants AND tapered-giants to the same ~6px, erasing the taper. Fix: apply the knee
+          // FIRST, then taper by magB — so the reduction survives instead of being flattened.
+          // SIZE mapped directly by magnitude to a CLAMPED pixel range (Nix 2026-07-14 r2: the old
+          // raw×knee×taper stack let giants balloon then clamped them all to the same ~7-9px, so the
+          // taper was invisible). Now: faint stars ~2.2px, brightest ~4.5px — a real, visible spread
+          // where giants are genuinely small. uPx scales for VR/hi-dpi.
+          float ps = mix(2.2, 4.5, magB) * uPx;
+          ps = max(1.5, ps);
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC; varying float vB;
@@ -1258,6 +1269,10 @@ function tryGripGrab(hand, pressed){                  // VR grip edge → grab n
     if(!g){                                           // gravity glove (rev.2 of #17): grip takes the AIMED prop —
       const idx = hand==='left' ? 0 : 1;              // the one already glowing under this hand's ray (≤3.5m,
       g = _gloveHover[idx] || null;                   // desktop's reach) — and force-pulls it into the hand.
+      // SHELF BOOK: if the glove is aimed at an un-materialized shelf book, pop it into a real prop
+      // first, THEN grab it (Nix 2026-07-14: top/mid-shelf books weren't grabbable in VR).
+      if(!g && _gloveShelf[idx] && typeof _materializeShelfBook==='function'){
+        g = _materializeShelfBook(_gloveShelf[idx]); _gloveShelf[idx]=null; }
       if(g){ g._fly = true; if(typeof dbg==='function') dbg('grab', `glove-pull ${g.pid}`, 'k'); } }
     if(g){ g.offset = g._fly ? null : g.mesh.position.clone().sub(gp);   // laser grabs land IN the hand
       _heldHand[hand]=grabProp(g);
@@ -5121,6 +5136,8 @@ function vkbToggleText(){                                   // VR: open the keyb
 const xrUI = { targets: [], hover: [null,null], _line:[null,null], _ctrl:[null,null],
                _rc:new THREE.Raycaster(), _init:false };
 const _gloveHover = [null, null];                          // per-controller aimed grabbable (gravity glove)
+const _gloveShelf = [null, null];                          // per-controller aimed SHELF BOOK (instanced; materialize on grip)
+window.__gloveShelf = _gloveShelf;
 const _gloveHeldIdx = ()=> _heldHand.left ? 0 : (_heldHand.right ? 1 : -1);
 window.__gloveHover = _gloveHover;                         // headless probes
 function _xrInitPointers(){
@@ -5164,18 +5181,36 @@ function xrUIRaycast(){
       if(xrUI.hover[i]){ _xrKeyHi(xrUI.hover[i],false); xrUI.hover[i]=null; }
       const gv = _gloveHover[i];
       let ng = null, nd = 0;
+      let ngClick = null;   // a clickable (music box, video) the ray hits — separate from grabbables
       if(typeof grabbables !== 'undefined' && !(_heldHand && (_heldHand.left||_heldHand.right) && i===_gloveHeldIdx())){
         const origin=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
         const q=new THREE.Quaternion().setFromRotationMatrix(c.matrixWorld);
-        xrUI._rc.set(origin, new THREE.Vector3(0,0,-1).applyQuaternion(q)); xrUI._rc.far = 3.5;
+        const rdir=new THREE.Vector3(0,0,-1).applyQuaternion(q);
+        xrUI._rc.set(origin, rdir); xrUI._rc.far = 3.5;
         const loose = grabbables.filter(p=>p.mesh && !p.carrying && !(p._cool>0));
         const hits = xrUI._rc.intersectObjects(loose.map(p=>p.mesh), true);
         if(hits.length){ let o=hits[0].object; while(o && !ng){ ng = loose.find(p=>p.mesh===o)||null; o=o.parent; } nd = hits[0].distance; }
+        // SHELF BOOKS (instanced → ray-sphere test, same as desktop reticle): let the glove target
+        // an un-materialized shelf book so grip pulls it. Fixes "top/mid-shelf books not grabbable
+        // in VR" (Nix 2026-07-14) — they were never in the grabbables list until materialized.
+        if(!ng && typeof _shelfBooks!=='undefined'){ let bt=nd>0?nd:3.5; let bsb=null;
+          for(const sb of _shelfBooks){ if(sb.taken) continue;
+            const t=rdir.dot(_hovTmp.subVectors(sb.pos, origin));
+            if(t>0 && t<bt && xrUI._rc.ray.distanceToPoint(sb.pos)<0.18){ bt=t; bsb=sb; } }
+          if(bsb){ _gloveShelf[i]=bsb; nd=bt; ng=null; line&&(line.visible=true); } else _gloveShelf[i]=null;
+        }
+        // CLICKABLES (music box, videos): light the ray + highlight so the affordance shows, and
+        // trigger fires their action via the existing _tryClickables path in xrUISelect.
+        if(!ng && !_gloveShelf[i] && typeof _clickables!=='undefined'){
+          const chits = xrUI._rc.intersectObjects(_clickables, false);
+          if(chits.length){ ngClick = chits[0].object; nd = chits[0].distance; }
+        }
         xrUI._rc.far = Infinity;
       }
       if(gv !== ng){ if(gv && gv.mat && gv.mat.emissive) gv.mat.emissive.setHex(0x000000);
         if(ng && ng.mat && ng.mat.emissive) ng.mat.emissive.setHex(0x3a2f18); _gloveHover[i]=ng; }
-      if(line){ line.visible = !!ng; if(ng){ line.scale.z = nd; line.material.color.setHex(0xd6b46a); } }
+      const anyTarget = ng || _gloveShelf[i] || ngClick;
+      if(line){ line.visible = !!anyTarget; if(anyTarget){ line.scale.z = nd || 1.8; line.material.color.setHex(0xd6b46a); } }
       continue;
     }
     if(line) line.material.color.setHex(0x8fb0d6);   // UI mode: back to the cool ray
@@ -5290,6 +5325,7 @@ function buildEmotePanel(){
 // "attached to the hand, not the headset"); on desktop it stays camera-anchored.
 function _radialTick(){
   const g=EMOTE_PANEL.group; if(!g || !EMOTE_PANEL.on) return;
+  if(!g.userData._dbgOnce){ g.userData._dbgOnce=1; if(typeof dbg==='function') dbg('radial','tick: on='+EMOTE_PANEL.on+' xr='+renderer.xr.isPresenting+' btns='+(EMOTE_PANEL.buttons?EMOTE_PANEL.buttons.length:0),'k'); }
   if(renderer.xr.isPresenting){
     try{
       // RIGHT hand by HANDEDNESS, not index (Nix: radial rode the LEFT hand on the claudesona —
@@ -5297,19 +5333,18 @@ function _radialTick(){
       let gi = 1; const srcs = renderer.xr.getSession() ? [...renderer.xr.getSession().inputSources] : [];
       const ri = srcs.findIndex(s=>s.handedness==='right'); if(ri >= 0) gi = ri;
       const grip=renderer.xr.getControllerGrip(gi);
-      if(g.parent!==grip){ grip.add(g); }
-      g.position.set(0, 0.12, -0.04);                                 // smaller + CLOSER to the hand (Nix 2026-07-14)
+      if(g.parent!==grip){ grip.add(g); g.position.set(0,0.14,-0.05); }   // restored the original offset shape (Nix: menu vanished when I moved it every-frame); slightly smaller/closer than the old 0.16/-0.06
       // TOP-UP billboard (Nix 2026-07-14: "billboarding strangely — top always up relative to the
-      // headset"): face the eyes, but lock the up-vector so hand ROLL never tilts the menu. We build
-      // the orientation in WORLD space (lookAt with the headset's up) and strip out the grip's own
-      // rotation, so the ring stays upright no matter how the wrist is turned.
+      // headset"). Original known-good orientation: lookAt(eye=camera, target=group, world-up), used
+      // as the group's own rotation, then de-parented from the grip's rotation. The ONLY change vs the
+      // working version is the up-vector: headset-up instead of world-up, so wrist roll can't tilt it.
       const cw=camera.getWorldPosition(new THREE.Vector3());
       const gw=g.getWorldPosition(new THREE.Vector3());
       const headUp=new THREE.Vector3(0,1,0).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
-      const m=new THREE.Matrix4().lookAt(gw, cw, headUp);             // ring faces the eyes, "up" = headset up
+      const m=new THREE.Matrix4().lookAt(cw, gw, headUp);             // eye=camera, target=group (the known-good order)
       const wq=new THREE.Quaternion().setFromRotationMatrix(m);
       const pq=grip.getWorldQuaternion(new THREE.Quaternion());
-      g.quaternion.copy(pq.invert().multiply(wq));                    // world-billboard, de-rolled from the hand
+      g.quaternion.copy(pq.invert().multiply(wq));                    // de-roll from the hand; headset-up keeps top up
     }catch(e){}
   } else if(g.parent!==camera){ camera.add(g); g.position.set(0,-0.18,-0.55); g.quaternion.identity(); }
 }
@@ -7431,11 +7466,17 @@ renderer.setAnimationLoop((now, xrFrame)=>{
         _htQ.setFromAxisAngle(new THREE.Vector3(1,0,0), HT.roll * s);
         ik.quaternion.multiply(_htQ);
         _htOff.set(0, HT.dy, HT.dz * s).applyQuaternion(ik.quaternion); ik.position.add(_htOff); };
+      // ?rigidhands=1 — DIAGNOSTIC (Nix 2026-07-14): bypass the HandTune offset entirely so the IK
+      // hand target is the RAW grip pose — rigidly parent-constrained, "pointer as an extension of
+      // the finger." If the swim/misalignment VANISHES in this mode → the offset system is the bug and
+      // I rebuild it as a single rigid transform; if it PERSISTS → the swim is in _solveArm/the wrist
+      // bone, not here. window.__rigidHands toggles live too.
+      const _rigid = window.__rigidHands || new URLSearchParams(location.search).has('rigidhands');
       if(gL){ ikHandL.position.setFromMatrixPosition(gL.matrixWorld); ikHandL.quaternion.setFromRotationMatrix(gL.matrixWorld);
-              _applyHT(ikHandL, true);
+              if(!_rigid) _applyHT(ikHandL, true);
               if(!window.__noscale) _scaleTracked(ikHandL, player, _devScale); }
       if(gR){ ikHandR.position.setFromMatrixPosition(gR.matrixWorld); ikHandR.quaternion.setFromRotationMatrix(gR.matrixWorld);
-              _applyHT(ikHandR, false);
+              if(!_rigid) _applyHT(ikHandR, false);
               if(!window.__noscale) _scaleTracked(ikHandR, player, _devScale); }
       // ?rawgrips — hands Plan B (ik-verdicts #3, 2026-07-09): bypass three's controller slots
       // entirely and read frame.getPose(gripSpace, refSpace) ourselves. If telemetry shows the
