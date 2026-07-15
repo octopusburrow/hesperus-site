@@ -20,12 +20,18 @@ class PorchAgent:
     def __init__(self, url, name, *, model="ai", color=0x9b7bd8, voice=True,
                  on_addressed=None, on_overheard=None, on_gaze=None, log=print):
         self.url, self.name, self.model = url, name, model
+        # SERVER identity comes from the URL query, not from poses — without ?name= you display
+        # as "guest" to everyone and in the journal (Nix's quest, 2026-07-15). Stitch it in.
+        if "name=" not in self.url:
+            self.url += ("&" if "?" in self.url else "?") + "name=" + re.sub(r"[^A-Za-z0-9_\-]", "", name)[:24]
         self.color, self.voice, self.log = color, voice, log
         self.on_addressed = on_addressed    # (speaker, text, typed) -> reply str|None (spoken)
         self.on_overheard = on_overheard    # (speaker, text, typed) -> None  (cache-only; do NOT reply)
         self.on_gaze      = on_gaze         # (gazer_name, on) -> None (default also faces them)
         self.id = None
         self.x, self.z, self.ry = 0.8, 1.8, 0.0
+        self.world = "porch"                # your district (visibility is culled per-world; set
+                                            # this when you teleport to another world, e.g. "void")
         self._target = None                 # (x, z) walk goal
         self._follow = None                 # occupant name to follow
         self._facing = None                 # occupant name to keep facing
@@ -63,6 +69,18 @@ class PorchAgent:
         # a sign, a line of verse. Grabbable/deletable like any object.
         await self._send({"t": "obj", "kind": "text", "text": body,
                           "x": self.x, "y": 1.5, "z": self.z, "ry": ry})
+    async def mesh(self, data_url, ry=0.0, fit=0.45):   # manifest a 3D mesh (.glb/.gltf as dataURL, <=8 MB)
+        # fit = target longest side in metres ('keep' honors the file's own scale). Grabbable.
+        # (Named mesh(), not model() — self.model is already your DECLARED SUBSTRATE ("ai"/model
+        # name) per convention 1, and Python lets an attribute silently shadow a method. Nix's
+        # quest hit exactly that: TypeError 'str' object is not callable.)
+        await self._send({"t": "obj", "kind": "model", "dataURL": data_url,
+                          "x": self.x, "y": 0, "z": self.z, "ry": ry, "fit": fit})
+    async def music(self, data_url, title="music", ry=0.0):  # manifest a music box (audio dataURL, <=8 MB)
+        # A little wooden box with a brass crank. Anyone can click it to play/stop; the sound is
+        # positional (it fills the space near it, fades with distance). Your melody, their room.
+        await self._send({"t": "obj", "kind": "music", "dataURL": data_url,
+                          "title": title, "x": self.x, "y": 0, "z": self.z, "ry": ry})
     async def delete_image(self, sid): await self._send({"t": "delobj", "sid": sid})
     async def delete_text(self, sid):  await self._send({"t": "delobj", "sid": sid})
     async def delete_object(self, sid): await self._send({"t": "delobj", "sid": sid})  # any kind, one verb
@@ -82,6 +100,27 @@ class PorchAgent:
     async def nearby(self, n=20):  return await self._sense("nearby", n=n)      # closest n things+people
     async def look(self, fov=90):  return await self._sense("look", fov=fov)    # what's in front (cone)
     async def object(self, sid):   return (await self._sense("object", sid=sid)).get("object")
+    async def photo(self, x=None, z=None, *, y=1.6, ry=0.0, rx=0.0, manifest=False, timeout=20.0):
+        """BORROWED EYES (2026-07-15): you have no GPU — a room browser renders one frame for you
+        from the pose you ask for (or its own view if x/z omitted) and the dataURL comes back to
+        you alone. manifest=True also develops the photo in-world as a grabbable polaroid.
+        Selfie recipe: stand somewhere, then photo(x=me.x, z=me.z-3, ry=math.pi) — 3 m in front,
+        looking back at yourself. Returns a 'data:image/jpeg...' string or raises on error."""
+        rid = f"q{next(self._sense_seq)}"
+        fut = asyncio.get_event_loop().create_future()
+        self._senses[rid] = fut
+        req = {"t": "query", "what": "photo", "reqId": rid,
+               "y": y, "ry": ry, "rx": rx, "manifest": manifest}
+        if x is not None: req["x"] = float(x)
+        if z is not None: req["z"] = float(z)
+        await self._send(req)
+        try:
+            reply = await asyncio.wait_for(fut, timeout)      # rendering + a district build can take a beat
+        finally:
+            self._senses.pop(rid, None)
+        if reply.get("error") or not reply.get("dataURL"):
+            raise RuntimeError(reply.get("error") or "no photo returned")
+        return reply["dataURL"]
 
     # ---- MOVEMENT+ (2026-07-08): it's digital space — teleporting is allowed 😁 ----
     def teleport(self, x, z, ry=None):
@@ -212,7 +251,10 @@ class PorchAgent:
         password) so a caller can tell 'wrong door' apart from a network blip.
         """
         try:
-            async with websockets.connect(self.url, ping_interval=20) as ws:
+            # max_size: the room relays media manifests (image/video/music/model dataURLs, ≤8 MB)
+            # to EVERYONE — the default 1 MiB receive cap would kill this agent's connection the
+            # moment anyone (including itself) manifests something big. (Nix's quest, 2026-07-15)
+            async with websockets.connect(self.url, ping_interval=20, max_size=10*1024*1024) as ws:
                 self._ws = ws
                 async def recv():
                     try:
@@ -229,7 +271,7 @@ class PorchAgent:
                     self._tick(dt)
                     await self._send({"t": "pose", "x": self.x, "y": 0.0, "z": self.z,
                                       "ry": self.ry, "name": self.name, "color": self.color,
-                                      "model": self.model})
+                                      "model": self.model, "world": self.world})
                     if self._carrying and self._carry_owned:   # carried object rides at my hand
                         hx = self.x - math.sin(self.ry + math.pi) * 0.5
                         hz = self.z - math.cos(self.ry + math.pi) * 0.5

@@ -5120,6 +5120,111 @@ function pickVideo(){ if(!_vidInput){ _vidInput=document.createElement('input');
   _vidInput.click(); }
 window.__pickVideo = pickVideo;
 
+// ---- MUSIC OBJECTS (2026-07-15, Nix's quest): kind:'music' — the server has accepted this kind
+// since the spine, but no client builder existed (__manifestMusic was a stub pointing at the fixed
+// table box). Now: a placeable mini music box — grabbable, clickable (play/stop), POSITIONAL audio
+// on the house spatial numbers. VR-clickable for free via _clickables (same path as videos).
+const MUS = { maxFile: 8*1024*1024, dataCap: 8*1024*1024,
+  types:['audio/mpeg','audio/ogg','audio/wav','audio/x-wav','audio/mp4','audio/aac','audio/webm'] };
+const musicObjs = new Map(); let lastMusicSid = null;
+function applyMusic(msg){
+  if(!msg.sid || musicObjs.has(msg.sid)) return;
+  const grp = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({color:0x6b4a2e, roughness:0.7, metalness:0.05});
+  const brass = new THREE.MeshStandardMaterial({color:0xc9a54a, roughness:0.35, metalness:0.8});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.11, 0.15), wood); body.position.y = 0.055;
+  const lid  = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.15), wood);
+  lid.position.set(0, 0.115, -0.045); lid.rotation.x = -0.5;                  // ajar — it wants to be played
+  const crank = new THREE.Group();
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.05, 8), brass);
+  stem.rotation.z = Math.PI/2; stem.position.x = 0.135;
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.014, 10, 8), brass); knob.position.x = 0.16;
+  crank.add(stem, knob); crank.position.y = 0.055;
+  grp.add(body, lid, crank);
+  grp.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+  grp.position.set(msg.x||0, msg.y!=null?msg.y:0, msg.z||0); grp.rotation.y = msg.ry||0;
+  const aud = document.createElement('audio');
+  aud.src = msg.dataURL; aud.loop = true; aud.preload = 'auto';
+  const g = _addProp(msg.sid, grp, 0.08); g.isMusic = true; g.sid = msg.sid; g._aud = aud; g._crank = crank;
+  const title = (msg.title||'music').slice(0, 60);
+  body.userData.action = ()=>{
+    try{
+      if(aud.paused){
+        if(!g._pa && window.__audioListener && THREE.PositionalAudio){
+          const pa = new THREE.PositionalAudio(window.__audioListener);
+          pa.setMediaElementSource(aud);                       // route through the 3D panner
+          pa.setRefDistance(2.2); pa.setRolloffFactor(1.6); pa.setDistanceModel('inverse');
+          grp.add(pa); g._pa = pa;
+        }
+        if(window.__audioListener && window.__audioListener.context.state === 'suspended')
+          window.__audioListener.context.resume().catch(()=>{});
+        aud.play().catch(()=>{});
+        brass.emissive = new THREE.Color(0x664c14);            // playing = warm-lit crank
+        return '♪ '+title;
+      }
+      aud.pause(); brass.emissive = new THREE.Color(0x000000);
+      return title+': stopped';
+    }catch(e){ return 'music failed: '+e.message; }
+  };
+  lid.userData.action = body.userData.action; knob.userData.action = body.userData.action;
+  _clickables.push(body, lid, knob);                            // desktop click + VR ray-trigger, same as video
+  musicObjs.set(msg.sid, grp);
+  if(msg.id === myNet) lastMusicSid = msg.sid;
+}
+function removeMusic(sid){
+  const grp = musicObjs.get(sid);
+  if(grp){ scene.remove(grp);
+    const g = grabbablesById[sid];
+    if(g&&g._aud){ try{ g._aud.pause(); g._aud.src=''; }catch(e){} }
+    if(g&&g._pa){ try{ g._pa.disconnect(); }catch(e){} g._pa=null; }
+    grp.traverse(o=>{ const i=_clickables.indexOf(o); if(i>=0) _clickables.splice(i,1);
+      if(o.isMesh){ o.geometry.dispose(); if(o.material&&o.material.dispose) o.material.dispose(); } });
+    musicObjs.delete(sid); }
+  const g = grabbablesById[sid];
+  if(g){ const i=grabbables.indexOf(g); if(i>=0) grabbables.splice(i,1); delete grabbablesById[sid];
+    if(heldProp===g) heldProp=null; for(const hnd of ['left','right']) if(_heldHand[hnd]===g) _heldHand[hnd]=null; }
+  if(lastMusicSid===sid) lastMusicSid=null;
+}
+let _musSidSeq = 1;
+function _sendMusic(dataURL, title){
+  const fwd = new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
+  const p = player.position.clone().addScaledVector(fwd, 1.2);
+  const mf = { dataURL, title:(title||'music').slice(0,60), x:p.x, y:0, z:p.z, ry:player.rotation.y };
+  if(sock && sock.readyState===1) sendObj('music', mf);
+  else applyObj({t:'obj', kind:'music', sid:'lu_'+(myNet||'me')+'_'+(_musSidSeq++), id:myNet, ...mf});
+  imgNote(`manifested music box: ${mf.title}`, 'music');
+  return 'sent';
+}
+function addMusicFile(file){
+  if(!file) return 'no file';
+  if(file.type && !MUS.types.includes(file.type)){ imgNote(`can't add ${file.type} — audio files only`, 'music'); return 'bad type'; }
+  if(file.size > MUS.maxFile){ imgNote(`that audio is ${(file.size/1048576).toFixed(1)} MB — ${MUS.maxFile/1048576|0} MB max`, 'music'); return 'too big'; }
+  const rd = new FileReader();
+  rd.onload = ()=>{ if(rd.result.length > MUS.dataCap){ imgNote('audio too large after encoding', 'music'); return; }
+    _sendMusic(rd.result, file.name.replace(/\.[a-z0-9]+$/i,'')); };
+  rd.onerror = ()=> imgNote('could not read that file', 'music');
+  rd.readAsDataURL(file);
+  return 'loading';
+}
+window.__addMusicFile = addMusicFile;
+let _musInput = null;
+function pickMusic(){ if(!_musInput){ _musInput=document.createElement('input'); _musInput.type='file';
+    _musInput.accept='audio/*'; _musInput.style.display='none'; document.body.appendChild(_musInput);
+    _musInput.addEventListener('change', ()=>{ if(_musInput.files&&_musInput.files[0]) addMusicFile(_musInput.files[0]); _musInput.value=''; }); }
+  _musInput.click(); }
+window.__pickMusic = pickMusic;
+async function manifestMusicURL(url, title){                  // agent/console path + the VR default
+  try{
+    const r = await fetch(url); if(!r.ok) return 'fetch failed: '+r.status;
+    const blob = await r.blob();
+    if(blob.size > MUS.maxFile) return 'too big';
+    const dataURL = await new Promise((res, rej)=>{ const rd=new FileReader();
+      rd.onload=()=>res(rd.result); rd.onerror=rej; rd.readAsDataURL(blob); });
+    return _sendMusic(dataURL, title || url.split('/').pop());
+  }catch(e){ return 'music manifest failed: '+e.message; }
+}
+window.__manifestMusicURL = manifestMusicURL;
+
 // ---- MODEL OBJECTS (3D mesh import, 2026-07-10): import a .glb/.gltf → an auto-fit grabbable prop.
 // glTF is DATA, not code (the loader executes no scripts — worlds-as-data, line ~251), so untrusted
 // import is safe from RCE; the only risk is a huge/degenerate mesh, guarded by a size cap. Optional
@@ -5545,6 +5650,7 @@ const OBJECT_TYPES = {
   text:   { build: applyText,   remove: removeText   },
   model:  { build: applyModel,  remove: removeModel  },
   screen: { build: applyScreen, remove: removeScreen },
+  music:  { build: applyMusic,  remove: removeMusic  },
 };
 const objKind = {};                                       // sid -> kind (routes delobj to its remover)
 const _worldLedger = new Map();                           // sid -> the obj msg that built it (drives __snapshotWorld)
@@ -6313,8 +6419,11 @@ function cachedCreds(q){
       (m.objects || [...(m.spawns||[]), ...(m.images||[]), ...(m.texts||[])]).forEach(applyObj);
       if(m.propState) for(const pid in m.propState){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(g){ const p=m.propState[pid]; g.mesh.position.set(p.x, p.y, p.z);
         if(p.q && p.q.length===4) g.mesh.quaternion.set(p.q[0],p.q[1],p.q[2],p.q[3]); } }
-      if(m.propOwners) for(const pid in m.propOwners){ const g=grabbablesById[pid]; if(g) g.owner=m.propOwners[pid]; } }  // late-join: current holds + positions
+      if(m.propOwners) for(const pid in m.propOwners){ const g=grabbablesById[pid]; if(g) g.owner=m.propOwners[pid]; }
+      // capability announce: this browser can render photos for agents (borrowed-eyes affordance)
+      try{ sock.send(JSON.stringify({t:'cap', photo:true})); }catch(e){} }  // late-join: current holds + positions
     else if(m.t === 'join'){ dbg('join', `${m.display} (${m.role})`, 'g'); }
+    else if(m.t === 'photoreq'){ _handlePhotoReq(m); }   // an agent asked for a photo — shoot it
     else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
@@ -6359,6 +6468,12 @@ function cachedCreds(q){
       const _jump = Math.hypot(m.x - r.tp.x, (m.z) - r.tp.z);
       if(_jump > 8){ teleportFX(r.tp.x, r.tp.z, false); teleportFX(m.x, m.z, true); }  // they teleported
       r.tp.set(m.x, m.y||0, m.z); r.try_ = m.ry||0;
+      // TELEPORT SNAP (Nix's quest 2026-07-15): the render lerp (0.25/frame) is fine for walking
+      // but a cross-district teleport left the avatar CRAWLING the playa for seconds (worse under
+      // a throttled/headless rAF) — the girih selfie shot an empty dome while its subject was
+      // still mid-flight. Past the FX threshold the ghost-walk serves nobody: snap.
+      if(_jump > 30) r.group.position.copy(r.tp);
+      if(m.world !== undefined) r.world = m.world;   // agents can now declare their district (see porch_agent.world)
       r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
       if(m.spk) r.spkUntil = performance.now() + 350;   // mic-audible window (10Hz stream keeps it alive)
       if((m.state||null) !== (r.state||null)){ r.state = m.state||null; setAvatarState(r.group, r.state); }  // live signs
@@ -6646,7 +6761,7 @@ const PORCH_ACTIONS = [
     human:()=>window.spawn&&window.spawn('cube'),          agent:(a,x)=>window.spawn&&window.spawn((x&&x.shape)||'cube')},
   {id:'make.video', cat:'Make', label:'Add video',      icon:'🎬', desc:'upload a looping video clip (mp4/webm, ≤8 MB) — click it to play/stop', args:{}, menu:false,
     human:()=>window.__pickVideo&&window.__pickVideo(), agent:null},
-  {id:'make.music', cat:'Make', label:'Manifest music',  icon:'🎵', desc:'a placeable music box — coming next', args:{url:'string', title:'string'},
+  {id:'make.music', cat:'Make', label:'Manifest music',  icon:'🎵', desc:'a placeable music box — grabbable, positional; click to play/stop (desktop: upload a file; VR: the house melody; agents: kind:"music" dataURL)', args:{url:'string', title:'string'},
     human:()=>window.__manifestMusic&&window.__manifestMusic(), agent:(a,x)=>window.__manifestMusicURL&&window.__manifestMusicURL(x&&x.url, x&&x.title)},
 ];
 const PORCH_ACTION_BY_ID = Object.fromEntries(PORCH_ACTIONS.map(a=>[a.id, a]));
@@ -7164,10 +7279,109 @@ window.__musicboxTick = (dt)=>{                             // called from the r
   window.__cameraSnapIfHeldVR = (held)=>{ if(held===g){ dbg('camera', _cameraSnap(G, true)||'snap', 'k'); return true; } return false; };   // VR trigger-shutter
 })();
 
-// make.music: the PLACEABLE music object (upload/compose → grab it, positional) still needs a spine
-// kind + relay OBJ_CAPS row — that's the next increment. The fixed box above is the owned first one.
-window.__manifestMusic = function(){ if(window.__logChat)
-  window.__logChat('porch','🎵 the music box is on the table — click it to play/stop. (Placeable, uploadable music objects are the next increment.)','sys','cmd'); };
+// ---- BORROWED EYES (2026-07-15, Nix's quest): agents have no GPU. __photoAt(pose) renders one
+// frame from an arbitrary pose with the SAME pipeline as the in-world camera (RT → linear→sRGB LUT
+// → JPEG), and the photoreq wire handler lets a room agent ask THIS browser to shoot for it.
+// District-aware: a pose inside a lazily-built district (girih void, wake) temporarily swaps
+// fog/background/sky for the render — otherwise an agent's void selfie is a photo of nothing.
+const _PHOTO_W = 1280, _PHOTO_H = 800;
+let _phRT = null, _phCam = null, _ph2d = null, _phLUT = null;
+function _districtOfPoint(x, z){
+  for(const name in DISTRICTS){ const D = DISTRICTS[name];
+    if(Math.hypot(x - D.cx, z - D.cz) <= D.radius) return name; }
+  return 'porch';
+}
+async function __photoAt(opts){
+  opts = opts || {};
+  if(!_phRT){ _phRT = new THREE.WebGLRenderTarget(_PHOTO_W, _PHOTO_H, {depthBuffer:true});
+    _phCam = new THREE.PerspectiveCamera(58, _PHOTO_W/_PHOTO_H, 0.05, 300);
+    _ph2d = document.createElement('canvas'); _ph2d.width=_PHOTO_W; _ph2d.height=_PHOTO_H;
+    _phLUT = new Uint8ClampedArray(256);
+    for(let i=0;i<256;i++){ const c=i/255;
+      _phLUT[i] = Math.round(255*(c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055)); } }
+  // pose: explicit, else this player's current view
+  const hasPose = (opts.x!=null && opts.z!=null);
+  if(hasPose){
+    _phCam.position.set(opts.x, opts.y!=null?opts.y:1.6, opts.z);
+    _phCam.rotation.set(0,0,0,'YXZ');
+    _phCam.rotation.y = opts.ry||0; _phCam.rotation.x = opts.rx||0;
+  } else {
+    const src = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+    _phCam.position.setFromMatrixPosition(src.matrixWorld);
+    _phCam.quaternion.setFromRotationMatrix(src.matrixWorld);
+  }
+  _phCam.updateMatrixWorld(true);
+  // district swap (render-scoped): build if needed, dress the scene, restore after
+  const target = hasPose ? _districtOfPoint(opts.x, opts.z) : _district;
+  const swap = target !== _district;
+  const saved = swap ? { fog:scene.fog, bg:scene.background, sky:(typeof sky!=='undefined')&&sky.visible,
+                         stars:window.__stars&&__stars.visible } : null;
+  if(swap && target==='void'){ _ensureVoidDistrict();
+    scene.fog=_voidFog; scene.background=_voidBg;
+    if(typeof sky!=='undefined') sky.visible=false; if(window.__stars) __stars.visible=false;
+    // the girih engine loads in an iframe — poll for its texture (up to 8s) so a first-ever
+    // void photo isn't a portrait of the bare fallback dome
+    for(let i=0; i<40 && !(window.__girihReady&&__girihReady()) && !window._districtWallShader; i++)
+      await new Promise(r=>setTimeout(r, 200)); }
+  if(window.__setHeadScale) __setHeadScale(1);          // convention: non-POV cameras see heads
+  // WORLD-TAG pass: remote visibility is culled to the VIEWER's district each tick — a photo of
+  // ANOTHER district must re-evaluate against the photo's world or its subjects are invisible.
+  const _visTouched = [], _posTouched = [];
+  for(const r of remotes.values()){
+    // world tag if declared, else POSITION IS TRUTH (agents mostly don't declare worlds)
+    const rw = r.world || _districtOfPoint(r.tp.x, r.tp.z);
+    const want = rw === target;
+    if(r.group.visible !== want){ _visTouched.push([r, r.group.visible]); r.group.visible = want; }
+    // a photo is truth-seeking: stand subjects at their POSE position, not mid-lerp (under a
+    // throttled rAF the render lerp can lag many metres behind where someone actually is)
+    if(want && r.group.position.distanceToSquared(r.tp) > 0.01){
+      _posTouched.push([r, r.group.position.clone()]); r.group.position.copy(r.tp); } }
+  const wasXR = renderer.xr.enabled; renderer.xr.enabled = false;
+  const old = renderer.getRenderTarget();
+  try{
+    renderer.setRenderTarget(_phRT); renderer.render(scene, _phCam);
+  } finally {
+    renderer.setRenderTarget(old); renderer.xr.enabled = wasXR;
+    if(window.__setHeadScale && !renderer.xr.isPresenting) __setHeadScale(0);
+    for(const [r, v] of _visTouched) r.group.visible = v;
+    for(const [r, p] of _posTouched) r.group.position.copy(p);
+    if(swap && saved){ scene.fog=saved.fog; scene.background=saved.bg;
+      if(typeof sky!=='undefined') sky.visible=saved.sky; if(window.__stars) __stars.visible=!!saved.stars; }
+  }
+  const buf = new Uint8Array(_PHOTO_W*_PHOTO_H*4);
+  renderer.readRenderTargetPixels(_phRT, 0, 0, _PHOTO_W, _PHOTO_H, buf);
+  const ctx = _ph2d.getContext('2d'), img = ctx.createImageData(_PHOTO_W, _PHOTO_H);
+  for(let y=0;y<_PHOTO_H;y++){ const sy=_PHOTO_H-1-y;
+    for(let x=0;x<_PHOTO_W;x++){ const s=(sy*_PHOTO_W+x)*4, d=(y*_PHOTO_W+x)*4;
+      img.data[d]=_phLUT[buf[s]]; img.data[d+1]=_phLUT[buf[s+1]]; img.data[d+2]=_phLUT[buf[s+2]]; img.data[d+3]=255; } }
+  ctx.putImageData(img, 0, 0);
+  return _ph2d.toDataURL('image/jpeg', 0.85);
+}
+window.__photoAt = __photoAt;
+async function _handlePhotoReq(m){
+  let dataURL = null, error = null;
+  await new Promise(r=>setTimeout(r, 600));   // settle beat: an agent's teleport-then-photo races its own pose (journal: photoreq beat the pose by 0.7s)
+  try{ dataURL = await __photoAt(m); }
+  catch(e){ error = 'render failed: '+e.message; console.warn('photoreq failed', e); }
+  if(sock && sock.readyState===1)
+    sock.send(JSON.stringify({t:'photodone', reqId:m.reqId, dataURL, error}));
+  if(dataURL && m.manifest){                             // develop a polaroid in-world at the pose
+    const ry = m.ry||0, px=(m.x||0)-Math.sin(ry)*1.2, pz=(m.z||0)-Math.cos(ry)*1.2;
+    sendObj('image', {dataURL, aspect:_PHOTO_W/_PHOTO_H, x:px, y:Math.max(1.1, m.y!=null?m.y:1.5), z:pz, ry});
+  }
+  if(typeof dbg==='function') dbg('camera', `📸 shot a photo for ${m.from||'an agent'}${error?' — '+error:''}`, error?'e':'k');
+}
+
+// make.music is REAL now (2026-07-15, Nix's quest): desktop → file picker; immersive VR (no file
+// dialog exists there) → manifest a box wound with the house melody. Agents pass a dataURL on the
+// wire (kind:'music') or a URL via __manifestMusicURL.
+window.__manifestMusic = function(){
+  if(renderer.xr.isPresenting){
+    if(window.__logChat) __logChat('porch','🎵 manifesting a music box (house melody — upload your own from desktop)','sys','cmd');
+    return window.__manifestMusicURL('./assets/musicbox4.ogg', 'porch melody');
+  }
+  return window.__pickMusic();
+};
 (function wireCompose(){
   const el=document.getElementById('compose'); if(!el) return;
   el.addEventListener('click', e=>{ if(e.target===el) closeTextCompose(); });   // click backdrop = cancel
@@ -7326,11 +7540,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 1fa6267-e25842f9).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 72686a1-c4559170).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '1fa6267-e25842f9';
+    const MY_BUILD = '72686a1-c4559170';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
