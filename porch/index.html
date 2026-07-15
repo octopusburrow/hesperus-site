@@ -723,6 +723,7 @@ function applyAA(){
   // restart, crbug 40859047) and (b) our in-shader 4-tap SSAA, which no one can clamp.
   renderer.xr.setFramebufferScaleFactor(k);            // consumed at NEXT session start; capped at nativeFbScale
   window.__lastFBScale = k;
+  if(window.__applyStarTune) __applyStarTune();        // point sizes are in device px — retune after pixelRatio changes
   if(renderer.xr.isPresenting && typeof dbg==='function')
     dbg('vr','sharpness '+k+'× is mostly a DESKTOP knob — VR is browser-capped at __fbInfo().nativeFbScale (usually 1.0)','k');
 }
@@ -1025,6 +1026,11 @@ let _starMat = null;
       const mode = renderer.xr.isPresenting ? 'vr' : 'desktop';
       _starMat.uniforms.uStar.value  = _STAR_BASE[mode].size;
       _starMat.uniforms.uBoost.value = _STAR_BASE[mode].boost;
+      // THE 1-PIXEL-STARS BUG (Nix 2026-07-15): gl_PointSize is in DEVICE pixels, and the
+      // Antialiasing dropdown scales the drawing buffer up to 4× — but uPx was frozen at
+      // min(devicePixelRatio,2), so desktop supersampling SHRANK the stars by its own factor.
+      // Desktop: track the real pixel ratio. VR: eye-buffer pixels, keep the approved sizing.
+      _starMat.uniforms.uPx.value = renderer.xr.isPresenting ? Math.min(devicePixelRatio,2) : renderer.getPixelRatio();
     }
     window.__applyStarTune = _applyStarTune; window.__starBase = _STAR_BASE;
     renderer.xr.addEventListener('sessionstart', _applyStarTune);
@@ -1049,6 +1055,7 @@ let _starMat = null;
 // ---- STAR NAMES (2026-07-10, for the stargazers): faint troika labels on the bright named stars, aligned
 // to the starfield's rotation so they sit on the right stars. Toggle in ☰ (default off — clean sky).
 let _starLabels = null; const _slQ = new THREE.Quaternion(), _slV = new THREE.Vector3();
+const _starLabelData = [];                             // {n,tier,x,y,z} — desktop HUD label pass
 const _slM = new THREE.Matrix4(), _WORLD_UP = new THREE.Vector3(0,1,0);   // roll-locked star-label billboard
 function _buildStarLabels(){
   if(_starLabels) { _starLabels.visible = true; return; }
@@ -1130,7 +1137,9 @@ function _buildStarLabels(){
         let off=new THREE.Vector3(0,1,0).addScaledVector(dir,-dir.y);
         if(off.lengthSq()<0.05) off.set(1,0,0).addScaledVector(dir,-dir.x);
         off.normalize();
-        addLabel(s.n, tier, wx+off.x*(tier?8:11), wy+off.y*(tier?8:11), wz+off.z*(tier?8:11));
+        const lx=wx+off.x*(tier?8:11), ly=wy+off.y*(tier?8:11), lz=wz+off.z*(tier?8:11);
+        addLabel(s.n, tier, lx, ly, lz);
+        _starLabelData.push({n:s.n, tier, x:lx, y:ly, z:lz});   // for the desktop HUD pass
         _built++;
       } };
     _place(l0,0); _place(l1,1);
@@ -1164,12 +1173,40 @@ function _buildStarLabels(){
           if(gl_FragColor.a<0.01) discard; }`
     });
     const mesh=new THREE.Mesh(g, mat); mesh.renderOrder=3; mesh.frustumCulled=false;
-    _starLabels.add(mesh);
+    _starLabels.add(mesh); window._starLabelMesh=mesh;   // VR-only (desktop uses the HUD pass — no keystone, always horizontal)
     window.__starLabelCount=_built;
     if(typeof dbg==='function') dbg('stars', `labels: ${_built} above horizon — 1 draw call, SDF atlas ${tex.image.width}×${tex.image.height}`, 'k');
   }).catch(e=>console.warn('star labels failed', e));
 }
-function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
+// DESKTOP HUD LABELS (Nix 2026-07-15, "horizontal in the viewport, like another HUD"): on desktop
+// the labels are drawn on a 2D overlay canvas — always horizontal, zero keystone/perspective
+// distortion, native-pixel crisp. The SDF world-mesh serves VR only (no screen to draw on there).
+let _starHud=null, _shV=null;
+function _drawStarHud(){
+  if(!_starLabels || !_starLabels.visible || renderer.xr.isPresenting || !_starLabelData.length){
+    if(_starHud) _starHud.style.display='none'; return; }
+  if(!_starHud){ _starHud=document.createElement('canvas'); _starHud.id='starhud';
+    _starHud.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:3';
+    document.body.appendChild(_starHud); _shV=new THREE.Vector3(); }
+  _starHud.style.display='block';
+  const dpr=Math.min(devicePixelRatio||1, 2), W=innerWidth, H=innerHeight;
+  if(_starHud.width!==Math.round(W*dpr)||_starHud.height!==Math.round(H*dpr)){ _starHud.width=Math.round(W*dpr); _starHud.height=Math.round(H*dpr); }
+  const x=_starHud.getContext('2d'); x.setTransform(dpr,0,0,dpr,0,0); x.clearRect(0,0,W,H);
+  x.textAlign='center'; x.textBaseline='bottom';
+  x.shadowColor='rgba(0,0,0,0.8)'; x.shadowBlur=4;
+  const gp=_starLabels.position;
+  for(const s of _starLabelData){
+    _shV.set(s.x+gp.x, s.y, s.z+gp.z).project(camera);
+    if(_shV.z>1 || _shV.z<-1) continue;
+    const sx=(_shV.x*0.5+0.5)*W, sy=(-_shV.y*0.5+0.5)*H;
+    if(sx<-60||sx>W+60||sy<-20||sy>H+20) continue;
+    // brighter + bigger than the old sprites (Nix: "still pretty faint/small on desktop")
+    x.font=(s.tier?12:16)+'px Georgia, serif';
+    x.fillStyle=s.tier? 'rgba(150,178,216,0.82)' : 'rgba(168,195,232,0.95)';
+    x.fillText(s.n, sx, sy);
+  }
+}
+function setStarNames(on){ if(on) _buildStarLabels(); else { if(_starLabels) _starLabels.visible = false; if(_starHud) _starHud.style.display='none'; } }
 window.__setStarNames = setStarNames;
 { // module scripts run AFTER DOMContentLoaded has often already fired → the old
   // addEventListener('DOMContentLoaded') never ran and the toggle was dead (Nix 2026-07-11).
@@ -7232,11 +7269,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 0e2fb48-bd4d4f09).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 09adc63-3bc5d7a6).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '0e2fb48-bd4d4f09';
+    const MY_BUILD = '09adc63-3bc5d7a6';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -8043,7 +8080,10 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   { const cp = camera.getWorldPosition(_skyPegV);
     sky.position.set(cp.x, 0, cp.z);
     if(window.__stars) __stars.position.set(cp.x, 0, cp.z);
-    if(_starLabels) _starLabels.position.set(cp.x, 0, cp.z);   // billboarding now lives in the SDF label shader (roll-locked there); no per-frame CPU loop
+    if(_starLabels){ _starLabels.position.set(cp.x, 0, cp.z);   // billboarding lives in the SDF label shader (roll-locked)
+      if(window._starLabelMesh) _starLabelMesh.visible = renderer.xr.isPresenting;   // world-mesh = VR only
+      _drawStarHud();                                           // desktop = 2D HUD pass (horizontal, undistorted)
+    }
   }
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
