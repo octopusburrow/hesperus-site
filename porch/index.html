@@ -5326,6 +5326,13 @@ window.__fbInfo = ()=>{
     // at two different sharpness values and the curve shows exactly where the runtime clamps.
     try{ const bind=new XRWebGLBinding(s, renderer.getContext());
       if('nativeProjectionScaleFactor' in bind) info.nativeScale=+bind.nativeProjectionScaleFactor.toFixed(3); }catch(e){}
+    // THE CEILING (Chromium source, 2026-07-15): page requests clamp to max(nativeFbScale, 1.0).
+    // nativeFbScale==1.0 → Windows/OpenXR path: NOTHING page-side can exceed the runtime's
+    // recommended size; the only lever is SteamVR res % (per-app or supersampleScale) + browser
+    // RESTART (crbug 40859047: view config caches per browser run). >1.0 → ceiling is that value:
+    // ask for exactly it. This one number decides the whole supersampling strategy.
+    try{ if(window.XRWebGLLayer && XRWebGLLayer.getNativeFramebufferScaleFactor)
+      info.nativeFbScale=+XRWebGLLayer.getNativeFramebufferScaleFactor(s).toFixed(3); }catch(e){}
     try{ if(w!=='?'){ const hist=JSON.parse(localStorage.getItem('xrScaleHist')||'[]');
       const entry={asked:window.__lastFBScale||1, got:w+'×'+h};
       if(!hist.length || JSON.stringify(hist[hist.length-1])!==JSON.stringify(entry)) hist.push(entry);
@@ -6932,11 +6939,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 963805c-b9263a8e).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 80c2535-062c4fb4).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '963805c-b9263a8e';
+    const MY_BUILD = '80c2535-062c4fb4';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
