@@ -514,7 +514,7 @@ const _BOX_FACES = [ ['px','D','H'], ['nx','D','H'], ['py','W','D'], ['ny','W','
 // and it exists BEFORE any onBeforeCompile fires (the old per-material stash was lazy → __setGolus
 // no-op'd if called before first render; and a constant customProgramCacheKey shared one program
 // across materials so per-material uniforms didn't take). Shared uniform sidesteps both.
-const _golusWidthU = { value: (typeof window!=='undefined' && window.__golusWidth!=null) ? window.__golusWidth : 0.1 };
+const _golusWidthU = { value: (typeof window!=='undefined' && window.__golusWidth!=null) ? window.__golusWidth : 0.06 }; // 0.1→0.06 (Nix in-headset 2026-07-15: "dial it back a little more" — crisper, keep the calm)
 function _applyGolusAA(material, texW, texH){
   material.onBeforeCompile = (shader)=>{
     shader.uniforms.uPixRes = { value: new THREE.Vector2(texW, texH) };
@@ -966,7 +966,9 @@ let _starMat = null;
           // so brightness reads the same but the energy always spans multiple pixels and slides
           // smoothly. (Lab gotcha for posterity: 8-bit readback HID the old flicker inside
           // saturated pixels — only a float render target showed the truth. ?hardstars for A/B.)
-          float ps = max(target, 3.2 * uPx);
+          // 3.2→2.4 min footprint (Nix in-headset 2026-07-15: soft stars read washed out — allow
+          // ~25% smaller floor for "a little free twinkle rather than a full shimmer")
+          float ps = max(target, 2.4 * uPx);
           vE = (target/ps); vE *= vE;
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
@@ -975,18 +977,18 @@ let _starMat = null;
           // gaussian falloff (smooth derivative = calm under motion) + hot core, both flux-scaled.
           float halo = exp(-r2*14.0);
           float core = exp(-r2*44.0);
-          vec3 c = (vC + core * vB * (vec3(1.0) - vC) * 0.7) * (halo * vE * 1.39);
+          vec3 c = (vC + core * vB * (vec3(1.0) - vC) * 0.7) * (halo * vE * 2.78); // 1.39→2.78: 2× brightness across the whole magnitude range (Nix 2026-07-15)
           if(max(c.r,max(c.g,c.b)) < 0.004) discard;
           gl_FragColor = vec4(c, 1.0); }`
     });
     // ?hardstars: revert to the pre-2026-07-15 hard points for in-headset A/B
     if(new URLSearchParams(location.search).has('hardstars')){
       _starMat.vertexShader = _starMat.vertexShader
-        .replace('float ps = max(target, 3.2 * uPx);', 'float ps = max(1.3, target);')
+        .replace('float ps = max(target, 2.4 * uPx);', 'float ps = max(1.3, target);')
         .replace('vE = (target/ps); vE *= vE;', 'vE = 1.0;');
       _starMat.fragmentShader = _starMat.fragmentShader
         .replace('float halo = exp(-r2*14.0);', 'float halo = smoothstep(0.25, 0.0036, r2);')
-        .replace('* (halo * vE * 1.39);', '* 1.0; float a = max(halo, core*vB); c *= a;');
+        .replace(/\* \(halo \* vE \* 2\.78\);.*$/m, '* 1.0; float a = max(halo, core*vB); c *= a;');
       _starMat.needsUpdate = true;
     }
     const stars = new THREE.Points(g, _starMat); window.__stars = stars;
@@ -6939,11 +6941,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 80c2535-062c4fb4).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 36a79a3-9964e97e).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '80c2535-062c4fb4';
+    const MY_BUILD = '36a79a3-9964e97e';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
