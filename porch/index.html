@@ -501,14 +501,45 @@ const _oakPaint = (name, ctx, w, h) => {                 // shared house-style o
 };
 // three.js BoxGeometry face order + the 6 world-face dims for (W=x,H=y,D=z):
 const _BOX_FACES = [ ['px','D','H'], ['nx','D','H'], ['py','W','D'], ['ny','W','D'], ['pz','W','H'], ['nz','W','H'] ];
+
+// ---- GOLUS SHARP-BILINEAR pixel-art antialiasing (from the VR-crawl research, Nix 2026-07-15) ----
+// UNIVERSAL anti-crawl for pixel-art textures. The hardware sampler stays BILINEAR + mipmapped; this
+// shader rewrites the UV so the bilinear blend collapses to a ~1-screen-pixel band straddling each
+// texel seam. Texel interiors read pure/crisp (looks like Nearest up close); only seams get a
+// self-tuning 1px AA blend (fwidth-scaled) → no crawl at distance. Designed to become the house
+// standard for every pixel-art surface (books first, then table/bookcase/etc.) once verified.
+// Requires: material.map set to LinearFilter mag + mipmaps + anisotropy (handled by the caller).
+function _applyGolusAA(material, texW, texH){
+  material.onBeforeCompile = (shader)=>{
+    shader.uniforms.uPixRes = { value: new THREE.Vector2(texW, texH) };
+    shader.fragmentShader = 'uniform vec2 uPixRes;\n' +
+      'vec2 _golusUV(vec2 uv){ vec2 p=uv*uPixRes; vec2 fl=floor(p+0.5); vec2 fr=fract(p+0.5);\n' +
+      '  vec2 aa=fwidth(p)*0.5; fr=smoothstep(vec2(0.5)-aa, vec2(0.5)+aa, fr); return (fl+fr-0.5)/uPixRes; }\n' +
+      shader.fragmentShader;
+    // three r152+ uses vMapUv; try that first, fall back to vUv for older paths.
+    if(shader.fragmentShader.includes('texture2D( map, vMapUv )'))
+      shader.fragmentShader = shader.fragmentShader.replace('texture2D( map, vMapUv )', 'texture2D( map, _golusUV( vMapUv ) )');
+    else if(shader.fragmentShader.includes('texture2D( map, vUv )'))
+      shader.fragmentShader = shader.fragmentShader.replace('texture2D( map, vUv )', 'texture2D( map, _golusUV( vUv ) )');
+  };
+  material.customProgramCacheKey = ()=> 'golusPixelAA';
+  return material;
+}
+window.__applyGolusAA = _applyGolusAA;
 function _makePixelBox(W, H, D, drawFace, matOpts){
   for(const [n,v] of [['W',W],['H',H],['D',D]]){ const px=v*PPM;   // grid audit: off-grid dims can't be square
     if(Math.abs(px-Math.round(px))>0.01) console.warn(`pixelBox: ${n}=${v}m is off the 1/${PPM} grid (${px.toFixed(2)}px) → non-square pixels. Use _snap().`); }
   const dim = {W, H, D};
   const cells = _BOX_FACES.map(([name, aw, ah]) => ({ name,
     w: Math.max(1, Math.round(dim[aw]*PPM)), h: Math.max(1, Math.round(dim[ah]*PPM)) }));
-  const atlasW = Math.max(...cells.map(c=>c.w));         // vertical stack: width = widest face, height = sum
-  const atlasH = cells.reduce((a,c)=>a+c.h, 0);
+  const contentW = Math.max(...cells.map(c=>c.w));       // vertical stack: width = widest face, height = sum
+  const contentH = cells.reduce((a,c)=>a+c.h, 0);
+  // POWER-OF-TWO atlas (Nix 2026-07-15, from the VR-crawl research): a NPOT texture (the book atlas was
+  // 5×34!) generates a BROKEN/absent mipmap chain in WebGL → minification falls back to raw sampling →
+  // crawl, no matter what filter you ask for. Pad the canvas up to the next POT; the content stays in
+  // the top-left and UVs are computed against the PADDED dims so nothing shifts.
+  const _pot = n => { let p=1; while(p<n) p<<=1; return p; };
+  const atlasW = _pot(contentW), atlasH = _pot(contentH);
   const cv = document.createElement('canvas'); cv.width=atlasW; cv.height=atlasH;
   const ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false;
   let y = 0;
@@ -519,11 +550,17 @@ function _makePixelBox(W, H, D, drawFace, matOpts){
     ctx.restore(); y += c.h;
   }
   const tex = new THREE.CanvasTexture(cv);
-  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.LinearMipmapLinearFilter;   // Nearest MAG = crisp pixels up close; trilinear MIN = kills distance crawl
-  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();                              // max, not hardcoded 8 (matches surfaces that render clean)
-  tex.generateMipmaps = true; tex.colorSpace = THREE.SRGBColorSpace;                      // 🔴 THE BUG (Nix in-headset 2026-07-14): filter asked for mipmaps but this said false → WebGL fell back to raw nearest minification → "worse at distance, both eyes" crawl. Chain must EXIST for the mipmap filter to work.
+  // GOLUS sharp-bilinear (opt-in ?golusbooks=1): the pixel-art-correct anti-crawl. Needs BILINEAR
+  // (not Nearest) mag + mips; the shader (injected in _bookMesh) rewrites UVs so the bilinear blend is
+  // squeezed to a 1-screen-pixel band at texel seams → crisp interiors up close, band-limited (no
+  // crawl) at distance. When off, keep the classic Nearest-mag pixel look.
+  const golus = (typeof location!=='undefined') && new URLSearchParams(location.search).has('golusbooks') && (matOpts && matOpts._pixelAA);
+  tex.magFilter = golus ? THREE.LinearFilter : THREE.NearestFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.generateMipmaps = true; tex.colorSpace = THREE.SRGBColorSpace;
   const geo = new THREE.BoxGeometry(W, H, D);
-  const uv = geo.attributes.uv;                          // remap each face's 4 corners → its atlas cell
+  const uv = geo.attributes.uv;                          // remap each face's 4 corners → its atlas cell (against PADDED dims)
   for(let f=0; f<6; f++){ const c = cells[f];
     const u0 = c.x/atlasW, u1 = (c.x+c.w)/atlasW, v1 = 1-(c.y/atlasH), v0 = 1-((c.y+c.h)/atlasH);
     // BoxGeometry per-face corner uv order: (0,1)(1,1)(0,0)(1,0)
@@ -532,6 +569,7 @@ function _makePixelBox(W, H, D, drawFace, matOpts){
   }
   uv.needsUpdate = true;
   const mat = new THREE.MeshStandardMaterial(Object.assign({ map:tex, roughness:0.85, metalness:0.0 }, matOpts||{}));
+  if(golus) _applyGolusAA(mat, atlasW, atlasH);          // inject the sharp-bilinear UV shader
   const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = mesh.receiveShadow = true;
   return { mesh, geo, mat, tex, atlas:[atlasW,atlasH] };
 }
@@ -567,7 +605,7 @@ function _bookMesh(seed){
       ctx.fillStyle=P.page; ctx.fillRect(0,0,w,h);
     }
   };
-  const r = _makePixelBox(W, H, D, paint);
+  const r = _makePixelBox(W, H, D, paint, {_pixelAA:true});   // books opt into Golus sharp-bilinear (?golusbooks=1 to enable the A/B)
   r.mesh.userData.bookDims = [W,H,D];
   // BOOK A/B PROBE (?cubeshelf=1, Nix 2026-07-14): swap the textured atlas for a plain solid-color
   // material (no map at all) — the definitive "material/texture vs geometry" isolation from the
@@ -4031,11 +4069,14 @@ _wristCalR.fromArray([0.5812875774993174, 0.7123369384133019, 0.0858677936574096
 // reflect(q) for the x=0 plane = (q.x, -q.y, -q.z, q.w) with the rotation sense reversed → in practice
 // q_left = (-q.x, q.y, q.z, -q.w) is the proper opposite-handed twin. We expose both and let the flag
 // / live call pick, defaulting to the mirror so the left inherits the right's quality.
-function _mirrorWristQuat(qR, out){   // sagittal mirror: right-hand cal → left-hand cal
-  // Reflection across x=0 negates the x-translation of the axis and reverses chirality of the spin.
-  // For a unit quaternion (x,y,z,w) the opposite-handed mirror about the YZ plane is (x,-y,-z,w)
-  // with the angle negated → equivalently negate y,z and w. Result is renormalized for safety.
-  return (out||new THREE.Quaternion()).set(qR.x, -qR.y, -qR.z, -qR.w).normalize();
+// REFLECTION-aware left cal from right (rig-symmetry study, 2026-07-15): the left & right hand frames
+// are related by a REFLECTION (opposite chirality), not a rotation — so a naive quaternion mirror
+// applies the flip TWICE and DOUBLES the error (Nix: "mirroring makes it worse", ~80°). The correct
+// op is conjugation by the sagittal reflection: R_left = diag(-1,1,1) · R_right · diag(-1,1,1). In
+// quaternion terms that reflection-conjugation is (x, -y, -z, w) — reflect the axis's y,z and KEEP w
+// (a rotation, not a reflection, unlike the earlier (x,-y,-z,-w) which was itself a reflection).
+function _mirrorWristQuat(qR, out){
+  return (out||new THREE.Quaternion()).set(qR.x, -qR.y, -qR.z, qR.w).normalize();
 }
 window.__mirrorWristFromRight = ()=>{ _mirrorWristQuat(_wristCalR, _wristCalL);
   try{ localStorage.setItem('porch.wristcal', JSON.stringify({l:_wristCalL.toArray(), r:_wristCalR.toArray()})); }catch(e){}
@@ -6783,11 +6824,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 12f59f1-db083eee).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes f9cef53-e0ba9563).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '12f59f1-db083eee';
+    const MY_BUILD = 'f9cef53-e0ba9563';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
