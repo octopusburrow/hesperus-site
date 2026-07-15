@@ -350,18 +350,38 @@ function registerInteractable(mesh, opts={}){
   if(opts.onHoverStart) ud.onHoverStart = opts.onHoverStart;
   if(opts.onHoverEnd)   ud.onHoverEnd   = opts.onHoverEnd;
   ud.reach = opts.reach != null ? opts.reach : (ud.reach != null ? ud.reach : 3.5);
+  // interactive: the mid-flight ON/OFF switch (for the in-situ editor — toggle any frame). Explicit,
+  // not auto-detected: a closure's side effects can't be inspected, so "does onClick do anything?"
+  // is undecidable; "is this currently interactive?" is a flag the picker honors. Defaults to true
+  // when there's an onClick to fire, false otherwise. (Nix 2026-07-14: needed for world/object editing.)
+  if(opts.interactive != null) ud.interactive = opts.interactive;
+  else if(ud.interactive == null) ud.interactive = !!ud.onClick;
   if(INTERACTABLES.indexOf(mesh) < 0) INTERACTABLES.push(mesh);
   return mesh;
 }
 function unregisterInteractable(mesh){
   const i = INTERACTABLES.indexOf(mesh); if(i>=0) INTERACTABLES.splice(i,1);
 }
-// PURE picker (headless-testable): nearest interactable hit within its own reach. No side effects.
+// Flip interactivity mid-flight without touching registration — the editor's core verb. Stays in
+// the registry (so it can be re-enabled), just becomes un-pickable while off. Also clears any live
+// hover so a disabled object can't stay glowing.
+function setInteractive(mesh, on){
+  if(!mesh || !mesh.userData) return mesh;
+  mesh.userData.interactive = !!on;
+  if(!on && mesh.userData.onHoverEnd){ try{ mesh.userData.onHoverEnd(); }catch(e){} }
+  return mesh;
+}
+window.__setInteractive = setInteractive;
+window.__registerInteractable = registerInteractable;
+window.__unregisterInteractable = unregisterInteractable;
+// PURE picker (headless-testable): nearest ENABLED interactable hit within its own reach. Skips
+// mesh.userData.interactive===false, so editor toggles are honored without touching the registry.
 function pickInteractable(raycaster, list){
   const hits = raycaster.intersectObjects(list, true);
   for(const h of hits){
     let o = h.object; while(o && !(o.userData && o.userData.onClick)) o = o.parent;
-    if(o && o.userData.onClick && h.distance <= (o.userData.reach!=null?o.userData.reach:3.5)) return {mesh:o, distance:h.distance, point:h.point};
+    if(o && o.userData.onClick && o.userData.interactive !== false
+       && h.distance <= (o.userData.reach!=null?o.userData.reach:3.5)) return {mesh:o, distance:h.distance, point:h.point};
   }
   return null;
 }
