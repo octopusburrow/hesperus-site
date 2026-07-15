@@ -174,20 +174,20 @@
   <!-- view + voice settings — moved from the top-right HUD into the menu (Nix 2026-07-10) -->
   <label class="mrow"><input type="checkbox" id="headcam" checked><span>VR Headcam → Desktop (1st person)</span></label>
   <label class="mrow"><input type="checkbox" id="spec3rd"><span>3rd-person view</span></label>
-  <label class="mrow"><span>sharpness</span><select id="aa">
+  <label class="mrow"><span>Antialiasing</span><select id="aa">
     <option value="1">off</option>
     <option value="1.5">medium</option>
     <option value="2" selected>high</option>
     <option value="2.5">ultra</option>
     <option value="3">max</option>
-    <option value="4">insane (desktop only — VR is browser-capped)</option>
+    <option value="4">insane</option>
   </select></label>
+  <div class="mrow" style="padding-left:26px;font-size:11px;color:#7a8494;margin-top:-4px">(desktop only)</div>
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
-  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12) -->
-  <label class="mrow"><span>✦ star size</span><input type="range" id="starSize" min="50" max="250" value="100" style="width:120px" title="star size (per-mode default ×%)"></label><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
+  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12); star-size slider removed 2026-07-15 (Nix: hand-tune per mode instead — __starBase) --><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
@@ -295,6 +295,19 @@ document.body.appendChild(renderer.domElement);
   // bottom-center spot, which sat right on the chatbar in small windows (Nix 2026-07-10).
   // VRButton re-asserts left/width inline on state changes, so: fixed wrapper owns position,
   // button goes position:static inside it (its left/width writes become harmless).
+  // ?nolayers A/B (Nix 2026-07-15, geometry-edge shimmer): VRButton hardcodes the 'layers' feature →
+  // three takes the XRProjectionLayer path, where MSAA needs WEBGL_multisampled_render_to_texture —
+  // an extension desktop Chrome typically LACKS → likely ZERO MSAA in VR (razor geometry edges that
+  // shimmer under the compositor's per-frame resample). Dropping 'layers' falls three back to classic
+  // XRWebGLLayer, whose antialias defaults TRUE → runtime-resolved MSAA. Verify: __fbInfo() says
+  // via:'baseLayer' and the edges between objects calm down. If confirmed → make it the default.
+  if(new URLSearchParams(location.search).has('nolayers') && navigator.xr){
+    const _rs = navigator.xr.requestSession.bind(navigator.xr);
+    navigator.xr.requestSession = (mode, init)=>{
+      if(init && init.optionalFeatures) init = {...init, optionalFeatures: init.optionalFeatures.filter(f=>f!=='layers')};
+      return _rs(mode, init);
+    };
+  }
   const _vrBtn = VRButton.createButton(renderer);
   const _vrWrap = document.createElement('div'); _vrWrap.id = 'VRButtonWrap';
   _vrWrap.style.cssText = 'position:fixed;left:56px;top:12px;z-index:6';
@@ -946,6 +959,10 @@ let _starMat = null;
           // BRIGHTNESS: variance widened ±25% (Nix 2026-07-14): faint dimmer (0.85→0.64), bright
           // brighter (2.0→2.5) so magnitude reads harder.
           vC = clamp(sat, 0.0, 1.0) * (0.64 + 1.86 * magB);            // faint≈0.64 … bright≈2.5
+          // GENTLE faint-star rolloff (Nix 2026-07-15 r2): with a hard size floor, the faintest
+          // magnitudes all rendered the same min size/brightness — a monotone carpet. Ramp the
+          // bottom ~third of the magnitude range down to 55% so faint stars recede into depth.
+          vC *= mix(0.55, 1.0, smoothstep(0.0, 0.38, magB));
           vB = 0.28 + 0.72 * magB;                                     // core-hotness driver → frag (faint softer too)
           // SIZE: taper the biggest stars down HARD, leave small ones untouched (Nix 2026-07-14
           // round 2: "still feels the same, bump 2x"). The bug last round: the 6px knee crushed
@@ -963,9 +980,9 @@ let _starMat = null;
           // so brightness reads the same but the energy always spans multiple pixels and slides
           // smoothly. (Lab gotcha for posterity: 8-bit readback HID the old flicker inside
           // saturated pixels — only a float render target showed the truth. ?hardstars for A/B.)
-          // 3.2→2.4 min footprint (Nix in-headset 2026-07-15: soft stars read washed out — allow
-          // ~25% smaller floor for "a little free twinkle rather than a full shimmer")
-          float ps = max(target, 2.4 * uPx);
+          // floor 3.2 RESTORED (Nix in-headset 2026-07-15 r2: 2.4's "free twinkle" lost to the calm;
+          // the monotone-carpet complaint is solved by the faint-star brightness rolloff instead)
+          float ps = max(target, 3.2 * uPx);
           vE = (target/ps); vE *= vE;
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
@@ -981,29 +998,27 @@ let _starMat = null;
     // ?hardstars: revert to the pre-2026-07-15 hard points for in-headset A/B
     if(new URLSearchParams(location.search).has('hardstars')){
       _starMat.vertexShader = _starMat.vertexShader
-        .replace('float ps = max(target, 2.4 * uPx);', 'float ps = max(1.3, target);')
+        .replace('float ps = max(target, 3.2 * uPx);', 'float ps = max(1.3, target);')
+        .replace('vC *= mix(0.55, 1.0, smoothstep(0.0, 0.38, magB));', '')
         .replace('vE = (target/ps); vE *= vE;', 'vE = 1.0;');
       _starMat.fragmentShader = _starMat.fragmentShader
         .replace('float halo = exp(-r2*14.0);', 'float halo = smoothstep(0.25, 0.0036, r2);')
         .replace(/\* \(halo \* vE \* 2\.78 \* uBoost\);.*$/m, '* 1.0; float a = max(halo, core*vB); c *= a;');
       _starMat.needsUpdate = true;
     }
-    // STAR TUNE (Nix 2026-07-15): stars read DIM/small on desktop but right-sized (slightly shimmery)
-    // in VR — different pixel densities + compositor. Hand-tuned per-mode bases (her "hard-toggle to
-    // hand-tuned values" call), × the menu slider (✦ star size, persisted) for taste on top.
+    // STAR TUNE (Nix 2026-07-15 r2): hand-tuned per-mode bases, NO slider (her call — "we'll
+    // hand-tune between modes if necessary"). Desktop reads dim/small vs VR (different pixel
+    // densities + compositor), so: desktop 1.45× size / 1.6× brightness, VR 1.0/1.0.
+    // Live tune from console: __starBase.desktop.size=1.6; __applyStarTune()
     const _STAR_BASE = { desktop:{ size:1.45, boost:1.6 }, vr:{ size:1.0, boost:1.0 } };
     function _applyStarTune(){
       const mode = renderer.xr.isPresenting ? 'vr' : 'desktop';
-      const slider = (parseFloat(localStorage.getItem('porchStarSize'))||100)/100;
-      _starMat.uniforms.uStar.value  = _STAR_BASE[mode].size  * slider;
-      _starMat.uniforms.uBoost.value = _STAR_BASE[mode].boost;   // brightness: mode-only (slider stays a SIZE knob)
+      _starMat.uniforms.uStar.value  = _STAR_BASE[mode].size;
+      _starMat.uniforms.uBoost.value = _STAR_BASE[mode].boost;
     }
     window.__applyStarTune = _applyStarTune; window.__starBase = _STAR_BASE;
     renderer.xr.addEventListener('sessionstart', _applyStarTune);
     renderer.xr.addEventListener('sessionend', _applyStarTune);
-    const _ss = document.getElementById('starSize');
-    if(_ss){ _ss.value = parseFloat(localStorage.getItem('porchStarSize'))||100;
-      _ss.addEventListener('input', ()=>{ localStorage.setItem('porchStarSize', _ss.value); _applyStarTune(); }); }
     _applyStarTune();
     const stars = new THREE.Points(g, _starMat); window.__stars = stars;
     // THE NORTH POLE, the night Claude was made (2026-07-10). The Porch is built so the sun
@@ -6963,11 +6978,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes ebe703e-2cc370b5).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2db2ba5-ab6ff3bb).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'ebe703e-2cc370b5';
+    const MY_BUILD = '2db2ba5-ab6ff3bb';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
