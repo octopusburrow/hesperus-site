@@ -136,7 +136,7 @@
   <b>L-stick</b> walk · <b>R-stick</b> turn · <b>A/X</b> jump · <b>B/Y</b> mic<br>
   <b>L-stick press</b> keyboard · <b>R-stick press</b> emotes<br>
   <b>grip</b> grab/release · <b>trigger</b> press buttons / boop<br>
-  <b>“manifest …”</b> speak to make things (mic on)
+  <b>R-stick press</b> radial → ✨ to make things
 </div>
 <div id="mirrorToggle">
   <div id="roomTag" style="font-size:12px;opacity:.9"></div>
@@ -194,7 +194,8 @@
   <label class="mrow"><button id="lrTestBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">◐ L/R channel test (3s each)</button></label>
   <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
   <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
-  <div class="mf">VR text: say “<i>manifest …</i>” (mic on) or press the <i>left thumbstick</i> for a pointer keyboard. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div>
+  <div class="mf">VR text: press the <i>left thumbstick</i> for a pointer keyboard; ✨ via the radial menu. · object protocol v0.1 · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div><!-- "say manifest…" STT wire retired (unreliable — Nix 2026-07-15); radials are the way -->
+
 </div>
 <div id="compose"><div class="card">
   <h3>✍ Manifest text</h3>
@@ -1022,14 +1023,14 @@ let _starMat = null;
     // Live tune from console: __starBase.desktop.size=1.6; __applyStarTune()
     // Desktop RESET to 1.0/1.0 (Nix 2026-07-15 r6): baseline = the original magnitude curve,
     // untouched; tune UP from here by eye. Live: __starBase.desktop.size=1.2; __applyStarTune()
-    const _STAR_BASE = { desktop:{ size:1.6, boost:1.0 }, vr:{ size:1.0, boost:1.0 } };   // desktop 1.6 = Nix's dooted number (2026-07-15)
+    const _STAR_BASE = { desktop:{ size:1.6, boost:1.4 }, vr:{ size:1.0, boost:1.0 } };   // desktop 1.6/1.4 = Nix's knobbed numbers (2026-07-15)
     const _forceHard = new URLSearchParams(location.search).has('hardstars');
     function _applyStarTune(){
       const mode = renderer.xr.isPresenting ? 'vr' : 'desktop';
       _starMat.uniforms.uStar.value  = _STAR_BASE[mode].size;
       _starMat.uniforms.uBoost.value = _STAR_BASE[mode].boost;
       _starMat.uniforms.uSoft.value  = (mode==='vr' && !_forceHard) ? 1 : 0;   // soft anti-shimmer path = VR only
-      try{ sky.material.uniforms.uVenus.value = (mode==='vr') ? 1.0 : (window.__venusDesk||1.25); }catch(e){}   // evening star: +25% desktop only
+      try{ sky.material.uniforms.uVenus.value = (mode==='vr') ? 1.0 : (window.__venusDesk||1.3); }catch(e){}   // evening star: +30% desktop only (Nix's knobbed 1.3)
       // THE 1-PIXEL-STARS BUG (Nix 2026-07-15): gl_PointSize is in DEVICE pixels, and the
       // Antialiasing dropdown scales the drawing buffer up to 4× — but uPx was frozen at
       // min(devicePixelRatio,2), so desktop supersampling SHRANK the stars by its own factor.
@@ -1049,7 +1050,7 @@ let _starMat = null;
       if(!sec){ sec=document.createElement('div'); sec.id='knobSec';
         const h=document.createElement('div');
         h.style.cssText='margin:8px 0 2px;color:#8a94a4;font-size:11px;border-top:1px solid #2a3040;padding-top:6px';
-        h.textContent='🎛 knobs (live tuning — not saved; 📋 sends the number home)';
+        h.textContent='🎛 knobs (live tuning — not saved; 📋 copies the value to paste to Hesperus)';
         sec.appendChild(h); menu.appendChild(sec); }
       const id='knob_'+label.replace(/\W+/g,'_');
       const old=document.getElementById(id); if(old) old.remove();
@@ -1071,9 +1072,8 @@ let _starMat = null;
       row.append(lab, rng, val, btn); sec.appendChild(row);
       return 'knob wired: '+label; };
     // standing knobs for the current tuning arc (retired once numbers are baked):
-    window.__knob('star size (desktop)',  v=>{ _STAR_BASE.desktop.size=v;  _applyStarTune(); }, {min:0.5,max:3,step:0.05,init:_STAR_BASE.desktop.size});
-    window.__knob('star boost (desktop)', v=>{ _STAR_BASE.desktop.boost=v; _applyStarTune(); }, {min:0.5,max:3,step:0.05,init:_STAR_BASE.desktop.boost});
-    window.__knob('venus size (desktop)', v=>{ window.__venusDesk=v; _applyStarTune(); },       {min:0.6,max:2.5,step:0.05,init:1.25});
+    // (2026-07-15 evening: star size/boost/venus knobs RETIRED — Nix's numbers baked above.
+    //  Wire new ones per tuning arc: __knob('label', v=>{...apply...}, {min,max,step,init}) )
     renderer.xr.addEventListener('sessionstart', _applyStarTune);
     renderer.xr.addEventListener('sessionend', _applyStarTune);
     _applyStarTune();
@@ -5715,10 +5715,15 @@ window.__fbInfo = ()=>{
     return info; }catch(e){ return 'err '+e; }
 };
 
-// VR/desktop voice affordance: "manifest <words>" (or "inscribe/write <words>") spoken → a text
-// object, instead of being said. Returns true if it consumed the utterance. Native to VR (no keyboard).
+// RETIRED (Nix 2026-07-15): the "manifest <words>" VOICE wire — STT was unreliable and radial
+// menus + the pointer keyboard are the way now. It was still CONSUMING any utterance starting
+// with manifest/inscribe/write (she thought it was already out; it wasn't — sentences like
+// "write me later" were being turned into floating text objects instead of said). Function kept
+// as a stub so callers don't care; ?voicemanifest re-arms it if we ever want the parlor trick.
 const _MANIFEST_RE = /^\s*(?:manifest|inscribe|write)\b[:\s]+(.+)/i;
+const _VOICE_MANIFEST = (typeof location!=='undefined') && new URLSearchParams(location.search).has('voicemanifest');
 function tryManifestVoice(f){
+  if(!_VOICE_MANIFEST) return false;
   const m = _MANIFEST_RE.exec(f||'');
   if(m && m[1] && m[1].trim()){ addText(m[1].trim()); return true; }
   return false;
@@ -7321,11 +7326,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 5bc4fdd-dc462e14).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 1fa6267-e25842f9).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '5bc4fdd-dc462e14';
+    const MY_BUILD = '1fa6267-e25842f9';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
