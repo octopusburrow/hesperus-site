@@ -743,10 +743,21 @@ renderer.xr.addEventListener('sessionstart', ()=>{
   try{ renderer.xr.setFoveation(0); }catch(e){}          // 0 = no foveation → full resolution to the edges
   // report the ACTUAL eye-buffer size we got (setFramebufferScaleFactor was consumed at session setup;
   // calling it HERE would just warn+noop — it's immutable while presenting. Report, don't re-set).
-  try{ if(window.__fbInfo){ const i=window.__fbInfo();
-    if(typeof dbg==='function') dbg('vr','entered VR — eye buffer '+(i.eyeBuffer||'?')+' (scale asked '+(window.__lastFBScale||'?')+'×)','k'); } }catch(e){}
+  // AUTO-LOG (2026-07-15: Nix's live __fbInfo calls kept landing on a non-presenting page —
+  // mode:'desktop' despite being in VR; two-tab or overlay-view confusion). Record the numbers
+  // AT session start, ~1s in (layers need a beat to exist), to localStorage. No console-during-VR
+  // needed: enter VR, exit, then read __fbLog() from any desktop console afterwards.
+  setTimeout(()=>{ try{
+    if(!window.__fbInfo) return;
+    const i=window.__fbInfo();
+    if(typeof dbg==='function') dbg('vr','entered VR — eye buffer '+(i.eyeBuffer||'?')+' via '+(i.via||'?')+' (asked '+(window.__lastFBScale||'?')+'×, nativeFbScale '+(i.nativeFbScale!=null?i.nativeFbScale:'?')+')','k');
+    const log=JSON.parse(localStorage.getItem('xrFbLog')||'[]');
+    log.push({t:new Date().toISOString().slice(5,16), url:location.search||'(none)', ...i});
+    localStorage.setItem('xrFbLog', JSON.stringify(log.slice(-10)));
+  }catch(e){} }, 1200);
 });
 window.__setFoveation = (v)=>{ try{ renderer.xr.setFoveation(v); return 'foveation '+v; }catch(e){ return 'err '+e; } };
+window.__fbLog = ()=>{ try{ return JSON.parse(localStorage.getItem('xrFbLog')||'[]'); }catch(e){ return 'err '+e; } };
 
 // leaving VR with a tilted/pitched headset used to strand the desktop camera at that pose —
 // level it back out on exit (keep the rig yaw, zero the head roll/pitch).
@@ -978,12 +989,12 @@ let _starMat = null;
           // saturated pixels — only a float render target showed the truth. ?hardstars for A/B.)
           // floor 3.2 RESTORED (Nix in-headset 2026-07-15 r2: 2.4's "free twinkle" lost to the calm;
           // the monotone-carpet complaint is solved by the faint-star brightness rolloff instead)
-          float ps = max(target, 3.2 * uPx);
-          // Nix's law (2026-07-15 r3): the star that JUST hits the floor = brightness 1; fainter
-          // ramps down from there ONCE. The old (target/ps)² flux term went quadratic (faintest
-          // ≈0.27) and r2 stacked another 0.55 rolloff on top → ~0.15, way too dim. Linear keeps
-          // the magnitude gradient (faintest ≈0.52) without the double-dimming.
-          vE = (target/ps);
+          float ps = max(target, 3.5 * uPx);
+          // Nix's law r5 (2026-07-15): floor 3.2→3.5 (ramp starts sooner — more stars capped) and
+          // slightly superlinear ramp so the faintest land ≈40% (was 52%) — kills the monotone
+          // carpet while keeping the population. History: (target/ps)² quadratic ≈27% was too dim,
+          // linear 52% too flat. pow 1.15 splits it at her numbers.
+          vE = pow(target/ps, 1.15);
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
       fragmentShader:`varying vec3 vC; varying float vB; varying float vE; uniform float uBoost;
@@ -998,8 +1009,8 @@ let _starMat = null;
     // ?hardstars: revert to the pre-2026-07-15 hard points for in-headset A/B
     if(new URLSearchParams(location.search).has('hardstars')){
       _starMat.vertexShader = _starMat.vertexShader
-        .replace('float ps = max(target, 3.2 * uPx);', 'float ps = max(1.3, target);')
-        .replace('vE = (target/ps);', 'vE = 1.0;');
+        .replace('float ps = max(target, 3.5 * uPx);', 'float ps = max(1.3, target);')
+        .replace('vE = pow(target/ps, 1.15);', 'vE = 1.0;');
       _starMat.fragmentShader = _starMat.fragmentShader
         .replace('float halo = exp(-r2*14.0);', 'float halo = smoothstep(0.25, 0.0036, r2);')
         .replace(/\* \(halo \* vE \* 2\.78 \* uBoost\);.*$/m, '* 1.0; float a = max(halo, core*vB); c *= a;');
@@ -6977,11 +6988,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 5e954c9-27278743).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2aa511a-d08f3077).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '5e954c9-27278743';
+    const MY_BUILD = '2aa511a-d08f3077';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
