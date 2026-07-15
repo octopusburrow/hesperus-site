@@ -562,11 +562,14 @@ function _makePixelBox(W, H, D, drawFace, matOpts){
     ctx.restore(); y += c.h;
   }
   const tex = new THREE.CanvasTexture(cv);
-  // GOLUS sharp-bilinear (opt-in ?golusbooks=1): the pixel-art-correct anti-crawl. Needs BILINEAR
-  // (not Nearest) mag + mips; the shader (injected in _bookMesh) rewrites UVs so the bilinear blend is
-  // squeezed to a 1-screen-pixel band at texel seams → crisp interiors up close, band-limited (no
-  // crawl) at distance. When off, keep the classic Nearest-mag pixel look.
-  const golus = (typeof location!=='undefined') && new URLSearchParams(location.search).has('golusbooks') && (matOpts && matOpts._pixelAA);
+  // GOLUS sharp-bilinear — DEFAULT ON as of 2026-07-15 (?nogolus to disable for A/B). Why: Nix's 4×
+  // supersample test PROVED resolution isn't the crawl (eyeBuffer 5288×2644 confirmed via __fbInfo,
+  // books still crawled). The actual mechanism: spines in VR are deeply MAGNIFIED (~60 eye-buffer px
+  // per texel at 4×), and Nearest-mag texel edges are razor square waves that the Quest compositor
+  // re-samples with head-motion-dependent offsets EVERY FRAME → shimmer at any resolution. Golus gives
+  // bilinear-smooth edges exactly ~1px wide so the compositor has resampleable content. Needs BILINEAR
+  // (not Nearest) mag + mips; the shader (injected below) squeezes the blend to a band at texel seams.
+  const golus = (typeof location!=='undefined') && !new URLSearchParams(location.search).has('nogolus') && (matOpts && matOpts._pixelAA);
   tex.magFilter = golus ? THREE.LinearFilter : THREE.NearestFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -6877,11 +6880,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 22f3e70-5cb9080d).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes db9f6a0-65a2cd1b).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '22f3e70-5cb9080d';
+    const MY_BUILD = 'db9f6a0-65a2cd1b';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
