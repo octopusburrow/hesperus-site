@@ -3892,7 +3892,7 @@ window.__setBody = (name)=>{                          // the human dropdown + /b
 const ikHmd=new THREE.Object3D(), ikHandL=new THREE.Object3D(), ikHandR=new THREE.Object3D();
 scene.add(ikHmd, ikHandL, ikHandR);
 // Grip slots learn their handedness from their OWN 'connected' event (2026-07-09): slot index ≠
-// inputSources index on all runtimes (Steam Frame exposes extra sources) — fingers worked while
+// inputSources index on all runtimes (some expose extra sources) — fingers worked while
 // hands aimed at a fixed point because slot-i grips were matched to source-i handedness.
 const _grips=[];
 try{ for(let i=0;i<4;i++){ const g=renderer.xr.getControllerGrip(i);
@@ -6880,11 +6880,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes db9f6a0-65a2cd1b).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 1c6927b-b7ec0def).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'db9f6a0-65a2cd1b';
+    const MY_BUILD = '1c6927b-b7ec0def';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
