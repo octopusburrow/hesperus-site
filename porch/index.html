@@ -179,7 +179,8 @@
     <option value="1.5">medium</option>
     <option value="2" selected>high</option>
     <option value="2.5">ultra</option>
-    <option value="3">max (GPU&nbsp;poison)</option>
+    <option value="3">max</option>
+    <option value="4">insane (VR crawl-killer)</option>
   </select></label>
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
@@ -668,8 +669,8 @@ let avatar;   // the player's capsule+nameplate group — hidden from the driver
 const DPR = devicePixelRatio;
 function applyAA(){
   const k = parseFloat(aaBox.value) || 1;
-  renderer.setPixelRatio(Math.min(DPR * k, 6));        // desktop: supersample, clamped so we don't melt (raised 4→6 for the max tier — VR crawl fix 2026-07-14)
-  renderer.xr.setFramebufferScaleFactor(k);            // VR: framebuffer scale (applies on next session)
+  renderer.setPixelRatio(Math.min(DPR * k, 8));        // desktop: supersample, clamped so we don't melt
+  renderer.xr.setFramebufferScaleFactor(k);            // VR: framebuffer scale (re-applied at sessionstart — see below)
 }
 aaBox.addEventListener('change', applyAA);
 applyAA();
@@ -683,8 +684,17 @@ applyAA();
 // the texture-level mipmap fix. So: foveation off here, and books/stars fixed at the texture level.
 renderer.xr.addEventListener('sessionstart', ()=>{
   try{ renderer.xr.setFoveation(0); }catch(e){}          // 0 = no foveation → full resolution to the edges
+  // RE-APPLY the framebuffer scale at session start (Nix 2026-07-15: cranking sharpness did nothing in
+  // VR). setFramebufferScaleFactor only takes on the NEXT session, so setting it once at page load was
+  // stale by the time she entered VR — re-assert it here from the current dropdown value. This is the
+  // real supersample lever (Minecraft-style: more render resolution, not texture tricks).
+  try{ const k=parseFloat(aaBox.value)||1; renderer.xr.setFramebufferScaleFactor(k);
+    if(typeof dbg==='function') dbg('vr','framebuffer scale '+k+'× applied','k'); }catch(e){}
 });
 window.__setFoveation = (v)=>{ try{ renderer.xr.setFoveation(v); return 'foveation '+v; }catch(e){ return 'err '+e; } };
+// VR supersample: set the framebuffer scale live-ish (takes on re-enter VR; also applied at sessionstart).
+window.__setVRScale = (k)=>{ try{ renderer.xr.setFramebufferScaleFactor(k);
+  if(aaBox){ aaBox.value=String(k); } return 'VR framebuffer scale '+k+'× (re-enter VR to apply if already in)'; }catch(e){ return 'err '+e; } };
 
 // leaving VR with a tilted/pitched headset used to strand the desktop camera at that pose —
 // level it back out on exit (keep the rig yaw, zero the head roll/pitch).
@@ -6835,11 +6845,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 25d37f8-c6a3c4a2).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 9c0bc84-fde0f5ac).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '25d37f8-c6a3c4a2';
+    const MY_BUILD = '9c0bc84-fde0f5ac';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
