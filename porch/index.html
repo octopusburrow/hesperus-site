@@ -5304,6 +5304,15 @@ window.__fbInfo = ()=>{
     else if(rs.baseLayer){ w=rs.baseLayer.framebufferWidth; h=rs.baseLayer.framebufferHeight; path='baseLayer'; }
     const info={ scaleAsked: window.__lastFBScale||'(unset)', eyeBuffer: w+'×'+h, via:path,
       drawBuffer: _dbSize.x+'×'+_dbSize.y };
+    // clamp diagnostics: nativeProjectionScaleFactor = scale that would yield panel-native res
+    // (granted ÷ native tells the clamp story). Plus a cross-session asked→got history: enter VR
+    // at two different sharpness values and the curve shows exactly where the runtime clamps.
+    try{ const bind=new XRWebGLBinding(s, renderer.getContext());
+      if('nativeProjectionScaleFactor' in bind) info.nativeScale=+bind.nativeProjectionScaleFactor.toFixed(3); }catch(e){}
+    try{ if(w!=='?'){ const hist=JSON.parse(localStorage.getItem('xrScaleHist')||'[]');
+      const entry={asked:window.__lastFBScale||1, got:w+'×'+h};
+      if(!hist.length || JSON.stringify(hist[hist.length-1])!==JSON.stringify(entry)) hist.push(entry);
+      localStorage.setItem('xrScaleHist', JSON.stringify(hist.slice(-8))); info.history=hist.slice(-4); } }catch(e){}
     if(typeof dbg==='function') dbg('vr', JSON.stringify(info), 'g');
     return info; }catch(e){ return 'err '+e; }
 };
@@ -6906,11 +6915,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes b6c1cd9-8a4e5a17).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 6d71edd-99e5be3f).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'b6c1cd9-8a4e5a17';
+    const MY_BUILD = '6d71edd-99e5be3f';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
