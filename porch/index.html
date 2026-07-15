@@ -523,13 +523,21 @@ function _applyGolusAA(material, texW, texH){
       'vec2 _golusUV(vec2 uv){ vec2 p=uv*uPixRes; vec2 fl=floor(p+0.5); vec2 fr=fract(p+0.5);\n' +
       '  vec2 aa=vec2(uGolusW); fr=smoothstep(vec2(0.5)-aa, vec2(0.5)+aa, fr); return (fl+fr-0.5)/uPixRes; }\n' +
       shader.fragmentShader;
-    // NOTE: dropped the min(fwidth,...) clamp — it was making uGolusW a no-op (fwidth on a tiny 2px
-    // spine was always the smaller term, so the slider never mattered = Nix's "0 and 0.5 look the
-    // same"). Now uGolusW is the DIRECT half-band width in texels: 0 = razor Nearest, 0.5 = max soft.
-    if(shader.fragmentShader.includes('texture2D( map, vMapUv )'))
-      shader.fragmentShader = shader.fragmentShader.replace('texture2D( map, vMapUv )', 'texture2D( map, _golusUV( vMapUv ) )');
-    else if(shader.fragmentShader.includes('texture2D( map, vUv )'))
-      shader.fragmentShader = shader.fragmentShader.replace('texture2D( map, vUv )', 'texture2D( map, _golusUV( vUv ) )');
+    // 🔴 THE ACTUAL BUG ALL ALONG (found 2026-07-15, headless): onBeforeCompile hands you the shader
+    // TEMPLATE — '#include <map_fragment>' is UNEXPANDED (three resolves includes AFTER this hook).
+    // The old code searched for 'texture2D( map, vMapUv )', found nothing, silently skipped, and
+    // _golusUV was injected but NEVER CALLED — Golus was dead code since birth; every __setGolus
+    // value was identical because the sampler never went through it (Nix's "0 and 0.5 look the
+    // same" was exact). Fix: replace the include DIRECTIVE, expanding the chunk ourselves with the
+    // UV wrapped. Count replacements and warn loudly if 0 so this can never silently die again.
+    let _golusHits = 0;
+    if(shader.fragmentShader.includes('#include <map_fragment>')){
+      const chunk = THREE.ShaderChunk.map_fragment.replace(/vMapUv/g, '_golusUV( vMapUv )');
+      shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', chunk);
+      _golusHits = 1;
+    }
+    window.__golusAttached = (window.__golusAttached||0) + _golusHits;
+    if(!_golusHits && typeof dbg==='function') dbg('golus','ATTACH FAILED — no <map_fragment> include; sampler NOT wrapped','e');
   };
   material.customProgramCacheKey = ()=> 'golusPixelAA';
   return material;
@@ -6880,11 +6888,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 1c6927b-b7ec0def).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes c08c655-249531a8).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '1c6927b-b7ec0def';
+    const MY_BUILD = 'c08c655-249531a8';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
