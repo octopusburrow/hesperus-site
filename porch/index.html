@@ -554,15 +554,15 @@ function _bookMesh(seed){
   const paint = (name, ctx, w, h) => {
     if(name==='pz' || name==='nz'){                       // SPINE (visible on shelf)
       ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);         // solid cover body
-      // one bold 2px label band; height varies per variant so neighbours differ
+      // ONE bold label band, no 1px hairlines. (Nix 2026-07-15: crawl came back — at 2×6px a hard
+      // 1px black hairline is pure high-frequency that mipmaps can't tame; it flickers. A single 2px
+      // band of a related color mipmaps down cleanly to an average and stays calm. Distinct spines
+      // via band POSITION + color, not fine detail.)
       if(h>=6){ const by = [1, 2, h-3, Math.floor(h/2)-1][variant];
         ctx.fillStyle=P.band; ctx.fillRect(0, by, w, 2);
-        // a single dark hairline under the band for a touch of depth (survives as 1px at this size)
-        ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(0, by+2, w, 1);
-      } else { ctx.fillStyle=P.band; ctx.fillRect(0, Math.max(0,h-2), w, 1); }  // tiny books: just a foot stripe
+      } else { ctx.fillStyle=P.band; ctx.fillRect(0, Math.max(0,h-2), w, 1); }
     } else if(name==='px' || name==='nx'){                // COVER (between neighbours)
-      ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);
-      ctx.fillStyle='rgba(0,0,0,0.20)'; ctx.fillRect(w-1,0,1,h);
+      ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);         // solid — the dark edge hairline was another crawl source, dropped
     } else {                                              // top/bottom = page block
       ctx.fillStyle=P.page; ctx.fillRect(0,0,w,h);
     }
@@ -624,6 +624,18 @@ function applyAA(){
 }
 aaBox.addEventListener('change', applyAA);
 applyAA();
+// VR-SPECIFIC anti-shimmer (Nix 2026-07-15: "is there a VR-specific antialias?"). Two levers beyond
+// the ctor's antialias:true (which only covers the DESKTOP framebuffer — the XR eye buffers are a
+// separate XRWebGLLayer). (1) FOVEATION OFF: Quest defaults to foveated rendering which drops
+// peripheral resolution and worsens the crawl; force full-res. (2) three's WebXRManager already
+// requests a MULTISAMPLED XR framebuffer when antialias:true + WEBGL_multisampled_render_to_texture
+// is present (it is on Quest) — but MSAA only smooths EDGES, not interior texture minification (book
+// crawl) or sub-pixel points (star sparkle). Those need supersampling (the sharpness dropdown) +
+// the texture-level mipmap fix. So: foveation off here, and books/stars fixed at the texture level.
+renderer.xr.addEventListener('sessionstart', ()=>{
+  try{ renderer.xr.setFoveation(0); }catch(e){}          // 0 = no foveation → full resolution to the edges
+});
+window.__setFoveation = (v)=>{ try{ renderer.xr.setFoveation(v); return 'foveation '+v; }catch(e){ return 'err '+e; } };
 
 // leaving VR with a tilted/pitched headset used to strand the desktop camera at that pose —
 // level it back out on exit (keep the rig yaw, zero the head roll/pitch).
@@ -876,6 +888,7 @@ let _starMat = null;
 // ---- STAR NAMES (2026-07-10, for the stargazers): faint troika labels on the bright named stars, aligned
 // to the starfield's rotation so they sit on the right stars. Toggle in ☰ (default off — clean sky).
 let _starLabels = null; const _slQ = new THREE.Quaternion(), _slV = new THREE.Vector3();
+const _slM = new THREE.Matrix4(), _WORLD_UP = new THREE.Vector3(0,1,0);   // roll-locked star-label billboard
 function _buildStarLabels(){
   if(_starLabels) { _starLabels.visible = true; return; }
   _starLabels = new THREE.Group(); scene.add(_starLabels);   // unrotated: positions are PRE-rotated
@@ -895,11 +908,14 @@ function _buildStarLabels(){
     x.fillStyle = tier ? 'rgba(138,164,200,0.72)' : 'rgba(148,175,214,0.80)';   // cool sky blue (dim tier brightened, Nix rev.5)
     x.textBaseline='middle'; x.shadowColor='rgba(0,0,0,0.75)'; x.shadowBlur=5;
     x.fillText(name, pad, c.height/2);
-    const tx=new THREE.CanvasTexture(c); tx.colorSpace=THREE.SRGBColorSpace;
-    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tx, transparent:true, depthTest:false, fog:false,
-      opacity: tier?0.9:1}));
-    const SC = tier ? 0.12*2 : 0.24;                       // dim tier 2x (Nix rev.5: "too tough to read") ≈ half the bright tier
-    sp.scale.set(c.width*SC, c.height*SC, 1); sp.renderOrder=3; return sp; };
+    const tx=new THREE.CanvasTexture(c); tx.colorSpace=THREE.SRGBColorSpace; tx.anisotropy=4;
+    // ROLL-LOCKED BILLBOARD (Nix 2026-07-15): was a Sprite, which auto-billboards but gives NO roll
+    // control → in VR the labels tilt relative to the horizon as the head rolls. A Plane + a world-up
+    // lookAt each frame keeps them level with the HORIZON (see reference_billboard_roll_lock.md).
+    const SC = tier ? 0.12*2 : 0.24;
+    const sp=new THREE.Mesh(new THREE.PlaneGeometry(c.width*SC, c.height*SC),
+      new THREE.MeshBasicMaterial({map:tx, transparent:true, depthTest:false, fog:false, opacity: tier?0.9:1}));
+    sp.userData.billboard=true; sp.renderOrder=3; return sp; };
   const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
   let _built = 0;
   const _place = (list, tier)=>{
@@ -1393,12 +1409,17 @@ function tryGripGrab(hand, pressed){                  // VR grip edge → grab n
       if(!g && _gloveShelf[idx] && typeof _materializeShelfBook==='function'){
         g = _materializeShelfBook(_gloveShelf[idx]); _gloveShelf[idx]=null; }
       if(g){ g._fly = true; if(typeof dbg==='function') dbg('grab', `glove-pull ${g.pid}`, 'k'); } }
-    if(g){ g.offset = g._fly ? null : g.mesh.position.clone().sub(gp);   // laser grabs land IN the hand
+    if(g){
+      // Capture the in-hand pose relative to the IK HAND (not the grip), so the follow logic in
+      // _propHoldUpdate keeps the object locked to the palm as the wrist turns (Nix 2026-07-15).
+      const ikH = hand==='left' ? ikHandL : ikHandR;
+      const hp = ikH.getWorldPosition(new THREE.Vector3());
+      const hq = ikH.getWorldQuaternion(new THREE.Quaternion());
+      // offset stored in HAND-LOCAL space (inverse-rotate the world delta) so it re-rotates with the palm
+      g.offset = g._fly ? null : g.mesh.position.clone().sub(hp).applyQuaternion(hq.clone().invert());
       _heldHand[hand]=grabProp(g);
-      // rotation ride-along (Nix 2026-07-10: "books aren't rotating with the IK hands"):
-      // capture grip⁻¹×mesh at grab, re-compose each frame — the book keeps its in-hand attitude
-      const gq=new THREE.Quaternion().setFromRotationMatrix(grip.matrixWorld);
-      g.rotOffset=gq.clone().invert().multiply(g.mesh.quaternion); } }catch(e){} }   // pose-offset attach
+      // rotation ride-along: capture ikHand⁻¹×mesh at grab, re-compose each frame → keeps attitude in-hand
+      g.rotOffset=hq.clone().invert().multiply(g.mesh.quaternion); } }catch(e){} }
   else if(!pressed && _gripDown[hand]){ if(_heldHand[hand]) dropProp(_heldHand[hand]); _heldHand[hand]=null; }
   _gripDown[hand]=pressed; }
 function _reachPoint(){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
@@ -1473,10 +1494,16 @@ function _propHoldUpdate(dt){                          // glue carried props to 
     heldProp.mesh.quaternion.setFromAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y - heldProp._hy0).multiply(heldProp._hq0);
     _trackVel(heldProp,p,dt); heldProp.mesh.position.copy(p); sendProp(heldProp); }
   for(const hand of ['left','right']){ const g=_heldHand[hand]; if(!g) continue;
-    try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
-      const p=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); if(g.offset) p.add(g.offset);
-      if(g.rotOffset){ const gq=new THREE.Quaternion().setFromRotationMatrix(grip.matrixWorld);
-        g.mesh.quaternion.copy(gq).multiply(g.rotOffset); }               // rotate with the hand
+    try{
+      // FOLLOW THE IK HAND, not the raw grip (Nix 2026-07-15: grabbed objects float THROUGH the palm
+      // as the wrist turns). The held prop used to solve to grip.matrixWorld while the visible IK hand
+      // solves to ikHand[hand] = grip + wristCal + handTune — those diverge rotationally, so the object
+      // and the hand drifted apart. Solving the prop to the SAME ikHand transform locks it in the palm.
+      const ikH = hand==='left' ? ikHandL : ikHandR;
+      const hp = ikH.getWorldPosition(new THREE.Vector3());
+      const hq = ikH.getWorldQuaternion(new THREE.Quaternion());
+      const p = hp.clone(); if(g.offset) p.add(g.offset.clone().applyQuaternion(hq));   // offset now hand-relative, so it rotates with the palm
+      if(g.rotOffset){ g.mesh.quaternion.copy(hq).multiply(g.rotOffset); }               // rotate with the IK hand
       _trackVel(g,p,dt);
       if(g._fly){                                     // #17: glide the laser-grabbed prop into the hand
         g.mesh.position.lerp(p, Math.min(1, dt*8));
@@ -5426,21 +5453,51 @@ function _radialButton(emoji){
     new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
   m.renderOrder=999; return m;
 }
-function _radialRing(defs){                                 // defs: [{emoji, angle?, action}]
+// focus label (Nix 2026-07-15: "add words to the hover menus when an option is focused"). A small
+// canvas-text plane under the ring showing the focused option's NAME. Built once, reused.
+let _radialLabel = null;
+function _radialLabelMesh(){
+  if(_radialLabel) return _radialLabel;
+  const cv=document.createElement('canvas'); cv.width=256; cv.height=64;
+  const tx=new THREE.CanvasTexture(cv); tx.anisotropy=4;
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.11,0.0275),
+    new THREE.MeshBasicMaterial({map:tx, transparent:true, depthTest:false}));
+  m.renderOrder=1000; m.userData._cv=cv; m.userData._tx=tx; m.visible=false;
+  _radialLabel=m; return m;
+}
+function _setRadialLabel(text){
+  const m=_radialLabelMesh(); const cv=m.userData._cv, g=cv.getContext('2d');
+  g.clearRect(0,0,256,64);
+  if(text){ g.font='600 30px Georgia,serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.fillStyle='rgba(10,12,16,0.85)'; g.fillRect(0,0,256,64);   // dark plate for legibility
+    g.fillStyle='#e8dcc0'; g.fillText(text, 128, 34); m.visible=true; }
+  else m.visible=false;
+  m.userData._tx.needsUpdate=true;
+}
+function _radialRing(defs){                                 // defs: [{emoji, angle?, name, action}]
   EMOTE_PANEL.buttons.forEach(b=>{ EMOTE_PANEL.group.remove(b);
     const xi=_clickables.indexOf(b); if(xi>=0) _clickables.splice(xi,1);
     if(typeof xrUI!=='undefined') xrUI.targets=xrUI.targets.filter(t=>t!==b); });
   EMOTE_PANEL.buttons=[]; EMOTE_PANEL.sel=-1;
-  const R=0.075, N=defs.length;   // smaller again (Nix in-headset 2026-07-14: "smaller and closer yet again")
+  const R=0.075, N=defs.length;
   defs.forEach((d,i)=>{ const a = (d.angle!==undefined) ? d.angle : -Math.PI/2 + i*(2*Math.PI/N);
     const m=_radialButton(d.emoji); m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0);
-    m.userData._ring=a; m.userData.action=d.action;
+    m.userData._ring=a; m.userData.action=d.action; m.userData.name=d.name||'';
     EMOTE_PANEL.group.add(m); EMOTE_PANEL.buttons.push(m);
     _clickables.push(m); if(typeof xrUI!=='undefined' && renderer.xr.isPresenting) xrUI.targets.push(m); });
+  // label sits just below the ring center
+  const lbl=_radialLabelMesh(); if(lbl.parent!==EMOTE_PANEL.group) EMOTE_PANEL.group.add(lbl);
+  lbl.position.set(0, -R-0.03, 0); _setRadialLabel(null);
 }
-function _radialTop(){ _radialRing(RADIAL_CATS.map(c=>({emoji:c.emoji, angle:c.angle,
+// per-option names for the focus label (emoji alone isn't always obvious)
+const _RADIAL_NAMES = { manifest:'Manifest', emotes:'Emotes', avatars:'Avatars', controls:'Controls' };
+function _radialTop(){ _radialRing(RADIAL_CATS.map(c=>({emoji:c.emoji, angle:c.angle, name:_RADIAL_NAMES[c.key]||c.key,
   action:()=>{ _radialSub(c); return c.key; }}))); EMOTE_PANEL.level=0; }
-function _radialSub(cat){ _radialRing(cat.items.map(([emoji,fn])=>({emoji,
+// sub-item display names by emoji (so the focus label reads a word, not just the icon)
+const _RADIAL_ITEM_NAMES = { '✍':'Write','⬛':'Cube','🎵':'Music','👋':'Wave','🎉':'Cheer','💃':'Dance',
+  '🙌':'Raise','🧘':'Sit','🦵':'Crouch','🧑‍🚀':'Suit','🌼':'Toon','🐯':'Tigerbee','🦉':'Owl','☆':'Star names',
+  '🗑':'Delete','🎯':'Calibrate','📸':'Photo' };
+function _radialSub(cat){ _radialRing(cat.items.map(([emoji,fn])=>({emoji, name:_RADIAL_ITEM_NAMES[emoji]||'',
   action:()=>{ const r=fn(); window.__toggleEmotePanel(false); return r; }})));
   EMOTE_PANEL.level=1; }
 function buildEmotePanel(){
@@ -5461,7 +5518,7 @@ function _radialTick(){
       let gi = 1; const srcs = renderer.xr.getSession() ? [...renderer.xr.getSession().inputSources] : [];
       const ri = srcs.findIndex(s=>s.handedness==='right'); if(ri >= 0) gi = ri;
       const grip=renderer.xr.getControllerGrip(gi);
-      if(g.parent!==grip){ grip.add(g); g.position.set(0,0.14,-0.05); }   // restored the original offset shape (Nix: menu vanished when I moved it every-frame); slightly smaller/closer than the old 0.16/-0.06
+      if(g.parent!==grip){ grip.add(g); g.position.set(0,0.07,-0.025); }   // 2× CLOSER to the hand (Nix 2026-07-15: still too far) — was 0.14/-0.05
       // TOP-UP billboard (Nix 2026-07-14: "billboarding strangely — top always up relative to the
       // headset"). Original known-good orientation: lookAt(eye=camera, target=group, world-up), used
       // as the group's own rotation, then de-parented from the grip's rotation. The ONLY change vs the
@@ -5491,10 +5548,12 @@ window.__radialStick = (x, y)=>{
     if(best !== EMOTE_PANEL.sel){
       EMOTE_PANEL.buttons.forEach((m,i)=>m.scale.setScalar(i===best ? 1.45 : 1));
       EMOTE_PANEL.sel = best;
+      if(typeof _setRadialLabel==='function') _setRadialLabel(best>=0 ? (EMOTE_PANEL.buttons[best].userData.name||'') : null);  // show focused option's word
     }
   } else if(mag < 0.35 && EMOTE_PANEL.sel >= 0){         // release = commit
     const m = EMOTE_PANEL.buttons[EMOTE_PANEL.sel];
     EMOTE_PANEL.buttons.forEach(b=>b.scale.setScalar(1)); EMOTE_PANEL.sel = -1;
+    if(typeof _setRadialLabel==='function') _setRadialLabel(null);
     try{ const r = m.userData.action(); if(typeof dbg==='function') dbg('radial', String(r), 'k'); }
     catch(e){ if(typeof dbg==='function') dbg('radial','action failed: '+e.message,'e'); }
   }
@@ -6686,11 +6745,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes f8a1965-d031444e).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 13574cc-d03ad8e7).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'f8a1965-d031444e';
+    const MY_BUILD = '13574cc-d03ad8e7';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -7497,7 +7556,16 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   { const cp = camera.getWorldPosition(_skyPegV);
     sky.position.set(cp.x, 0, cp.z);
     if(window.__stars) __stars.position.set(cp.x, 0, cp.z);
-    if(_starLabels) _starLabels.position.set(cp.x, 0, cp.z);
+    if(_starLabels){ _starLabels.position.set(cp.x, 0, cp.z);
+      // ROLL-LOCKED billboard (Nix 2026-07-15): labels are Planes now (not Sprites) so we face them
+      // at the camera with WORLD-UP each frame → they stay level with the HORIZON instead of tilting
+      // with the viewer's head roll. Cheap: one lookAt per visible label, only while names are shown.
+      if(_starLabels.visible){ const camWP=camera.getWorldPosition(new THREE.Vector3());
+        for(const lbl of _starLabels.children){ if(!lbl.userData.billboard) continue;
+          const lp=lbl.getWorldPosition(_slV);
+          _slM.lookAt(lp, camWP, _WORLD_UP);                // eye=label, target=camera, up=world-up (horizon-level)
+          lbl.quaternion.setFromRotationMatrix(_slM); } }
+    }
   }
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
