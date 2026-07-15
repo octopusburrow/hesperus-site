@@ -670,13 +670,26 @@ const DPR = devicePixelRatio;
 function applyAA(){
   const k = parseFloat(aaBox.value) || 1;
   renderer.setPixelRatio(Math.min(DPR * k, 8));        // desktop: supersample, clamped so we don't melt
-  renderer.xr.setFramebufferScaleFactor(k);            // VR: caches for next session
+  renderer.xr.setFramebufferScaleFactor(k);            // VR: consumed at NEXT session start (spec: cannot change while presenting)
   window.__lastFBScale = k;
-  // IF already in VR: rebuild the eye buffer LIVE (the VRC-style path — three's setFramebufferScaleFactor
-  // alone only takes on the NEXT session, which is why sharpness never worked in-headset). Nix 2026-07-15.
-  if(renderer.xr.isPresenting && window.__vrScaleNow) window.__vrScaleNow(k);
+  // VERIFIED (three.js WebXRManager source, 2026-07-15): the XR framebuffer scale is IMMUTABLE while
+  // presenting — a hard WebXR-spec constraint, not a three limitation. three warn()s and no-ops if you
+  // call it mid-session. So to change it in VR we must END + RE-ENTER the session (the only real path;
+  // VRChat can do live because it's not three). If in VR, offer the restart.
+  if(renderer.xr.isPresenting && window.__restartXRForScale) window.__restartXRForScale();
 }
 aaBox.addEventListener('change', applyAA);
+// Restart the XR session so a new framebuffer scale takes effect (the only spec-legal way to change it).
+window.__restartXRForScale = async ()=>{
+  try{ const s=renderer.xr.getSession(); if(!s) return 'not in VR';
+    if(typeof dbg==='function') dbg('vr','restarting XR for new scale '+ (window.__lastFBScale||'?') +'×…','k');
+    await s.end();                                     // three's sessionend fires; setFramebufferScaleFactor is already stashed
+    const ns = await navigator.xr.requestSession('immersive-vr',
+      { optionalFeatures:['local-floor','bounded-floor','hand-tracking','layers'] });
+    await renderer.xr.setSession(ns);                  // rebuilds the projection layer AT the new scaleFactor
+    return 'XR restarted at '+(window.__lastFBScale||'?')+'× — check __fbInfo()';
+  }catch(e){ if(typeof dbg==='function') dbg('vr','XR restart failed: '+e.message,'e'); return 'err '+e; }
+};
 applyAA();
 // VR-SPECIFIC anti-shimmer (Nix 2026-07-15: "is there a VR-specific antialias?"). Two levers beyond
 // the ctor's antialias:true (which only covers the DESKTOP framebuffer — the XR eye buffers are a
@@ -688,12 +701,10 @@ applyAA();
 // the texture-level mipmap fix. So: foveation off here, and books/stars fixed at the texture level.
 renderer.xr.addEventListener('sessionstart', ()=>{
   try{ renderer.xr.setFoveation(0); }catch(e){}          // 0 = no foveation → full resolution to the edges
-  // RE-APPLY the framebuffer scale at session start (Nix 2026-07-15: cranking sharpness did nothing in
-  // VR). setFramebufferScaleFactor only takes on the NEXT session, so setting it once at page load was
-  // stale by the time she entered VR — re-assert it here from the current dropdown value. This is the
-  // real supersample lever (Minecraft-style: more render resolution, not texture tricks).
-  try{ const k=parseFloat(aaBox.value)||1; renderer.xr.setFramebufferScaleFactor(k);
-    if(typeof dbg==='function') dbg('vr','framebuffer scale '+k+'× applied','k'); }catch(e){}
+  // report the ACTUAL eye-buffer size we got (setFramebufferScaleFactor was consumed at session setup;
+  // calling it HERE would just warn+noop — it's immutable while presenting. Report, don't re-set).
+  try{ if(window.__fbInfo){ const i=window.__fbInfo();
+    if(typeof dbg==='function') dbg('vr','entered VR — eye buffer '+(i.eyeBuffer||'?')+' (scale asked '+(window.__lastFBScale||'?')+'×)','k'); } }catch(e){}
 });
 window.__setFoveation = (v)=>{ try{ renderer.xr.setFoveation(v); return 'foveation '+v; }catch(e){ return 'err '+e; } };
 // VR supersample: set the framebuffer scale live-ish (takes on re-enter VR; also applied at sessionstart).
@@ -5250,34 +5261,22 @@ async function vrProbe(){
   try{ pickImage(); }catch(e){ _probeShow(lines.concat(['file dialog threw: ' + e.message])); }
 }
 window.__vrProbe = vrProbe;
-// FRAMEBUFFER telemetry (Nix 2026-07-15: sharpness works on desktop but NEVER in VR). Read the ACTUAL
-// eye-buffer resolution so we can SEE whether setFramebufferScaleFactor is doing anything. If the
-// numbers don't move when you change scale, the runtime is ignoring it and we need the forceful path.
+// FRAMEBUFFER telemetry — CORRECTED (three.js WebXRManager source, 2026-07-15): on Quest three uses
+// the WebXR LAYERS API (XRProjectionLayer), so renderState.baseLayer is legitimately null and
+// getPixelRatio() is 1 in XR (both bypassed). Read the real eye-buffer size from renderState.layers[0]
+// .textureWidth/Height, with renderer.getDrawingBufferSize() as the layer-agnostic ground truth.
+const _dbSize = new THREE.Vector2();
 window.__fbInfo = ()=>{
-  try{ const s=renderer.xr.getSession(); if(!s) return 'not in VR';
-    const bl=s.renderState && s.renderState.baseLayer;
-    const info={ scaleFactorAsked: window.__lastFBScale||'(unset)',
-      framebufferWidth: bl?bl.framebufferWidth:'?', framebufferHeight: bl?bl.framebufferHeight:'?',
-      pixelRatio: renderer.getPixelRatio() };
+  try{ const s=renderer.xr.getSession();
+    renderer.getDrawingBufferSize(_dbSize);
+    if(!s) return { mode:'desktop', drawBuffer: _dbSize.x+'×'+_dbSize.y, pixelRatio: renderer.getPixelRatio() };
+    const rs=s.renderState; let w='?',h='?',path='?';
+    if(rs.layers && rs.layers.length && 'textureWidth' in rs.layers[0]){ w=rs.layers[0].textureWidth; h=rs.layers[0].textureHeight; path='projectionLayer'; }
+    else if(rs.baseLayer){ w=rs.baseLayer.framebufferWidth; h=rs.baseLayer.framebufferHeight; path='baseLayer'; }
+    const info={ scaleAsked: window.__lastFBScale||'(unset)', eyeBuffer: w+'×'+h, via:path,
+      drawBuffer: _dbSize.x+'×'+_dbSize.y };
     if(typeof dbg==='function') dbg('vr', JSON.stringify(info), 'g');
     return info; }catch(e){ return 'err '+e; }
-};
-// FORCEFUL VR supersample (the VRC-style path Nix intuited): three's setFramebufferScaleFactor caches
-// for next session; the DIRECT WebXR call is session.updateRenderState({baseLayer: new XRWebGLLayer(
-// session, gl, {framebufferScaleFactor: k})}) which rebuilds the eye buffer AT the new scale WITHOUT
-// exiting VR. That's almost certainly why VRC's setting "just works" live. Try it in-session.
-window.__vrScaleNow = async (k)=>{
-  try{ const s=renderer.xr.getSession(); if(!s) return 'not in VR — enter first';
-    window.__lastFBScale = k;
-    const gl = renderer.getContext();
-    const layer = new XRWebGLLayer(s, gl, { framebufferScaleFactor: k, antialias: true });
-    await s.updateRenderState({ baseLayer: layer });
-    renderer.xr.setFramebufferScaleFactor(k);   // keep three's copy in sync for future sessions
-    const bl=s.renderState.baseLayer;
-    const msg='VR scale '+k+'× LIVE → fb '+(bl?bl.framebufferWidth+'×'+bl.framebufferHeight:'?');
-    if(typeof dbg==='function') dbg('vr', msg, 'g');
-    return msg;
-  }catch(e){ if(typeof dbg==='function') dbg('vr','vrScaleNow failed: '+e.message,'e'); return 'err '+e; }
 };
 
 // VR/desktop voice affordance: "manifest <words>" (or "inscribe/write <words>") spoken → a text
@@ -6878,11 +6877,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 6ef6082-d7c90b38).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 22f3e70-5cb9080d).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '6ef6082-d7c90b38';
+    const MY_BUILD = '22f3e70-5cb9080d';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
