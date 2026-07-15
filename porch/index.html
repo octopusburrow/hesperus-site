@@ -545,11 +545,21 @@ const _BOOK_PALETTES = [
 function _bookMesh(seed){
   const P = _BOOK_PALETTES[seed % _BOOK_PALETTES.length];
   const W=_snap(0.055), H=_snap(0.20), D=_snap(0.145);   // SNAPPED to the 1/32 m pixel grid → exactly square
+  // SPINE REALITY (Nix 2026-07-15): a spine is only ~2px wide × ~6px tall at 32px/m. That's below the
+  // size where head/tail bands + a title line survive — they were 1px sub-features that just crawled.
+  // At 6px tall the honest design is BOLD HORIZONTAL BANDS (width is ~1 stripe, so all variation must
+  // be vertical): a cover body + ONE 2px label band at a per-book height, high-contrast. Gives a few
+  // visually-distinct spine types that read as different books on the shelf instead of mush.
+  const variant = seed % 4;                               // 4 spine layouts, chosen by the same seed that picks palette
   const paint = (name, ctx, w, h) => {
     if(name==='pz' || name==='nz'){                       // SPINE (visible on shelf)
-      ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);
-      ctx.fillStyle=P.band; if(h>=6){ ctx.fillRect(0,1,w,1); ctx.fillRect(0,h-2,w,1); }   // head/tail bands
-      if(h>=8){ ctx.fillStyle='rgba(0,0,0,0.28)'; ctx.fillRect(0,Math.floor(h*0.45),w,1); } // title line
+      ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);         // solid cover body
+      // one bold 2px label band; height varies per variant so neighbours differ
+      if(h>=6){ const by = [1, 2, h-3, Math.floor(h/2)-1][variant];
+        ctx.fillStyle=P.band; ctx.fillRect(0, by, w, 2);
+        // a single dark hairline under the band for a touch of depth (survives as 1px at this size)
+        ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(0, by+2, w, 1);
+      } else { ctx.fillStyle=P.band; ctx.fillRect(0, Math.max(0,h-2), w, 1); }  // tiny books: just a foot stripe
     } else if(name==='px' || name==='nx'){                // COVER (between neighbours)
       ctx.fillStyle=P.cov; ctx.fillRect(0,0,w,h);
       ctx.fillStyle='rgba(0,0,0,0.20)'; ctx.fillRect(w-1,0,1,h);
@@ -1147,21 +1157,70 @@ function _populateShelves(cases){
     const tpl = _bookTemplates[pcol];
     const im = new THREE.InstancedMesh(tpl.geo, tpl.mat, pls.length);
     im.castShadow = im.receiveShadow = true; im.name = 'books_'+pcol; imeshes++;   // casting RESTORED (Nix: "books look kinda weird not casting") — the table-candle's height/distance should keep the backboard bars tame; if not, next knob is shadow bias, not amputation
-    pls.forEach((pl,i)=>{ m4.compose(pl.pos, pl.quat, sc); im.setMatrixAt(i, m4);
+    // instanceColor for per-book HIGHLIGHT (like the ladder rungs): multiplies the material — white =
+    // unchanged, warm tint = glow. Lets us light ONE hovered book without materializing it.
+    im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(pls.length*3).fill(1), 3);
+    const _white = new THREE.Color(1,1,1);
+    pls.forEach((pl,i)=>{ m4.compose(pl.pos, pl.quat, sc); im.setMatrixAt(i, m4); im.setColorAt(i, _white);
       _shelfBooks.push({ imesh:im, idx:i, pos:pl.pos.clone(), quat:pl.quat.clone(), palette:pcol,
                          pid:'book_'+_shelfBooks.length, taken:false }); });
-    im.instanceMatrix.needsUpdate = true; scene.add(im);
+    im.instanceMatrix.needsUpdate = true; if(im.instanceColor) im.instanceColor.needsUpdate = true;
+    im.userData.shelfBookMesh = true;                    // marker: this imesh's hits resolve to _shelfBooks via instanceId
+    scene.add(im);
   }
   window.__booksInstanced = imeshes;   // (no dbg() here — _populateShelves now runs at synchronous load, before the dbg feed exists)
+  _buildShelfBookIndex();              // map (imesh,instanceId) → _shelfBooks entry for the unified picker
 }
+// (imesh + instanceId) → _shelfBooks entry, so a raycast hit resolves to the right book in O(1).
+const _shelfBookByMesh = new Map();   // imesh → Map(instanceId → sb)
+function _buildShelfBookIndex(){
+  _shelfBookByMesh.clear();
+  for(const sb of _shelfBooks){
+    let m = _shelfBookByMesh.get(sb.imesh); if(!m){ m = new Map(); _shelfBookByMesh.set(sb.imesh, m); }
+    m.set(sb.idx, sb);
+  }
+}
+window.__resolveShelfBook = (imesh, instanceId)=>{ const m=_shelfBookByMesh.get(imesh); return m ? m.get(instanceId) : null; };
+// Highlight (or clear) one shelf book instance by tinting its instanceColor.
+const _bookHiWarm = new THREE.Color(1.5, 1.25, 0.7), _bookHiOff = new THREE.Color(1,1,1);
+function _setShelfBookHi(sb, on){
+  if(!sb || !sb.imesh || !sb.imesh.instanceColor) return;
+  sb.imesh.setColorAt(sb.idx, on ? _bookHiWarm : _bookHiOff);
+  sb.imesh.instanceColor.needsUpdate = true;
+}
+window.__setShelfBookHi = _setShelfBookHi;
+// REAL instanced raycast → nearest un-taken shelf book within reach (replaces the coarse ray-sphere
+// test that missed books). Returns the _shelfBooks entry or null. Precise: hits the actual instance
+// geometry via instanceId, not a 0.18m sphere. Shared by desktop reticle + VR glove.
+const _shelfRC = new THREE.Raycaster();
+function _raycastShelfBook(raycaster, reach){
+  reach = reach || 3.5;
+  const meshes = []; for(const m of _shelfBookByMesh.keys()) meshes.push(m);
+  if(!meshes.length) return null;
+  const hits = raycaster.intersectObjects(meshes, false);
+  for(const h of hits){
+    if(h.distance > reach) return null;                       // nearest hit is too far → nothing
+    if(h.instanceId == null) continue;
+    const sb = window.__resolveShelfBook(h.object, h.instanceId);
+    if(sb && !sb.taken) return { sb, distance: h.distance };
+  }
+  return null;
+}
+window.__raycastShelfBook = _raycastShelfBook;
 function _materializeShelfBook(sb){                        // grab: pop an instance into a real grabbable prop
   sb.taken = true;
+  _setShelfBookHi(sb, false);                              // clear any hover tint before hiding the instance
   const m4 = new THREE.Matrix4().compose(sb.pos, sb.quat, new THREE.Vector3(1e-5,1e-5,1e-5));
   sb.imesh.setMatrixAt(sb.idx, m4); sb.imesh.instanceMatrix.needsUpdate = true;   // hide the instance
   const tpl = _bookTemplates[sb.palette];
   const mesh = new THREE.Mesh(tpl.geo, tpl.mat);           // shares geo+material — still cheap
   mesh.position.copy(sb.pos); mesh.quaternion.copy(sb.quat); mesh.castShadow = true;
   const g = _addProp(sb.pid, mesh, tpl.mesh.userData.bookDims[1]/2); g.home.copy(sb.pos);
+  // TELEPORT FIX (Nix 2026-07-15): a freshly-materialized book sits ON A SHELF, but propPhysics grounds
+  // props to groundHeight() = the highest surface below = the BOOKCASE TOP → the book "teleported up."
+  // Flag it shelf-resting so physics leaves it put; the flag clears the instant it's actually grabbed,
+  // so once you pick it up and throw it, normal gravity resumes and it lands on the floor/table.
+  g._shelfRest = true;
   return g;
 }
 // Remote materialise (Nix's duplicate-book find, 2026-07-09): a book grabbed on ANOTHER client
@@ -1286,7 +1345,7 @@ function sendProp(g){ const now=performance.now();
   const q=g.mesh.quaternion;
   _psend({t:'prop', pid:g.pid, x:g.mesh.position.x, y:g.mesh.position.y, z:g.mesh.position.z,
           q:[+q.x.toFixed(3),+q.y.toFixed(3),+q.z.toFixed(3),+q.w.toFixed(3)]}); }   // rotation rides along (2026-07-10)
-function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; claimProp(g); return g; }  // optimistic + claim
+function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; g._shelfRest=false; claimProp(g); return g; }  // optimistic + claim; picking a shelf book clears its rest-exemption so it falls normally once thrown
 function dropProp(g){ if(!g) return; g.carrying=false; g._hy0=undefined;   // owner stays mine; propPhysics arcs it + releases on rest. _hy0: fresh rotate-with-holder baseline next grab
   if(g.isImage || g.isModel){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;   // images & 3D models don't fall — placed, not tossed
     _psend({t:'release', pid:g.pid}); return; }
@@ -1359,10 +1418,8 @@ function _updateHover(){
     const loose=grabbables.filter(p=>p.mesh && p.owner==null && !(p._cool>0));
     const hits=_hovRC.intersectObjects(loose.map(p=>p.mesh), false);
     if(hits.length && hits[0].distance<3.5) g=loose.find(p=>p.mesh===hits[0].object)||null;
-    if(!g && typeof _shelfBooks!=='undefined'){ let bt=3.5;   // shelf books are instanced → ray-sphere test
-      for(const sb of _shelfBooks){ if(sb.taken) continue;
-        const t=_hovRC.ray.direction.dot(_hovTmp.subVectors(sb.pos,_hovRC.ray.origin));
-        if(t>0 && t<bt && _hovRC.ray.distanceToPoint(sb.pos)<0.18){ bt=t; rayShelf=sb; } } }
+    if(!g && typeof _raycastShelfBook==='function'){          // shelf books: REAL instanced raycast (instanceId)
+      const rs=_raycastShelfBook(_hovRC, 3.5); if(rs) rayShelf=rs.sb; }
   } else if(!held){ g=grabNearest(_reachPoint(),0.85);        // unlocked keeps proximity hover (E-grab)…
     if(!g && typeof _hovRC!=='undefined'){                    // …PLUS cursor ray to 3.5m (Nix 2026-07-12: RMB
       _hovNDC.set((_hovMX/innerWidth)*2-1, -(_hovMY/innerHeight)*2+1);   // in HUD only worked at arm's length)
@@ -1370,7 +1427,8 @@ function _updateHover(){
       const loose=grabbables.filter(p=>p.mesh && p.owner==null && !(p._cool>0));
       const hits=_hovRC.intersectObjects(loose.map(p=>p.mesh), false);
       if(hits.length && hits[0].distance<3.5) g=loose.find(p=>p.mesh===hits[0].object)||null; } }
-  if(typeof _rayShelf!=='undefined') _rayShelf=rayShelf;      // publish for the LMB handler (typeof: harness-safe)
+  if(typeof _rayShelf!=='undefined'){                         // publish + HIGHLIGHT the aimed shelf book (was set but never shown — the "books don't highlight" bug)
+    if(rayShelf!==_rayShelf){ if(typeof _setShelfBookHi==='function'){ _setShelfBookHi(_rayShelf,false); _setShelfBookHi(rayShelf,true); } _rayShelf=rayShelf; } }
   if(g!==_hoverG){ if(_hoverG&&_hoverG.mat&&_hoverG.mat.emissive) _hoverG.mat.emissive.setHex(0x000000);
     if(g&&g.mat&&g.mat.emissive) g.mat.emissive.setHex(0x3a2f18); _hoverG=g; }   // g.mat undefined for a Group (GLB model) — guard
   window.__hoverPid = _hoverG ? (_hoverG.pid||'?') : null;    // debug: what would RMB menu target right now
@@ -1433,6 +1491,7 @@ function propPhysics(dt){
   _propHoldUpdate(dt); _updateHover();
   for(const g of grabbables){ if(g._cool>0) g._cool-=dt;
     if(g.carrying) continue;
+    if(g._shelfRest) continue;                            // book still on its shelf — physics leaves it put (clears on grab)
     if(myNet!=null && g.owner!==myNet){
       // SELF-HEALING (Nix's floating-props screenshot, 2026-07-12): an AIRBORNE prop that
       // nobody owns is stuck — no client's physics will touch it, so it hangs mid-fall forever.
@@ -5250,14 +5309,14 @@ function xrUIRaycast(){
         const loose = grabbables.filter(p=>p.mesh && !p.carrying && !(p._cool>0));
         const hits = xrUI._rc.intersectObjects(loose.map(p=>p.mesh), true);
         if(hits.length){ let o=hits[0].object; while(o && !ng){ ng = loose.find(p=>p.mesh===o)||null; o=o.parent; } nd = hits[0].distance; }
-        // SHELF BOOKS (instanced → ray-sphere test, same as desktop reticle): let the glove target
-        // an un-materialized shelf book so grip pulls it. Fixes "top/mid-shelf books not grabbable
-        // in VR" (Nix 2026-07-14) — they were never in the grabbables list until materialized.
-        if(!ng && typeof _shelfBooks!=='undefined'){ let bt=nd>0?nd:3.5; let bsb=null;
-          for(const sb of _shelfBooks){ if(sb.taken) continue;
-            const t=rdir.dot(_hovTmp.subVectors(sb.pos, origin));
-            if(t>0 && t<bt && xrUI._rc.ray.distanceToPoint(sb.pos)<0.18){ bt=t; bsb=sb; } }
-          if(bsb){ _gloveShelf[i]=bsb; nd=bt; ng=null; line&&(line.visible=true); } else _gloveShelf[i]=null;
+        // SHELF BOOKS: REAL instanced raycast (instanceId), same helper as desktop. Precise hit on
+        // the actual book geometry (was a coarse 0.18m ray-sphere that missed books — the "not
+        // reliably grabbable in VR" bug). Highlights the aimed book via instanceColor too.
+        if(!ng && typeof _raycastShelfBook==='function'){
+          const rs=_raycastShelfBook(xrUI._rc, nd>0?nd:3.5);
+          const prev=_gloveShelf[i];
+          if(rs){ if(prev!==rs.sb){ _setShelfBookHi(prev,false); _setShelfBookHi(rs.sb,true); } _gloveShelf[i]=rs.sb; nd=rs.distance; ng=null; }
+          else { if(prev) _setShelfBookHi(prev,false); _gloveShelf[i]=null; }
         }
         // CLICKABLES (music box, videos): light the ray + highlight so the affordance shows, and
         // trigger fires their action via the existing _tryClickables path in xrUISelect.
