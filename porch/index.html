@@ -670,7 +670,11 @@ const DPR = devicePixelRatio;
 function applyAA(){
   const k = parseFloat(aaBox.value) || 1;
   renderer.setPixelRatio(Math.min(DPR * k, 8));        // desktop: supersample, clamped so we don't melt
-  renderer.xr.setFramebufferScaleFactor(k);            // VR: framebuffer scale (re-applied at sessionstart — see below)
+  renderer.xr.setFramebufferScaleFactor(k);            // VR: caches for next session
+  window.__lastFBScale = k;
+  // IF already in VR: rebuild the eye buffer LIVE (the VRC-style path — three's setFramebufferScaleFactor
+  // alone only takes on the NEXT session, which is why sharpness never worked in-headset). Nix 2026-07-15.
+  if(renderer.xr.isPresenting && window.__vrScaleNow) window.__vrScaleNow(k);
 }
 aaBox.addEventListener('change', applyAA);
 applyAA();
@@ -5246,6 +5250,35 @@ async function vrProbe(){
   try{ pickImage(); }catch(e){ _probeShow(lines.concat(['file dialog threw: ' + e.message])); }
 }
 window.__vrProbe = vrProbe;
+// FRAMEBUFFER telemetry (Nix 2026-07-15: sharpness works on desktop but NEVER in VR). Read the ACTUAL
+// eye-buffer resolution so we can SEE whether setFramebufferScaleFactor is doing anything. If the
+// numbers don't move when you change scale, the runtime is ignoring it and we need the forceful path.
+window.__fbInfo = ()=>{
+  try{ const s=renderer.xr.getSession(); if(!s) return 'not in VR';
+    const bl=s.renderState && s.renderState.baseLayer;
+    const info={ scaleFactorAsked: window.__lastFBScale||'(unset)',
+      framebufferWidth: bl?bl.framebufferWidth:'?', framebufferHeight: bl?bl.framebufferHeight:'?',
+      pixelRatio: renderer.getPixelRatio() };
+    if(typeof dbg==='function') dbg('vr', JSON.stringify(info), 'g');
+    return info; }catch(e){ return 'err '+e; }
+};
+// FORCEFUL VR supersample (the VRC-style path Nix intuited): three's setFramebufferScaleFactor caches
+// for next session; the DIRECT WebXR call is session.updateRenderState({baseLayer: new XRWebGLLayer(
+// session, gl, {framebufferScaleFactor: k})}) which rebuilds the eye buffer AT the new scale WITHOUT
+// exiting VR. That's almost certainly why VRC's setting "just works" live. Try it in-session.
+window.__vrScaleNow = async (k)=>{
+  try{ const s=renderer.xr.getSession(); if(!s) return 'not in VR — enter first';
+    window.__lastFBScale = k;
+    const gl = renderer.getContext();
+    const layer = new XRWebGLLayer(s, gl, { framebufferScaleFactor: k, antialias: true });
+    await s.updateRenderState({ baseLayer: layer });
+    renderer.xr.setFramebufferScaleFactor(k);   // keep three's copy in sync for future sessions
+    const bl=s.renderState.baseLayer;
+    const msg='VR scale '+k+'× LIVE → fb '+(bl?bl.framebufferWidth+'×'+bl.framebufferHeight:'?');
+    if(typeof dbg==='function') dbg('vr', msg, 'g');
+    return msg;
+  }catch(e){ if(typeof dbg==='function') dbg('vr','vrScaleNow failed: '+e.message,'e'); return 'err '+e; }
+};
 
 // VR/desktop voice affordance: "manifest <words>" (or "inscribe/write <words>") spoken → a text
 // object, instead of being said. Returns true if it consumed the utterance. Native to VR (no keyboard).
@@ -6845,11 +6878,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 9c0bc84-fde0f5ac).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 6ef6082-d7c90b38).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '9c0bc84-fde0f5ac';
+    const MY_BUILD = '6ef6082-d7c90b38';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
