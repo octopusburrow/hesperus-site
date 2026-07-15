@@ -850,13 +850,13 @@ const sky = new THREE.Mesh(
   new THREE.SphereGeometry(450, 32, 16),
   new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { uTime: {value: 0}, uSkyDark: {value: 0.0} },
+    uniforms: { uTime: {value: 0}, uSkyDark: {value: 0.0}, uVenus: {value: 1.25} },   // uVenus: evening-star angular scale — desktop 1.25 ("so smol"), VR 1.0 (reads right, Nix 2026-07-15)
     vertexShader: `
       varying vec3 vDir;
       void main(){ vDir = normalize(position);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
-      varying vec3 vDir; uniform float uTime; uniform float uSkyDark;
+      varying vec3 vDir; uniform float uTime; uniform float uSkyDark; uniform float uVenus;
       float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7)))*43758.5453); }
       void main(){
         float h = clamp(vDir.y, -0.05, 1.0);
@@ -911,16 +911,18 @@ const sky = new THREE.Mesh(
         float vang = atan(dot(vDir, vt2), dot(vDir, vt1));
         float adist = acos(clamp(vd, -1.0, 1.0));
         // rev.5 (Nix 2026-07-15): whole evening star −40% (core, rays, halo all ×0.6 angular)
-        col += vec3(1.00, 0.97, 0.90) * smoothstep(0.9999977, 0.9999995, vd) * 2.2;  // core −40%
+        // rev.6: × uVenus per mode (angular scale k → (1−vd) thresholds ×k², exp coeffs ÷k, pow ÷k²)
+        float vk2 = uVenus*uVenus;
+        col += vec3(1.00, 0.97, 0.90) * smoothstep(1.0-2.3e-6*vk2, 1.0-5.0e-7*vk2, vd) * 2.2;
         // rev.3 rays (Nix): cardinal spikes (up/down/left/right) dominant, diagonals smaller.
         float card = pow(abs(cos(2.0*vang + 0.10*sin(uTime*0.5))), 40.0);
         float diag = pow(abs(sin(2.0*vang + 0.10*sin(uTime*0.5))), 52.0);
         // rev.4 (Nix 2026-07-12): cardinal rays a touch LONGER (slower falloff), halo -50% size
         // (exponent x2 = half angular radius) and -50% intensity.
         float breath = 0.75 + 0.25*sin(uTime*1.1 + vang*2.0);
-        float rays = (card * exp(-adist*217.0) + diag*0.38 * exp(-adist*292.0)) * breath;   // −40% ray length
+        float rays = (card * exp(-adist*217.0/uVenus) + diag*0.38 * exp(-adist*292.0/uVenus)) * breath;
         col += vec3(0.95, 0.90, 0.80) * rays * 0.85;
-        col += vec3(0.26, 0.23, 0.19) * pow(max(vd, 0.0), 8900.0) * 0.2;             // halo −40% size
+        col += vec3(0.26, 0.23, 0.19) * pow(max(vd, 0.0), 8900.0/vk2) * 0.2;
         gl_FragColor = vec4(col, 1.0);
         // colorspace citizenship (mirror-brightness fix, measured thread 2026-07-10): authored values
         // are DISPLAY-space; decode to linear (exact sRGB EOTF) so the include's OETF is an identity
@@ -956,7 +958,7 @@ let _starMat = null;
     _starMat = new THREE.ShaderMaterial({
       transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, fog:false,
       uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)},
-        uStar:{value:1}, uBoost:{value:1}, uSoft:{value:0} },   // uSoft: 1=VR anti-shimmer path (floor+flux law), 0=desktop original-magnitude baseline (Nix 2026-07-15: the floor made desktop monotone; it was a VR compositor fix and desktop never needed it)
+        uStar:{value:1}, uBoost:{value:1}, uSoft:{value:0}, uLin:{value:0} },   // uSoft: 1=VR anti-shimmer path, 0=desktop magnitude-pure baseline. uLin: 1 during linear-RT passes (mirror) — decode to linear like the sky does, else stars render one sRGB-decode too bright in reflections (Nix 2026-07-15)
       vertexShader:`attribute vec3 scolor; attribute float ssize; attribute float sphase;
         varying vec3 vC; varying float vB; varying float vE; uniform float uTime; uniform float uPx; uniform float uStar; uniform float uSoft;
         void main(){
@@ -999,7 +1001,7 @@ let _starMat = null;
           vE = mix(1.0, pow(target/ps, 1.15), uSoft);
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
-      fragmentShader:`varying vec3 vC; varying float vB; varying float vE; uniform float uBoost; uniform float uSoft;
+      fragmentShader:`varying vec3 vC; varying float vB; varying float vE; uniform float uBoost; uniform float uSoft; uniform float uLin;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r2 = dot(d,d);
           vec3 base = vC + core0(r2) * vB * (vec3(1.0) - vC) * 0.7;
           // soft path (VR): gaussian falloff, flux-scaled, 2.78 restores perceived brightness.
@@ -1008,6 +1010,9 @@ let _starMat = null;
           vec3 cHard = base * max(smoothstep(0.25, 0.0036, r2), core0(r2) * vB);
           vec3 c = mix(cHard, cSoft, uSoft) * uBoost;
           if(max(c.r,max(c.g,c.b)) < 0.004) discard;
+          // linear-RT citizenship (mirror-brightness fix, same treatment the sky got 2026-07-10):
+          // authored values are display-space; a linear render target needs the sRGB EOTF decode.
+          if(uLin > 0.5) c = mix(c/12.92, pow((c+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), c));
           gl_FragColor = vec4(c, 1.0); }`.replace(/core0\(r2\)/g,'exp(-r2*44.0)')
     });
     // ?hardstars: force the hard/original path IN VR too (A/B) — now just a uniform, no shader surgery
@@ -1017,13 +1022,14 @@ let _starMat = null;
     // Live tune from console: __starBase.desktop.size=1.6; __applyStarTune()
     // Desktop RESET to 1.0/1.0 (Nix 2026-07-15 r6): baseline = the original magnitude curve,
     // untouched; tune UP from here by eye. Live: __starBase.desktop.size=1.2; __applyStarTune()
-    const _STAR_BASE = { desktop:{ size:1.0, boost:1.0 }, vr:{ size:1.0, boost:1.0 } };
+    const _STAR_BASE = { desktop:{ size:1.6, boost:1.0 }, vr:{ size:1.0, boost:1.0 } };   // desktop 1.6 = Nix's dooted number (2026-07-15)
     const _forceHard = new URLSearchParams(location.search).has('hardstars');
     function _applyStarTune(){
       const mode = renderer.xr.isPresenting ? 'vr' : 'desktop';
       _starMat.uniforms.uStar.value  = _STAR_BASE[mode].size;
       _starMat.uniforms.uBoost.value = _STAR_BASE[mode].boost;
       _starMat.uniforms.uSoft.value  = (mode==='vr' && !_forceHard) ? 1 : 0;   // soft anti-shimmer path = VR only
+      try{ sky.material.uniforms.uVenus.value = (mode==='vr') ? 1.0 : (window.__venusDesk||1.25); }catch(e){}   // evening star: +25% desktop only
       // THE 1-PIXEL-STARS BUG (Nix 2026-07-15): gl_PointSize is in DEVICE pixels, and the
       // Antialiasing dropdown scales the drawing buffer up to 4× — but uPx was frozen at
       // min(devicePixelRatio,2), so desktop supersampling SHRANK the stars by its own factor.
@@ -1031,6 +1037,43 @@ let _starMat = null;
       _starMat.uniforms.uPx.value = renderer.xr.isPresenting ? Math.min(devicePixelRatio,2) : renderer.getPixelRatio();
     }
     window.__applyStarTune = _applyStarTune; window.__starBase = _STAR_BASE;
+    // ---- THE KNOB (Nix 2026-07-15): the iteration-loop tool. "Wire up a knob for X" → labeled
+    // slider appears in the ☰ menu under 🎛; value goes LIVE on slider release; 📋 copies
+    // "knob: label = value" for pasting back to the workbench, where it gets BAKED into code and
+    // the knob is retired. Knobs are deliberately ephemeral — no persistence, no saved state:
+    // a knob is a conversation, the commit is the decision. (Named for The Unconnected Knob —
+    // this one is connected by construction.)
+    window.__knob = (label, apply, o={})=>{
+      const menu=document.getElementById('menu'); if(!menu) return 'no menu';
+      let sec=document.getElementById('knobSec');
+      if(!sec){ sec=document.createElement('div'); sec.id='knobSec';
+        const h=document.createElement('div');
+        h.style.cssText='margin:8px 0 2px;color:#8a94a4;font-size:11px;border-top:1px solid #2a3040;padding-top:6px';
+        h.textContent='🎛 knobs (live tuning — not saved; 📋 sends the number home)';
+        sec.appendChild(h); menu.appendChild(sec); }
+      const id='knob_'+label.replace(/\W+/g,'_');
+      const old=document.getElementById(id); if(old) old.remove();
+      const row=document.createElement('div'); row.id=id; row.className='mrow';
+      const min=o.min??0, max=o.max??2, step=o.step??0.05, init=o.init??1;
+      row.style.cssText='display:flex;align-items:center;gap:6px';
+      const lab=document.createElement('span'); lab.textContent=label; lab.style.cssText='min-width:120px;font-size:12px';
+      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=init; rng.style.width='100px';
+      const val=document.createElement('b'); val.textContent=init; val.style.cssText='min-width:36px;text-align:right;font-size:12px';
+      const btn=document.createElement('button'); btn.textContent='📋';
+      btn.style.cssText='font-size:12px;background:#2a3040;color:#cbbfa4;border:0;border-radius:5px;padding:2px 7px;cursor:pointer';
+      rng.addEventListener('input', ()=>{ val.textContent=rng.value; });
+      rng.addEventListener('change', ()=>{ try{ apply(parseFloat(rng.value)); }catch(e){}
+        if(typeof dbg==='function') dbg('knob', label+' = '+rng.value, 'k'); });
+      btn.addEventListener('click', ()=>{ const t='knob: '+label+' = '+rng.value;
+        const p=navigator.clipboard? navigator.clipboard.writeText(t) : Promise.reject();
+        p.then(()=>{ btn.textContent='✅'; }).catch(()=>{ btn.textContent='⚠'; if(typeof dbg==='function') dbg('knob','copy blocked — value is '+t,'w'); });
+        setTimeout(()=>btn.textContent='📋', 900); });
+      row.append(lab, rng, val, btn); sec.appendChild(row);
+      return 'knob wired: '+label; };
+    // standing knobs for the current tuning arc (retired once numbers are baked):
+    window.__knob('star size (desktop)',  v=>{ _STAR_BASE.desktop.size=v;  _applyStarTune(); }, {min:0.5,max:3,step:0.05,init:_STAR_BASE.desktop.size});
+    window.__knob('star boost (desktop)', v=>{ _STAR_BASE.desktop.boost=v; _applyStarTune(); }, {min:0.5,max:3,step:0.05,init:_STAR_BASE.desktop.boost});
+    window.__knob('venus size (desktop)', v=>{ window.__venusDesk=v; _applyStarTune(); },       {min:0.6,max:2.5,step:0.05,init:1.25});
     renderer.xr.addEventListener('sessionstart', _applyStarTune);
     renderer.xr.addEventListener('sessionend', _applyStarTune);
     _applyStarTune();
@@ -1041,9 +1084,11 @@ let _starMat = null;
     // fires per-pass: when a render target is bound, rescale uPx to that target's real height.
     stars.onBeforeRender = (rnd)=>{ const rt=rnd.getRenderTarget();
       if(rt && !rnd.xr.isPresenting){ stars.userData._uPx = _starMat.uniforms.uPx.value;   // XR eye buffer is ALSO an RT — leave VR alone
-        _starMat.uniforms.uPx.value = Math.max(0.6, rt.height / innerHeight); } };
+        _starMat.uniforms.uPx.value = Math.max(0.6, rt.height / innerHeight);
+        _starMat.uniforms.uLin.value = 1; } };                                             // linear RT: decode (mirror brightness)
     stars.onAfterRender = ()=>{ if(stars.userData._uPx!==undefined){
-      _starMat.uniforms.uPx.value = stars.userData._uPx; stars.userData._uPx=undefined; } };
+      _starMat.uniforms.uPx.value = stars.userData._uPx; stars.userData._uPx=undefined;
+      _starMat.uniforms.uLin.value = 0; } };
     // THE NORTH POLE, the night Claude was made (2026-07-10). The Porch is built so the sun
     // never rises — that IS the polar winter. So: observer at 90°N → the north celestial pole sits at
     // the zenith (Polaris 0.74° from straight up, verified), the whole sky wheels around it, nothing
@@ -7276,11 +7321,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes bc821fb-0be39ea2).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 5bc4fdd-dc462e14).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'bc821fb-0be39ea2';
+    const MY_BUILD = '5bc4fdd-dc462e14';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
