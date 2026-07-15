@@ -4023,8 +4023,24 @@ window.__wristCal(0,0,-180, 0,0,0);   // Basis OpenXR baked default: the two gri
 // MEASURED default (Nix's 🎯 T-pose capture, 2026-07-10, confirmed live: "IK HANDS ARE WORKING
 // OMGGGG"): her device's grip→bone offsets, |q|≈1.000 both sides. OpenXR grip space is
 // standardized, so this should hold across headsets; a local 🎯 run still overrides it below.
-_wristCalL.fromArray([-0.4071736147202605, 0.8824899209130146, -0.015719411966090183, 0.2348916494303031]);
 _wristCalR.fromArray([0.5812875774993174, 0.7123369384133019, 0.08586779365740962, -0.38380664895827776]);
+// LEFT = MIRROR OF RIGHT (Nix 2026-07-15: left wrist rotation is still poor and very different from
+// the right — the two were measured independently and the left measurement was worse). The hands are
+// sagittal mirror images, so the left cal should be DERIVED from the good right one, not measured
+// separately. Mirroring a rotation across the sagittal (x=0) plane conjugates it AND flips handedness:
+// reflect(q) for the x=0 plane = (q.x, -q.y, -q.z, q.w) with the rotation sense reversed → in practice
+// q_left = (-q.x, q.y, q.z, -q.w) is the proper opposite-handed twin. We expose both and let the flag
+// / live call pick, defaulting to the mirror so the left inherits the right's quality.
+function _mirrorWristQuat(qR, out){   // sagittal mirror: right-hand cal → left-hand cal
+  // Reflection across x=0 negates the x-translation of the axis and reverses chirality of the spin.
+  // For a unit quaternion (x,y,z,w) the opposite-handed mirror about the YZ plane is (x,-y,-z,w)
+  // with the angle negated → equivalently negate y,z and w. Result is renormalized for safety.
+  return (out||new THREE.Quaternion()).set(qR.x, -qR.y, -qR.z, -qR.w).normalize();
+}
+window.__mirrorWristFromRight = ()=>{ _mirrorWristQuat(_wristCalR, _wristCalL);
+  try{ localStorage.setItem('porch.wristcal', JSON.stringify({l:_wristCalL.toArray(), r:_wristCalR.toArray()})); }catch(e){}
+  return 'left wrist = mirror of right (saved) '+JSON.stringify(_wristCalL.toArray().map(n=>+n.toFixed(3))); };
+_mirrorWristQuat(_wristCalR, _wristCalL);   // default: left is the mirror of right, not the old bad measurement
 // MEASURED wrist calibration (Nix's 90°-offsets verdict, 2026-07-09): stop guessing grip axes.
 // She T-poses in the headset; at T-pose the normalized rig's hand REST world quat is exactly the
 // scene quat (identity local chain), and ikHandL/R hold the live grip world quats — so
@@ -4038,7 +4054,9 @@ window.__calibrateWrists=()=>{
   return 'wrists calibrated from T-pose (saved)';
 };
 try{ const _wc=JSON.parse(localStorage.getItem('porch.wristcal')||'null');   // a measured cal beats the baked guess
-  if(_wc && _wc.l && _wc.r){ _wristCalL.fromArray(_wc.l); _wristCalR.fromArray(_wc.r); } }catch(e){}
+  if(_wc && _wc.r){ _wristCalR.fromArray(_wc.r);                            // load the RIGHT (the good one)
+    if(_wc.mirrorLeft || !_wc.l) _mirrorWristQuat(_wristCalR, _wristCalL);   // left mirrors right unless a real left measurement was explicitly kept
+    else _wristCalL.fromArray(_wc.l); } }catch(e){}
 // FINGER CURLS (Basis fallback-hand port): trigger→index, squeeze→middle+ring+little, thumb rests.
 // Runs between mixer and vrm.update so curls compose onto the animated pose. VRM normalized rest:
 // left fingers +X / right −X, palms −Y → curl about ∓Z respectively.
@@ -5459,6 +5477,8 @@ const RADIAL_CATS = [
     ['🎯', ()=>{ if(typeof dbg==='function') dbg('cal','T-POSE now — capturing wrists in 5s…','k');
         setTimeout(()=>{ const r=window.__calibrateWrists?__calibrateWrists():'no cal fn'; if(typeof dbg==='function') dbg('cal',r,'g'); },5000);
         return 'calibrating in 5s'; }],
+    ['🪞', ()=>{ const r=window.__mirrorWristFromRight?__mirrorWristFromRight():'no fn';   // mirror the good RIGHT wrist cal onto the left (hands-free, no console)
+        if(typeof dbg==='function') dbg('cal','left wrist mirrored from right','g'); return 'left=mirror(right)'; }],
     ['📸', ()=>window.__cameraSnap ? __cameraSnap() : 'no camera']]},
 ];
 function _radialButton(emoji){
@@ -5509,7 +5529,7 @@ function _radialTop(){ _radialRing(RADIAL_CATS.map(c=>({emoji:c.emoji, angle:c.a
 // sub-item display names by emoji (so the focus label reads a word, not just the icon)
 const _RADIAL_ITEM_NAMES = { '✍':'Write','⬛':'Cube','🎵':'Music','👋':'Wave','🎉':'Cheer','💃':'Dance',
   '🙌':'Raise','🧘':'Sit','🦵':'Crouch','🧑‍🚀':'Suit','🌼':'Toon','🐯':'Tigerbee','🦉':'Owl','☆':'Star names',
-  '🗑':'Delete','🎯':'Calibrate','📸':'Photo' };
+  '🗑':'Delete','🎯':'Calibrate','🪞':'Mirror L=R','📸':'Photo' };
 function _radialSub(cat){ _radialRing(cat.items.map(([emoji,fn])=>({emoji, name:_RADIAL_ITEM_NAMES[emoji]||'',
   action:()=>{ const r=fn(); window.__toggleEmotePanel(false); return r; }})));
   EMOTE_PANEL.level=1; }
@@ -6763,11 +6783,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 731c1ca-824e680c).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 12f59f1-db083eee).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '731c1ca-824e680c';
+    const MY_BUILD = '12f59f1-db083eee';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
