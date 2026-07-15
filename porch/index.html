@@ -1347,6 +1347,10 @@ function _populateShelves(cases){
   }
   window.__booksInstanced = imeshes;   // (no dbg() here — _populateShelves now runs at synchronous load, before the dbg feed exists)
   _buildShelfBookIndex();              // map (imesh,instanceId) → _shelfBooks entry for the unified picker
+  // BOOK SLOTS (Nix 2026-07-15, "allow people to put books back"): every original placement is a
+  // slot. A materialized book frees its slot; a slow drop near ANY free slot slides the book in and
+  // de-materializes it back into the InstancedMesh (perf: reshelved books cost zero draw calls again).
+  window._bookSlots = _shelfBooks.map(sb=>({ pos:sb.pos.clone(), quat:sb.quat.clone(), occ:sb }));
 }
 // (imesh + instanceId) → _shelfBooks entry, so a raycast hit resolves to the right book in O(1).
 const _shelfBookByMesh = new Map();   // imesh → Map(instanceId → sb)
@@ -1393,6 +1397,8 @@ function _materializeShelfBook(sb){                        // grab: pop an insta
   const mesh = new THREE.Mesh(tpl.geo, tpl.mat);           // shares geo+material — still cheap
   mesh.position.copy(sb.pos); mesh.quaternion.copy(sb.quat); mesh.castShadow = true;
   const g = _addProp(sb.pid, mesh, tpl.mesh.userData.bookDims[1]/2); g.home.copy(sb.pos);
+  g._sb = sb; g.dims = tpl.mesh.userData.bookDims.slice();   // slot-return link + real extents (tumbled-rest height)
+  if(window._bookSlots){ const sl = _bookSlots.find(s=>s.occ===sb); if(sl) sl.occ = null; }   // its slot is now free
   // TELEPORT FIX (Nix 2026-07-15): a freshly-materialized book sits ON A SHELF, but propPhysics grounds
   // props to groundHeight() = the highest surface below = the BOOKCASE TOP → the book "teleported up."
   // Flag it shelf-resting so physics leaves it put; the flag clears the instant it's actually grabbed,
@@ -1531,7 +1537,11 @@ function sendProp(g){ const now=performance.now();
   _psend({t:'prop', pid:g.pid, x:g.mesh.position.x, y:g.mesh.position.y, z:g.mesh.position.z,
           q:[+q.x.toFixed(3),+q.y.toFixed(3),+q.z.toFixed(3),+q.w.toFixed(3)]}); }   // rotation rides along (2026-07-10)
 function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; g._shelfRest=false; g._resting=false; claimProp(g); return g; }  // optimistic + claim; clears shelf-rest exemption AND the settled flag so the next drop re-settles
-function dropProp(g){ if(!g) return; g.carrying=false; g._hy0=undefined;   // owner stays mine; propPhysics arcs it + releases on rest. _hy0: fresh rotate-with-holder baseline next grab
+function dropProp(g){ if(!g) return;
+  if(g._fly){ g._fly=false; g._flyT=undefined; g._flyTick=false; g._flyHand=null;   // grip opened mid-pull →
+    if(g._flyV){ g.vel.copy(g._flyV); g._flyV=null; } }                             // the lob continues ballistically
+  if(typeof _tryShelfReturn==='function' && _tryShelfReturn(g)) return;             // gentle drop near a free slot → reshelve
+  g.carrying=false; g._hy0=undefined;   // owner stays mine; propPhysics arcs it + releases on rest. _hy0: fresh rotate-with-holder baseline next grab
   if(g.isImage || g.isModel){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;   // images & 3D models don't fall — placed, not tossed
     _psend({t:'release', pid:g.pid}); return; }
   if(g.vel.length()<0.6) g.vel.set(0,0,0); else g.vel.multiplyScalar(1.1); }   // throw threshold + slight gain (Basis)
@@ -1577,7 +1587,9 @@ function tryGripGrab(hand, pressed){                  // VR grip edge → grab n
       // first, THEN grab it (Nix 2026-07-14: top/mid-shelf books weren't grabbable in VR).
       if(!g && _gloveShelf[idx] && typeof _materializeShelfBook==='function'){
         g = _materializeShelfBook(_gloveShelf[idx]); _gloveShelf[idx]=null; }
-      if(g){ g._fly = true; if(typeof dbg==='function') dbg('grab', `glove-pull ${g.pid}`, 'k'); } }
+      if(g){ g._fly = true; g._flyT = 0.55; g._flyHand = hand; g.spin = null;   // constant flight time (Alyx: players learn the rhythm)
+        _haptic(hand, 0.3, 60);                                                 // lock+pull acknowledged
+        if(typeof dbg==='function') dbg('grab', `glove-pull ${g.pid} (0.55s lob)`, 'k'); } }
     if(g){
       // Capture the in-hand pose relative to the IK HAND (not the grip), so the follow logic in
       // _propHoldUpdate keeps the object locked to the palm as the wrist turns (Nix 2026-07-15).
@@ -1687,19 +1699,104 @@ function _propHoldUpdate(dt){                          // glue carried props to 
       if(g.offset) p.add(g.offset.clone().applyQuaternion(hq));   // + the grab-time in-hand offset, hand-relative
       if(g.rotOffset){ g.mesh.quaternion.copy(hq).multiply(g.rotOffset); }               // rotate with the IK hand
       _trackVel(g,p,dt);
-      if(g._fly){                                     // #17: glide the laser-grabbed prop into the hand
-        g.mesh.position.lerp(p, Math.min(1, dt*8));
-        if(g.mesh.position.distanceToSquared(p) < 0.0025) g._fly = false;
+      if(g._fly){                                     // #17 rev.3 (Alyx-style, Nix-approved 2026-07-15): BALLISTIC
+        // lob, not a lerp. Per-frame re-solve toward the live palm (HIGGS method): the object flies a
+        // gravity arc that lands ON the moving hand in the remaining time — caught, not delivered.
+        g._flyT = (g._flyT===undefined ? 0.55 : g._flyT) - dt;
+        const fd = p.clone().sub(g.mesh.position);
+        if(g._flyT <= 0.05 || fd.lengthSq() < 0.0064){          // arrived (≤8 cm) or time up
+          g._fly=false; g._flyT=undefined; g._flyTick=false;
+          if(g._flyHand){ _haptic(g._flyHand, 0.5, 80); g._flyHand=null; }   // the catch thump
+          g.mesh.position.copy(p);
+        } else {
+          const tR=g._flyT;
+          const vx=fd.x/tR, vz=fd.z/tR, vy=fd.y/tR + 0.5*GRAV*tR;   // projectile solve → the lob
+          (g._flyV = g._flyV || new THREE.Vector3()).set(vx, vy, vz);
+          g.mesh.position.x += vx*dt; g.mesh.position.z += vz*dt;
+          g.mesh.position.y += vy*dt - 0.5*GRAV*dt*dt;
+          if(!g._flyTick && fd.length() < 0.25){ g._flyTick=true;   // enters catch range → soft tick
+            if(g._flyHand) _haptic(g._flyHand, 0.25, 40); }
+        }
       } else g.mesh.position.copy(p);
       sendProp(g); }catch(e){} } }
 const _lvlE=new THREE.Euler();
 function _levelProp(g){                               // rest flat: keep yaw, drop pitch/roll (books on corners look haunted)
   _lvlE.setFromQuaternion(g.mesh.quaternion,'YXZ');
   if(Math.abs(_lvlE.x)>0.02||Math.abs(_lvlE.z)>0.02) g.mesh.quaternion.setFromEuler(_lvlE.set(0,_lvlE.y,0,'YXZ')); }
+// ---- physics v0.2 (Nix 2026-07-15): tumbled rest, stacking, slot-return, haptics ----
+// Props with known extents (g.dims) settle TUMBLED — snapped to the nearest face-flat orientation
+// (stable, still reads as thrown) instead of being auto-leveled upright. At rest they're frozen
+// (non-physics) until re-grabbed — her perf call.
+const _snapE=new THREE.Euler();
+function _snapAxisQuat(q){                            // nearest axis-aligned orientation (face-flat)
+  _snapE.setFromQuaternion(q,'XYZ'); const s=a=>Math.round(a/(Math.PI/2))*(Math.PI/2);
+  return new THREE.Quaternion().setFromEuler(new THREE.Euler(s(_snapE.x), s(_snapE.y), s(_snapE.z), 'XYZ')); }
+const _effA=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,1)], _effT=new THREE.Vector3();
+function _effHH(g){                                   // vertical half-extent in the CURRENT orientation
+  if(!g.dims) return g.hh;
+  let hh=g.hh, best=0;
+  for(let i=0;i<3;i++){ const d=Math.abs(_effT.copy(_effA[i]).applyQuaternion(g.mesh.quaternion).y);
+    if(d>best){ best=d; hh=g.dims[i]/2; } }
+  return hh; }
+function _supportY(g){                                // ground OR the top of a resting prop beneath (stacking)
+  let base = groundHeight(g.mesh.position.x, g.mesh.position.z);
+  for(const o of grabbables){ if(o===g || !o.mesh || !o._resting || o.carrying) continue;
+    const dx=Math.abs(o.mesh.position.x-g.mesh.position.x), dz=Math.abs(o.mesh.position.z-g.mesh.position.z);
+    const orr=(o.dims? Math.max(o.dims[0],o.dims[2]) : o.hh)*0.7, grr=(g.dims? Math.max(g.dims[0],g.dims[2]) : g.hh)*0.7;
+    if(dx < orr+grr && dz < orr+grr){
+      const top = o.mesh.position.y + _effHH(o);
+      if(top > base && g.mesh.position.y + 0.03 >= top) base = top; } }   // support only from below
+  return base; }
+function _settleProp(g){                              // landing pose: books tumble-snap, others level
+  if(g.dims){ g.mesh.quaternion.copy(_snapAxisQuat(g.mesh.quaternion)); }
+  else _levelProp(g); }
+function _haptic(hand, val, ms){                      // guarded controller rumble (staging per HIGGS/Alyx)
+  try{ const s=renderer.xr.getSession(); if(!s) return;
+    for(const src of s.inputSources){ if(src.handedness===hand && src.gamepad && src.gamepad.hapticActuators
+      && src.gamepad.hapticActuators[0]) src.gamepad.hapticActuators[0].pulse(val, ms); } }catch(e){} }
+function _tryShelfReturn(g){                          // gentle drop near a FREE slot → slide in + de-materialize
+  if(!g._sb || !window._bookSlots) return false;
+  if(g.vel.length() > 1.4) return false;              // a real throw is a throw — no magnet on hard tosses
+  let best=null, bd=0.25*0.25;
+  for(const s of _bookSlots){ if(s.occ) continue;
+    const d2=g.mesh.position.distanceToSquared(s.pos); if(d2<bd){ bd=d2; best=s; } }
+  if(!best) return false;
+  best.occ = g._sb;                                   // reserve immediately (two-hand race safety)
+  g.carrying=false; g.vel.set(0,0,0); g.spin=null; g._shelfRest=false; g._resting=false;
+  g._slotFly = { slot:best, t:0.3 };
+  if(typeof dbg==='function') dbg('shelf','📚 '+g.pid+' sliding home','k');
+  return true; }
+function _finishShelfReturn(g, slot){
+  const sb=g._sb;
+  sb.pos.copy(slot.pos); sb.quat.copy(slot.quat);     // the book RE-HOMES to whichever slot it entered
+  const m4=new THREE.Matrix4().compose(sb.pos, sb.quat, new THREE.Vector3(1,1,1));
+  sb.imesh.setMatrixAt(sb.idx, m4); sb.imesh.instanceMatrix.needsUpdate=true;
+  sb.taken=false;
+  scene.remove(g.mesh);
+  const gi=grabbables.indexOf(g); if(gi>=0) grabbables.splice(gi,1);
+  delete grabbablesById[g.pid];
+  if(typeof heldProp!=='undefined' && heldProp===g) heldProp=null;
+  _psend({t:'shelfReturn', pid:g.pid, slot:_bookSlots.indexOf(slot)});
+  if(typeof dbg==='function') dbg('shelf','📚 '+g.pid+' reshelved','g'); }
+window.__handleShelfReturn = (m)=>{                   // remote client reshelved a book → mirror it
+  try{ const g=grabbablesById[m.pid]; const slot=window._bookSlots && _bookSlots[m.slot];
+    if(!slot) return;
+    if(g && g._sb){ slot.occ=g._sb; _finishShelfReturn(g, slot); }
+    else { const mm=/^book_(\d+)$/.exec(m.pid||''); const sb=mm && _shelfBooks[+mm[1]];
+      if(sb && sb.taken){ slot.occ=sb; sb.pos.copy(slot.pos); sb.quat.copy(slot.quat);
+        const m4=new THREE.Matrix4().compose(sb.pos, sb.quat, new THREE.Vector3(1,1,1));
+        sb.imesh.setMatrixAt(sb.idx, m4); sb.imesh.instanceMatrix.needsUpdate=true; sb.taken=false; } } }catch(e){} };
 function propPhysics(dt){
   _propHoldUpdate(dt); _updateHover();
   for(const g of grabbables){ if(g._cool>0) g._cool-=dt;
     if(g.carrying) continue;
+    if(g._slotFly){                                       // sliding home into a shelf slot (Nix 2026-07-15)
+      const sf=g._slotFly; sf.t-=dt;
+      g.mesh.position.lerp(sf.slot.pos, Math.min(1, dt*11));
+      g.mesh.quaternion.slerp(sf.slot.quat, Math.min(1, dt*11));
+      if(sf.t<=0 || g.mesh.position.distanceToSquared(sf.slot.pos) < 4e-6){
+        g._slotFly=null; _finishShelfReturn(g, sf.slot); }
+      continue; }
     if(g._shelfRest) continue;                            // book still on its shelf — physics leaves it put (clears on grab)
     if(myNet!=null && g.owner!==myNet){
       // SELF-HEALING (Nix's floating-props screenshot, 2026-07-12): an AIRBORNE prop that
@@ -1714,7 +1811,7 @@ function propPhysics(dt){
         g._skipLog = performance.now();
         if(typeof dbg==='function') dbg('phys', `⚠ ${g.pid} vel=${g.vel.length().toFixed(1)} SKIPPED: owner=${g.owner} me=${myNet}`, 'w'); }
       continue; }   // relay: only sim props I own. SOLO (myNet null): sim locally
-    const rest=groundHeight(g.mesh.position.x, g.mesh.position.z)+g.hh;
+    const rest=_supportY(g)+_effHH(g);                            // stacking-aware: ground OR a resting prop's top
     if(g.mesh.position.y > rest+1e-4){                            // arc under gravity (throw travels as it falls)
       g.vel.y-=GRAV*dt; g.mesh.position.addScaledVector(g.vel,dt); g.vel.x*=0.98; g.vel.z*=0.98;
       if(g.spin){ g.mesh.rotation.x+=g.spin.x*dt; g.mesh.rotation.y+=g.spin.y*dt; g.mesh.rotation.z+=g.spin.z*dt; }  // tumble in flight
@@ -1722,13 +1819,18 @@ function propPhysics(dt){
         const rr0=Math.hypot(g.mesh.position.x,g.mesh.position.z)||1;
         if(rr0>WORLD_RADIUS){ g.mesh.position.x*=WORLD_RADIUS/rr0; g.mesh.position.z*=WORLD_RADIUS/rr0; }
         g.mesh.position.y = groundHeight(g.mesh.position.x, g.mesh.position.z)+g.hh; g.vel.set(0,0,0); }
-      const r2=groundHeight(g.mesh.position.x,g.mesh.position.z)+g.hh;
-      if(g.mesh.position.y<=r2){ g.mesh.position.y=r2; g.vel.set(0,0,0); g.spin=null;
+      let r2=_supportY(g)+_effHH(g);
+      if(g.mesh.position.y<=r2){
+        _settleProp(g); r2=_supportY(g)+_effHH(g);                // touchdown: snap the tumble, re-measure at the settled pose
+        g.mesh.position.y=r2; g.vel.set(0,0,0); g.spin=null;
         const rr=Math.hypot(g.mesh.position.x,g.mesh.position.z); if(rr>WORLD_RADIUS){ g.mesh.position.x*=WORLD_RADIUS/rr; g.mesh.position.z*=WORLD_RADIUS/rr; }
         _restProp(g); }   // rested → release ownership ONCE (transition, not every frame)
       else { g._resting=false; sendProp(g); }
     } else { g.mesh.position.y=rest; g.vel.set(0,0,0); _restProp(g); }  // already at/below rest → settle once
   } }
+// headless test hook (2026-07-15): drive materialize/drop/physics from playwright without a headset.
+window.__propTest = { mat:(i)=>_materializeShelfBook(_shelfBooks[i]), drop:(g)=>dropProp(g),
+  grab:(g)=>grabProp(g), books:_shelfBooks, slots:()=>window._bookSlots, grabs:grabbables };
 // Release-on-rest fires ONCE per landing, not every frame. THE RE-GRAB BUG (Nix 2026-07-15): the old
 // code re-set g._cool=0.25 every frame while a prop sat at rest, so _cool never decayed to 0 → the
 // prop stayed permanently on grab-cooldown → grabNearest + _updateHover skipped it forever → "can't
@@ -5587,7 +5689,9 @@ function xrUIRaycast(){
         if(!ng && typeof _raycastShelfBook==='function'){
           const rs=_raycastShelfBook(xrUI._rc, nd>0?nd:3.5);
           const prev=_gloveShelf[i];
-          if(rs){ if(prev!==rs.sb){ _setShelfBookHi(prev,false); _setShelfBookHi(rs.sb,true); } _gloveShelf[i]=rs.sb; nd=rs.distance; ng=null; }
+          window._shelfKeep = window._shelfKeep || [0,0];
+          if(rs){ if(prev!==rs.sb){ _setShelfBookHi(prev,false); _setShelfBookHi(rs.sb,true); } _gloveShelf[i]=rs.sb; nd=rs.distance; ng=null; _shelfKeep[i]=performance.now(); }
+          else if(prev && !prev.taken && performance.now()-_shelfKeep[i] < 250){ ng=null; }   // 250ms leeway (same forgiveness as loose props)
           else { if(prev) _setShelfBookHi(prev,false); _gloveShelf[i]=null; }
         }
         // CLICKABLES (music box, videos): light the ray + highlight so the affordance shows, and
@@ -5598,6 +5702,11 @@ function xrUIRaycast(){
         }
         xrUI._rc.far = Infinity;
       }
+      // SELECTION FORGIVENESS (Alyx/HIGGS leeway, Nix-approved 2026-07-15): losing the ray does not
+      // instantly drop the target — it survives 250 ms, so hand tremor mid-grip doesn't steal grabs.
+      window._gloveKeep = window._gloveKeep || [0,0];
+      if(ng){ _gloveKeep[i] = performance.now(); }
+      else if(gv && !(gv._cool>0) && !gv.carrying && performance.now()-_gloveKeep[i] < 250){ ng = gv; }
       if(gv !== ng){ if(gv && gv.mat && gv.mat.emissive) gv.mat.emissive.setHex(0x000000);
         if(ng && ng.mat && ng.mat.emissive) ng.mat.emissive.setHex(0x3a2f18); _gloveHover[i]=ng; }
       const anyTarget = ng || _gloveShelf[i] || ngClick;
@@ -5951,6 +6060,7 @@ function cachedCreds(q){
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
     window.__msgTally = window.__msgTally || {};             // headless/live debug: what actually arrives
     window.__msgTally[m.t] = (window.__msgTally[m.t]||0) + 1;
+    if(m.t === 'shelfReturn' && window.__handleShelfReturn){ window.__handleShelfReturn(m); return; }
     if(m.t === 'welcome'){ myNet = m.id; myRole = m.role || 'visitor';
       _everWelcomed = true;                                    // accepted: drop the auth veil, reveal the world
       try{ const _wc=localStorage.getItem('porch.wristcal');   // measured wrist cal phones home (2026-07-10):
@@ -6988,11 +7098,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2aa511a-d08f3077).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 4fb2bc6-42b1bb71).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '2aa511a-d08f3077';
+    const MY_BUILD = '4fb2bc6-42b1bb71';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
