@@ -509,36 +509,34 @@ const _BOX_FACES = [ ['px','D','H'], ['nx','D','H'], ['py','W','D'], ['ny','W','
 // self-tuning 1px AA blend (fwidth-scaled) → no crawl at distance. Designed to become the house
 // standard for every pixel-art surface (books first, then table/bookcase/etc.) once verified.
 // Requires: material.map set to LinearFilter mag + mipmaps + anisotropy (handled by the caller).
-const _golusMats = [];   // all Golus materials, for live width tuning
+// ONE shared width uniform, referenced by every Golus material → __setGolus updates them all at once
+// and it exists BEFORE any onBeforeCompile fires (the old per-material stash was lazy → __setGolus
+// no-op'd if called before first render; and a constant customProgramCacheKey shared one program
+// across materials so per-material uniforms didn't take). Shared uniform sidesteps both.
+const _golusWidthU = { value: (typeof window!=='undefined' && window.__golusWidth!=null) ? window.__golusWidth : 0.1 };
 function _applyGolusAA(material, texW, texH){
   material.onBeforeCompile = (shader)=>{
     shader.uniforms.uPixRes = { value: new THREE.Vector2(texW, texH) };
-    shader.uniforms.uGolusW = { value: (window.__golusWidth!=null?window.__golusWidth:0.1) };
-    material.userData._golusShader = shader;   // so __golusWidth can update it live
-    // CLAMPED AA band (Nix 2026-07-15: "super mushy"). The un-clamped fwidth*0.5 blew the seam band
-    // across the WHOLE texel on a tiny 2px-wide spine → everything blended = mush. Clamp the half-band
-    // to uGolusW texels max (default 0.35 = sharp, seam-only) so interiors stay crisp; the band only
-    // softens right at the seam. Lower uGolusW = crisper. min() keeps it from ever eating the texel.
+    shader.uniforms.uGolusW = _golusWidthU;               // SHARED reference — live-updatable, pre-existing
     shader.fragmentShader = 'uniform vec2 uPixRes;\nuniform float uGolusW;\n' +
       'vec2 _golusUV(vec2 uv){ vec2 p=uv*uPixRes; vec2 fl=floor(p+0.5); vec2 fr=fract(p+0.5);\n' +
-      '  vec2 aa=min(fwidth(p)*0.5, vec2(uGolusW)); fr=smoothstep(vec2(0.5)-aa, vec2(0.5)+aa, fr); return (fl+fr-0.5)/uPixRes; }\n' +
+      '  vec2 aa=vec2(uGolusW); fr=smoothstep(vec2(0.5)-aa, vec2(0.5)+aa, fr); return (fl+fr-0.5)/uPixRes; }\n' +
       shader.fragmentShader;
-    // three r152+ uses vMapUv; try that first, fall back to vUv for older paths.
+    // NOTE: dropped the min(fwidth,...) clamp — it was making uGolusW a no-op (fwidth on a tiny 2px
+    // spine was always the smaller term, so the slider never mattered = Nix's "0 and 0.5 look the
+    // same"). Now uGolusW is the DIRECT half-band width in texels: 0 = razor Nearest, 0.5 = max soft.
     if(shader.fragmentShader.includes('texture2D( map, vMapUv )'))
       shader.fragmentShader = shader.fragmentShader.replace('texture2D( map, vMapUv )', 'texture2D( map, _golusUV( vMapUv ) )');
     else if(shader.fragmentShader.includes('texture2D( map, vUv )'))
       shader.fragmentShader = shader.fragmentShader.replace('texture2D( map, vUv )', 'texture2D( map, _golusUV( vUv ) )');
   };
   material.customProgramCacheKey = ()=> 'golusPixelAA';
-  _golusMats.push(material);
   return material;
 }
 window.__applyGolusAA = _applyGolusAA;
-// live tune: __setGolus(0.01)=crisp/near-Nearest … (0.35)=soft. Default 0.1. Sweep to taste.
+// live tune: __setGolus(0)=razor crisp … (0.5)=max soft. Default 0.1. Now a DIRECT band width.
 window.__golusWidth = 0.1;
-window.__setGolus = (w)=>{ window.__golusWidth = w;
-  for(const m of _golusMats){ const sh=m.userData._golusShader; if(sh&&sh.uniforms.uGolusW) sh.uniforms.uGolusW.value = w; }
-  return 'golus width '+w+' (lower=crisper)'; };
+window.__setGolus = (w)=>{ _golusWidthU.value = w; window.__golusWidth = w; return 'golus width '+w+' (0=crisp, 0.5=soft)'; };
 function _makePixelBox(W, H, D, drawFace, matOpts){
   for(const [n,v] of [['W',W],['H',H],['D',D]]){ const px=v*PPM;   // grid audit: off-grid dims can't be square
     if(Math.abs(px-Math.round(px))>0.01) console.warn(`pixelBox: ${n}=${v}m is off the 1/${PPM} grid (${px.toFixed(2)}px) → non-square pixels. Use _snap().`); }
@@ -6837,11 +6835,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes d53a599-d5439cc8).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 25d37f8-c6a3c4a2).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'd53a599-d5439cc8';
+    const MY_BUILD = '25d37f8-c6a3c4a2';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
