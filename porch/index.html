@@ -683,14 +683,16 @@ function applyAA(){
   renderer.setPixelRatio(Math.min(DPR * k, 8));        // desktop: supersample, clamped so we don't melt
   renderer.xr.setFramebufferScaleFactor(k);            // VR: consumed at NEXT session start (spec: cannot change while presenting)
   window.__lastFBScale = k;
-  // VERIFIED (three.js WebXRManager source, 2026-07-15): the XR framebuffer scale is IMMUTABLE while
-  // presenting — a hard WebXR-spec constraint, not a three limitation. three warn()s and no-ops if you
-  // call it mid-session. So to change it in VR we must END + RE-ENTER the session (the only real path;
-  // VRChat can do live because it's not three). If in VR, offer the restart.
-  if(renderer.xr.isPresenting && window.__restartXRForScale) window.__restartXRForScale();
+  // Scale is IMMUTABLE while presenting (WebXR spec; three warn+noops mid-session). The auto session-
+  // restart tried here 2026-07-15 STRANDED the VRButton state machine (Nix: in VR but button says
+  // "Enter VR", can't exit) — manual end()+re-request bypasses what the button listens to. So: NO
+  // auto-restart. Change-in-VR just queues the value for the next session + tells her.
+  if(renderer.xr.isPresenting && typeof dbg==='function')
+    dbg('vr','sharpness '+k+'× queued — exit & re-enter VR to apply (cannot change while presenting)','k');
 }
 aaBox.addEventListener('change', applyAA);
-// Restart the XR session so a new framebuffer scale takes effect (the only spec-legal way to change it).
+// ⚠ MANUAL console tool only — KNOWN BUG: strands the VRButton state machine ("Enter VR" while
+// presenting, can't exit — Nix 2026-07-15). No longer auto-called; prefer exit+re-enter by hand.
 window.__restartXRForScale = async ()=>{
   try{ const s=renderer.xr.getSession(); if(!s) return 'not in VR';
     if(typeof dbg==='function') dbg('vr','restarting XR for new scale '+ (window.__lastFBScale||'?') +'×…','k');
@@ -6888,11 +6890,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes c08c655-249531a8).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2aa0762-889c9c15).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'c08c655-249531a8';
+    const MY_BUILD = '2aa0762-889c9c15';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
