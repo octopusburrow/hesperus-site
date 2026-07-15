@@ -532,9 +532,25 @@ function _applyGolusAA(material, texW, texH){
     // UV wrapped. Count replacements and warn loudly if 0 so this can never silently die again.
     let _golusHits = 0;
     if(shader.fragmentShader.includes('#include <map_fragment>')){
-      const chunk = THREE.ShaderChunk.map_fragment.replace(/vMapUv/g, '_golusUV( vMapUv )');
-      shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', chunk);
-      _golusHits = 1;
+      // 4-TAP SSAA fetch (crawl-lab verified 2026-07-15: temporal shimmer 3.77→3.01, ~74% of the
+      // reducible gap, vs 2.86 floor at 16-tap): supersample the SAMPLING, not the framebuffer —
+      // the runtime clamps framebuffer scale (her headset granted ~1.2× of an asked 4×) but the
+      // fragment shader is OURS. Rotated-grid ±0.25-footprint taps; ?ss1 falls back to single-tap.
+      const single = new URLSearchParams(location.search).has('ss1');
+      const tap = single
+        ? 'vec4 sampledDiffuseColor = texture2D( map, _golusUV( vMapUv ) );'
+        : 'vec2 _dx = dFdx( vMapUv ) * 0.25; vec2 _dy = dFdy( vMapUv ) * 0.25;\n'+
+          'vec4 sampledDiffuseColor = 0.25 * (\n'+
+          '  texture2D( map, _golusUV( vMapUv + _dx + _dy ) ) +\n'+
+          '  texture2D( map, _golusUV( vMapUv + _dx - _dy ) ) +\n'+
+          '  texture2D( map, _golusUV( vMapUv - _dx + _dy ) ) +\n'+
+          '  texture2D( map, _golusUV( vMapUv - _dx - _dy ) ) );';
+      const chunk = THREE.ShaderChunk.map_fragment.replace(
+        'vec4 sampledDiffuseColor = texture2D( map, vMapUv );', tap);
+      if(chunk !== THREE.ShaderChunk.map_fragment){   // replace actually landed (guards a future three upgrade renaming the line)
+        shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', chunk);
+        _golusHits = 1;
+      }
     }
     window.__golusAttached = (window.__golusAttached||0) + _golusHits;
     if(!_golusHits && typeof dbg==='function') dbg('golus','ATTACH FAILED — no <map_fragment> include; sampler NOT wrapped','e');
@@ -6890,11 +6906,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2aa0762-889c9c15).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes b6c1cd9-8a4e5a17).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '2aa0762-889c9c15';
+    const MY_BUILD = 'b6c1cd9-8a4e5a17';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
