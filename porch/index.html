@@ -4393,8 +4393,72 @@ function _solveArm(vrm, side, targetPos, targetQuat){
   _aimBone(L, targetPos, lDir); vrm.scene.updateMatrixWorld(true);
   if(targetQuat){ const cal=side==='left'?_wristCalL:_wristCalR;
     const pQi=H.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
-    H.quaternion.copy(pQi.multiply(targetQuat).multiply(cal)); }
+    H.quaternion.copy(pQi.multiply(targetQuat).multiply(cal));
+    if(side==='left') H.quaternion.multiply(_wristFixL); }   // rig-asymmetry corrective (see _wristFixL block)
 }
+// LEFT-WRIST RIG CORRECTIVE (2026-07-15 measurement study, Nix's ulnar-deviation report): the player
+// VRM's rest pose is NOT mirrored — raw hand bone frames are 20.1° apart (residual axis ≈ avatar-up:
+// exactly a yaw/ulnar deviation), arm chain 5-8°, joint placement 82-115mm asymmetric. _solveArm
+// writes NORMALIZED bones, which three-vrm composes through each side's AUTHORED rest — so perfectly
+// mirrored inputs render visibly unmirrored hands, and no grip calibration can fix it (the T-pose cal
+// maps the grip onto the rig's rest, and the LEFT REST IS the deviated thing). Fix: a corrective quat
+// post-multiplied on the left hand, FITTED empirically — __fitLeftWrist() measures the visual (raw-
+// bone, rest-relative) asymmetry between the hands and iterates the corrective until it's ~0.
+const _wristFixL = new THREE.Quaternion();
+try{ const _wf=JSON.parse(localStorage.getItem('porch.wristfixL')||'null'); if(_wf) _wristFixL.fromArray(_wf); }catch(e){}
+window.__fitLeftWrist = (iters=6)=>{
+  const vrm=window.__playerVrm; if(!vrm) return 'no vrm';
+  const h=vrm.humanoid;
+  const rL=h.getRawBoneNode('leftHand'), rR=h.getRawBoneNode('rightHand');
+  const nL=h.getNormalizedBoneNode('leftHand');
+  if(!rL||!rR||!nL) return 'bones missing';
+  const sQi=()=>vrm.scene.getWorldQuaternion(new THREE.Quaternion()).invert();
+  const refl=q=>new THREE.Quaternion(q.x,-q.y,-q.z,q.w);
+  // rest frames, scene-local, measured with the arm chain zeroed
+  for(const s of ['left','right']) for(const b of ['UpperArm','LowerArm','Hand']){
+    const n=h.getNormalizedBoneNode(s+b); if(n) n.quaternion.identity(); }
+  vrm.scene.updateMatrixWorld(true);
+  const restL=sQi().multiply(rL.getWorldQuaternion(new THREE.Quaternion()));
+  const restR=sQi().multiply(rR.getWorldQuaternion(new THREE.Quaternion()));
+  let out=null;
+  for(let i=0;i<iters;i++){
+    _solveArm(vrm,'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
+    _solveArm(vrm,'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
+    try{ vrm.humanoid.update(); }catch(e){ try{ vrm.update(0); }catch(e2){} }   // flush normalized→raw NOW (else every iteration measures a stale frame)
+    vrm.scene.updateMatrixWorld(true);
+    const qL=sQi().multiply(rL.getWorldQuaternion(new THREE.Quaternion()));
+    const qR=sQi().multiply(rR.getWorldQuaternion(new THREE.Quaternion()));
+    // ABSOLUTE mirror (2026-07-15 skin-geometry audit): the asset's LEFT HAND GEOMETRY is authored
+    // ~26.7° deviated / ~97mm displaced from the right's mirror — the rest pose itself is the bug.
+    // So don't mirror motion-from-rest (that preserves the deviated rest); force the left raw bone
+    // to the exact reflection of the right's world frame, so the skinned hand LOOKS mirrored.
+    const want=refl(qR);                                       // the raw world (scene-local) left SHOULD have
+    const err=want.clone().multiply(qL.clone().invert());      // scene-local corrective rotation
+    const a=2*Math.acos(Math.min(1,Math.abs(err.w)))*180/Math.PI;
+    out={residualDeg:+a.toFixed(3), fix:_wristFixL.toArray().map(n=>+n.toFixed(5))};
+    if(a<0.4) break;
+    const HqW=nL.getWorldQuaternion(new THREE.Quaternion());
+    const sceneQ=vrm.scene.getWorldQuaternion(new THREE.Quaternion());
+    const errW=sceneQ.clone().multiply(err).multiply(sceneQ.clone().invert());   // scene-local → world
+    const local=HqW.clone().invert().multiply(errW).multiply(HqW);               // world → H-local post-mul
+    _wristFixL.multiply(local).normalize();
+  }
+  try{ localStorage.setItem('porch.wristfixL', JSON.stringify(_wristFixL.toArray())); }catch(e){}
+  return out;
+};
+window.__solveOnce = ()=>{                        // synchronous solve+flush at current ik targets (headless harness)
+  const vrm=window.__playerVrm; if(!vrm) return false;
+  _solveArm(vrm,'right', ikHandR.getWorldPosition(new THREE.Vector3()), ikHandR.getWorldQuaternion(new THREE.Quaternion()));
+  _solveArm(vrm,'left',  ikHandL.getWorldPosition(new THREE.Vector3()), ikHandL.getWorldQuaternion(new THREE.Quaternion()));
+  try{ vrm.humanoid.update(); }catch(e){ try{ vrm.update(0); }catch(e2){} }
+  vrm.scene.updateMatrixWorld(true); return true; };
+window.__setWristFixL = (fn)=>{ if(typeof fn==='function') fn(_wristFixL); else if(fn&&fn.length===4) _wristFixL.fromArray(fn);
+  _wristFixL.normalize(); try{ localStorage.setItem('porch.wristfixL', JSON.stringify(_wristFixL.toArray())); }catch(e){}
+  return _wristFixL.toArray().map(n=>+n.toFixed(4)); };
+window.__wristAudit = ()=>{                       // how far is the LOADED left cal from mirror-of-right?
+  const m=_mirrorWristQuat(_wristCalR); const d=Math.abs(m.x*_wristCalL.x+m.y*_wristCalL.y+m.z*_wristCalL.z+m.w*_wristCalL.w);
+  return { leftVsMirrorDeg:+(2*Math.acos(Math.min(1,d))*180/Math.PI).toFixed(2),
+           fixL:_wristFixL.toArray().map(n=>+n.toFixed(4)) }; };
 // DeviceScale (Basis port step 2 — ik-verdicts lead (c), 2026-07-09): map the human's standing
 // eye height onto the avatar's, scaling tracked TARGET positions about the rig origin, so a
 // tall person in a short body doesn't float above it (nor a short person sink into it). The
@@ -7098,11 +7162,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 4fb2bc6-42b1bb71).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 6368c08-d52c9f2c).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '4fb2bc6-42b1bb71';
+    const MY_BUILD = '6368c08-d52c9f2c';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
