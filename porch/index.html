@@ -1053,51 +1053,121 @@ const _slM = new THREE.Matrix4(), _WORLD_UP = new THREE.Vector3(0,1,0);   // rol
 function _buildStarLabels(){
   if(_starLabels) { _starLabels.visible = true; return; }
   _starLabels = new THREE.Group(); scene.add(_starLabels);   // unrotated: positions are PRE-rotated
-  // rev.2 (2026-07-11): SPRITES, not troika text — troika rendered in every harness but never
-  // on Nix's client. Canvas-drawn name → SpriteMaterial: the most boring, unbreakable path in
-  // three.js. Auto-billboards, no shader derivatives, no font SDF, no lookAt loop.
-  // rev.3 refinements (Nix): smaller, sky-blue, Georgia italic (house font), magnitude tiers
-  // (bright stars → fuller labels; dim → smaller/fainter), below-horizon culled, zenith-safe offsets.
-  // rev.4 (Nix): NO italics (hard to read), primary tier back to full presence, and a SECOND
-  // BATCH — 138 dimmer named stars (stars_named2.json, HYG proper names to mag 3.6) with
-  // smaller, fainter labels underneath the classic 63.
-  const _mkLabel = (name, tier)=>{ const c=document.createElement('canvas');   // tier 0=bright named, 1=second batch
-    const px = tier ? 30 : 44, pad=12; const ctx=c.getContext('2d');
-    const font = `${px}px Georgia, serif`; ctx.font=font;
-    const w=Math.ceil(ctx.measureText(name).width)+pad*2; c.width=w; c.height=px+pad*2;
-    const x=c.getContext('2d'); x.font=font;
-    x.fillStyle = tier ? 'rgba(138,164,200,0.72)' : 'rgba(148,175,214,0.80)';   // cool sky blue (dim tier brightened, Nix rev.5)
-    x.textBaseline='middle'; x.shadowColor='rgba(0,0,0,0.75)'; x.shadowBlur=5;
-    x.fillText(name, pad, c.height/2);
-    const tx=new THREE.CanvasTexture(c); tx.colorSpace=THREE.SRGBColorSpace; tx.anisotropy=4;
-    // ROLL-LOCKED BILLBOARD (Nix 2026-07-15): was a Sprite, which auto-billboards but gives NO roll
-    // control → in VR the labels tilt relative to the horizon as the head rolls. A Plane + a world-up
-    // lookAt each frame keeps them level with the HORIZON (see reference_billboard_roll_lock.md).
-    const SC = tier ? 0.12*2 : 0.24;
-    const sp=new THREE.Mesh(new THREE.PlaneGeometry(c.width*SC, c.height*SC),
-      new THREE.MeshBasicMaterial({map:tx, transparent:true, depthTest:false, fog:false, opacity: tier?0.9:1}));
-    sp.userData.billboard=true; sp.renderOrder=3; return sp; };
-  const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
-  let _built = 0;
-  const _place = (list, tier)=>{
-    for(const s of list){
-      if(s.n === 'Sol') continue;                          // no Sun label in the night sky
-      const wx = (s.x*cy + s.z*sy)*R, wy = s.y*R, wz = (-s.x*sy + s.z*cy)*R;   // rotate into world
-      if(wy < 4) continue;                                 // below the horizon: not our sky tonight
-      const sp = _mkLabel(s.n, tier);
-      // zenith-safe offset: push the label along the LOCAL 'sky north' tangent, not raw +y —
-      // near the pole raw +y sat the label ON its star (Polaris/Kochab, Nix).
-      const dir = new THREE.Vector3(wx,wy,wz).normalize();
-      let off = new THREE.Vector3(0,1,0).addScaledVector(dir, -dir.y);   // up projected onto the sky sphere
-      if(off.lengthSq() < 0.05) off.set(1,0,0).addScaledVector(dir, -dir.x);  // zenith fallback: east-ish
-      off.normalize();
-      sp.position.set(wx, wy, wz).addScaledVector(off, tier ? 8 : 11);
-      _starLabels.add(sp); _built++;
+  // rev.5 (Nix 2026-07-15, "no million draw calls, no per-label atlas — fonts and vector math"):
+  // HAND-ROLLED SDF TEXT. One runtime-generated FONT-SDF atlas (50 glyphs, Georgia), ONE merged
+  // BufferGeometry for every label, ONE draw call. Billboarding is vertex-shader math with the
+  // roll-lock built in (world-up frame → labels stay level with the horizon; see
+  // reference_billboard_roll_lock.md). SDF + fwidth smoothstep = screen-space-perfect AA at any
+  // distance — calm in VR where raw vector triangles would shimmer. No troika (it never rendered
+  // on Nix's client); the only texture is the small glyph atlas. History: rev.2 sprites (113 draw
+  // calls + 113 canvases), rev.4 second batch, rev.4.5 plane+lookAt (shipped with inverted lookAt
+  // args = 113 backfaces = "names not showing", fixed then retired same day by this rework).
+  const CELL=64, FPX=46, SPREAD=8;                        // atlas cell px, font px, sdf spread px
+  const _sdfAtlas=(charset)=>{
+    const cols=Math.ceil(Math.sqrt(charset.length)), rows=Math.ceil(charset.length/cols);
+    const W=cols*CELL, H=rows*CELL;
+    const c=document.createElement('canvas'); c.width=W; c.height=H; const x=c.getContext('2d');
+    x.font=FPX+'px Georgia, serif'; x.textBaseline='middle'; x.textAlign='center'; x.fillStyle='#fff';
+    const meta={};
+    charset.forEach((ch,i)=>{ const cx=(i%cols)*CELL, cy=Math.floor(i/cols)*CELL;
+      x.fillText(ch, cx+CELL/2, cy+CELL/2);
+      meta[ch]={ u0:(i%cols)/cols, v0:Math.floor(i/cols)/rows, du:1/cols, dv:1/rows,
+                 adv:x.measureText(ch).width }; });
+    const img=x.getImageData(0,0,W,H).data;
+    const inside=new Uint8Array(W*H);
+    for(let i=0;i<W*H;i++) inside[i]=img[i*4+3]>127?1:0;
+    const sdf=x.createImageData(W,H);
+    for(let py=0;py<H;py++) for(let px=0;px<W;px++){
+      const me=inside[py*W+px]; let best=SPREAD;
+      for(let dy=-SPREAD;dy<=SPREAD;dy++){ const yy=py+dy; if(yy<0||yy>=H) continue;
+        for(let dx=-SPREAD;dx<=SPREAD;dx++){ const xx=px+dx; if(xx<0||xx>=W) continue;
+          if(inside[yy*W+xx]!==me){ const d=Math.sqrt(dx*dx+dy*dy); if(d<best) best=d; } } }
+      const signed=me? best : -best;                       // + inside, − outside
+      const v=Math.round(255*(0.5 + 0.5*signed/SPREAD));
+      const o=(py*W+px)*4; sdf.data[o]=sdf.data[o+1]=sdf.data[o+2]=255; sdf.data[o+3]=Math.max(0,Math.min(255,v));
     }
-    window.__starLabelCount = _built;
-    if(typeof dbg==='function') dbg('stars', `labels: ${_built} above horizon (tier${tier} added)`, 'k'); };
-  fetch('./assets/stars_named.json').then(r=>r.json()).then(l=>_place(l, 0)).catch(e=>console.warn('star labels failed', e));
-  fetch('./assets/stars_named2.json').then(r=>r.json()).then(l=>_place(l, 1)).catch(()=>{});   // second batch: best-effort
+    x.putImageData(sdf,0,0);
+    const tex=new THREE.CanvasTexture(c); tex.minFilter=THREE.LinearFilter; tex.magFilter=THREE.LinearFilter;
+    tex.generateMipmaps=false;                             // SDF + fwidth does its own AA; mips would blur the field
+    tex.flipY=false;                                       // keep canvas row order: v0 measured from canvas TOP (flipY scrambles multi-row atlases)
+    return {tex, meta};
+  };
+  const R = 420, ry = 5.0909, cy = Math.cos(ry), sy = Math.sin(ry);   // match the starfield's Y-spin
+  Promise.all([
+    fetch('./assets/stars_named.json').then(r=>r.json()),
+    fetch('./assets/stars_named2.json').then(r=>r.json()).catch(()=>[]),
+  ]).then(([l0,l1])=>{
+    const charset=[...new Set((l0.concat(l1)).flatMap(s=>[...s.n]))].filter(ch=>ch!==' ');
+    const {tex, meta}=_sdfAtlas(charset);
+    const pivots=[], locals=[], uvs=[], fades=[], idx=[];
+    const SCALE = 0.24*(1/FPX)*44;                          // tier-0 world units per font px (matches old 44px×0.24 look)
+    const addLabel=(name, tier, px_, py_, pz_)=>{
+      const s = tier ? 0.55 : 1.0;                          // tier-1: smaller
+      const fade = tier ? 0.62 : 0.85;
+      let w=0; for(const ch of name) w += ch===' ' ? FPX*0.32 : (meta[ch]?meta[ch].adv:FPX*0.5);
+      let cxp = -w/2;
+      for(const ch of name){
+        if(ch===' '){ cxp += FPX*0.32; continue; }
+        const m=meta[ch]; if(!m){ cxp += FPX*0.5; continue; }
+        const base=pivots.length/3;
+        // glyph quad spans the full CELL (glyph centered in it) so SDF spread has room
+        const gx0=(cxp + m.adv/2 - CELL/2)*SCALE*s, gx1=gx0 + CELL*SCALE*s;
+        const gy0=-CELL/2*SCALE*s, gy1=CELL/2*SCALE*s;
+        for(const [lx,ly,u,v] of [[gx0,gy0,m.u0,m.v0+m.dv],[gx1,gy0,m.u0+m.du,m.v0+m.dv],
+                                   [gx1,gy1,m.u0+m.du,m.v0],[gx0,gy1,m.u0,m.v0]]){
+          pivots.push(px_,py_,pz_); locals.push(lx,ly); uvs.push(u,v); fades.push(fade); }
+        idx.push(base,base+1,base+2, base,base+2,base+3);
+        cxp += m.adv;
+      } };
+    let _built=0;
+    const _place=(list, tier)=>{
+      for(const s of list){
+        if(s.n === 'Sol') continue;
+        const wx=(s.x*cy + s.z*sy)*R, wy=s.y*R, wz=(-s.x*sy + s.z*cy)*R;
+        if(wy < 4) continue;
+        // zenith-safe offset (Nix: raw +y sat labels ON Polaris/Kochab)
+        const dir=new THREE.Vector3(wx,wy,wz).normalize();
+        let off=new THREE.Vector3(0,1,0).addScaledVector(dir,-dir.y);
+        if(off.lengthSq()<0.05) off.set(1,0,0).addScaledVector(dir,-dir.x);
+        off.normalize();
+        addLabel(s.n, tier, wx+off.x*(tier?8:11), wy+off.y*(tier?8:11), wz+off.z*(tier?8:11));
+        _built++;
+      } };
+    _place(l0,0); _place(l1,1);
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('aPivot', new THREE.Float32BufferAttribute(pivots,3));
+    g.setAttribute('aLocal', new THREE.Float32BufferAttribute(locals,2));
+    g.setAttribute('uv',     new THREE.Float32BufferAttribute(uvs,2));
+    g.setAttribute('aFade',  new THREE.Float32BufferAttribute(fades,1));
+    g.setIndex(idx);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(pivots.length),3)); // dummy (shader ignores)
+    g.boundingSphere=new THREE.Sphere(new THREE.Vector3(0,0,0), R+40);   // pivots live far out; never cull
+    const mat=new THREE.ShaderMaterial({ transparent:true, depthTest:false, depthWrite:false, fog:false,
+      uniforms:{ uAtlas:{value:tex} },
+      vertexShader:`attribute vec3 aPivot; attribute vec2 aLocal; attribute float aFade;
+        varying vec2 vUv; varying float vFade;
+        void main(){ vUv=uv; vFade=aFade;
+          vec3 pivot=(modelMatrix*vec4(aPivot,1.0)).xyz;
+          // roll-locked billboard in the shader: world-up frame → level with the horizon always
+          vec3 f=normalize(cameraPosition - pivot);
+          vec3 r=normalize(cross(vec3(0.0,1.0,0.0), f));   // screen-right (faces verified); the mirror was UV flipY, not this
+          vec3 u=cross(f, r);
+          vec3 wp=pivot + r*aLocal.x + u*aLocal.y;
+          gl_Position=projectionMatrix*viewMatrix*vec4(wp,1.0); }`,
+      fragmentShader:`uniform sampler2D uAtlas; varying vec2 vUv; varying float vFade;
+        void main(){ float d=texture2D(uAtlas, vUv).a;
+          float w=max(fwidth(d), 0.004);
+          float a=smoothstep(0.5-w, 0.5+w, d);              // crisp core, screen-space AA
+          float halo=smoothstep(0.32-w, 0.5, d)*0.55;       // soft dark backing (readability vs stars)
+          vec3 ink=vec3(0.58,0.686,0.839);                  // cool sky blue (house label color)
+          gl_FragColor=vec4(mix(vec3(0.0), ink, a), max(a, halo)*vFade);
+          if(gl_FragColor.a<0.01) discard; }`
+    });
+    const mesh=new THREE.Mesh(g, mat); mesh.renderOrder=3; mesh.frustumCulled=false;
+    _starLabels.add(mesh);
+    window.__starLabelCount=_built;
+    if(typeof dbg==='function') dbg('stars', `labels: ${_built} above horizon — 1 draw call, SDF atlas ${tex.image.width}×${tex.image.height}`, 'k');
+  }).catch(e=>console.warn('star labels failed', e));
 }
 function setStarNames(on){ if(on) _buildStarLabels(); else if(_starLabels) _starLabels.visible = false; }
 window.__setStarNames = setStarNames;
@@ -7162,11 +7232,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 6368c08-d52c9f2c).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 0e2fb48-bd4d4f09).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '6368c08-d52c9f2c';
+    const MY_BUILD = '0e2fb48-bd4d4f09';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -7973,16 +8043,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   { const cp = camera.getWorldPosition(_skyPegV);
     sky.position.set(cp.x, 0, cp.z);
     if(window.__stars) __stars.position.set(cp.x, 0, cp.z);
-    if(_starLabels){ _starLabels.position.set(cp.x, 0, cp.z);
-      // ROLL-LOCKED billboard (Nix 2026-07-15): labels are Planes now (not Sprites) so we face them
-      // at the camera with WORLD-UP each frame → they stay level with the HORIZON instead of tilting
-      // with the viewer's head roll. Cheap: one lookAt per visible label, only while names are shown.
-      if(_starLabels.visible){ const camWP=camera.getWorldPosition(new THREE.Vector3());
-        for(const lbl of _starLabels.children){ if(!lbl.userData.billboard) continue;
-          const lp=lbl.getWorldPosition(_slV);
-          _slM.lookAt(lp, camWP, _WORLD_UP);                // eye=label, target=camera, up=world-up (horizon-level)
-          lbl.quaternion.setFromRotationMatrix(_slM); } }
-    }
+    if(_starLabels) _starLabels.position.set(cp.x, 0, cp.z);   // billboarding now lives in the SDF label shader (roll-locked there); no per-frame CPU loop
   }
   if(residentMixer) residentMixer.update(dt);
   if(window.__procTick) window.__procTick();          // procedural emote overwrites idle on its bones (post-mixer)
