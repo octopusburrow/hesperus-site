@@ -1502,7 +1502,20 @@ function _propHoldUpdate(dt){                          // glue carried props to 
       const ikH = hand==='left' ? ikHandL : ikHandR;
       const hp = ikH.getWorldPosition(new THREE.Vector3());
       const hq = ikH.getWorldQuaternion(new THREE.Quaternion());
-      const p = hp.clone(); if(g.offset) p.add(g.offset.clone().applyQuaternion(hq));   // offset now hand-relative, so it rotates with the palm
+      // GRIP→PALM offset (Nix 2026-07-15: object sits at the WRIST centroid, not the palm). The OpenXR
+      // grip pose is at the controller-handle centroid ≈ your wrist; a held object lives forward in the
+      // fingers. VRChat et al ship a ~5-9cm grip→palm offset. PLUS: for a big object, push it further
+      // out by ~half its size along the palm-forward axis so it rests IN the hand instead of engulfing
+      // you (a crude stand-in until real collision boxes — see throwing-physics note). Live-tunable.
+      const PT = window.__palmTune || (window.__palmTune =
+        JSON.parse(localStorage.getItem('porch.palmTune')||'null') || {fwd:0.07, down:0.02});
+      window.__savePalmTune = window.__savePalmTune || (()=>{ localStorage.setItem('porch.palmTune', JSON.stringify(window.__palmTune)); return 'saved '+JSON.stringify(window.__palmTune); });
+      const s = hand==='left' ? -1 : 1;                  // palm-forward is handed like the wrist offset
+      // hand-local axes: palm-forward ≈ local -Z (toward fingers), palm-down ≈ local -Y
+      const sizeBump = g.hh ? Math.min(g.hh, 0.12) : 0;  // half-height of the prop, capped, so giants sit out not through you
+      const palmOff = new THREE.Vector3(0, -PT.down, -(PT.fwd + sizeBump)).applyQuaternion(hq);
+      const p = hp.clone().add(palmOff);
+      if(g.offset) p.add(g.offset.clone().applyQuaternion(hq));   // + the grab-time in-hand offset, hand-relative
       if(g.rotOffset){ g.mesh.quaternion.copy(hq).multiply(g.rotOffset); }               // rotate with the IK hand
       _trackVel(g,p,dt);
       if(g._fly){                                     // #17: glide the laser-grabbed prop into the hand
@@ -5518,7 +5531,12 @@ function _radialTick(){
       let gi = 1; const srcs = renderer.xr.getSession() ? [...renderer.xr.getSession().inputSources] : [];
       const ri = srcs.findIndex(s=>s.handedness==='right'); if(ri >= 0) gi = ri;
       const grip=renderer.xr.getControllerGrip(gi);
-      if(g.parent!==grip){ grip.add(g); g.position.set(0,0.07,-0.025); }   // 2× CLOSER to the hand (Nix 2026-07-15: still too far) — was 0.14/-0.05
+      if(g.parent!==grip){ grip.add(g);
+        // ANCHOR AT THE THUMB (Nix 2026-07-15): the thumbstick is the digit making the choice, so the
+        // ring feels more natural floating over the thumb (up + slightly back on the controller) than
+        // centered on the hand. Tunable via __radialAnchor.
+        const RA = window.__radialAnchor || {x:0, y:0.05, z:0.01};
+        g.position.set(RA.x, RA.y, RA.z); }
       // TOP-UP billboard (Nix 2026-07-14: "billboarding strangely — top always up relative to the
       // headset"). Original known-good orientation: lookAt(eye=camera, target=group, world-up), used
       // as the group's own rotation, then de-parented from the grip's rotation. The ONLY change vs the
@@ -6745,11 +6763,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 13574cc-d03ad8e7).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 731c1ca-824e680c).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '13574cc-d03ad8e7';
+    const MY_BUILD = '731c1ca-824e680c';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -7657,8 +7675,12 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       // per-controller offsets. Live-tunable: window.__handTune = {dy, dz, roll} (m, m, rad);
       // dy +up, dz -toward palm, roll +rotates inward about the grip X (thumb→index) axis.
       // Persisted per-browser once she dials it (localStorage porch.handTune via __saveHandTune).
+      // wristBack (Nix 2026-07-15): the IK wrist sits ~2in PAST the real wrist, so it ORBITS the real
+      // wrist as you rotate — bigger than hand-size variation, a systematic grip→wrist anchor error.
+      // wristBack pulls the anchor back along the grip's forward axis toward the true wrist pivot.
       const HT = window.__handTune || (window.__handTune =
-        JSON.parse(localStorage.getItem('porch.handTune')||'null') || {dy:0.03, dz:0.01, roll:0.26});
+        JSON.parse(localStorage.getItem('porch.handTune')||'null') || {dy:0.03, dz:0.01, roll:0.26, wristBack:0.05});
+      if(HT.wristBack==null) HT.wristBack = 0.05;
       window.__saveHandTune = window.__saveHandTune || (()=>{ localStorage.setItem('porch.handTune', JSON.stringify(window.__handTune)); return 'saved '+JSON.stringify(window.__handTune); });
       const _htQ = new THREE.Quaternion(), _htOff = new THREE.Vector3();
       // The two grips are mirror-image frames, so the left hand is a TRUE mirror of the tuned right:
@@ -7668,7 +7690,8 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       const _applyHT = (ik, mirror)=>{ const s = mirror ? -1 : 1;
         _htQ.setFromAxisAngle(new THREE.Vector3(1,0,0), HT.roll * s);
         ik.quaternion.multiply(_htQ);
-        _htOff.set(0, HT.dy, HT.dz * s).applyQuaternion(ik.quaternion); ik.position.add(_htOff); };
+        // dy up, dz palm-ward (handed), +Z = pull the wrist anchor BACK toward the real wrist
+        _htOff.set(0, HT.dy, HT.dz * s + HT.wristBack).applyQuaternion(ik.quaternion); ik.position.add(_htOff); };
       // ?rigidhands=1 — DIAGNOSTIC (Nix 2026-07-14): bypass the HandTune offset entirely so the IK
       // hand target is the RAW grip pose — rigidly parent-constrained, "pointer as an extension of
       // the finger." If the swim/misalignment VANISHES in this mode → the offset system is the bug and
