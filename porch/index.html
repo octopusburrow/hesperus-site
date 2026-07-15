@@ -1345,7 +1345,7 @@ function sendProp(g){ const now=performance.now();
   const q=g.mesh.quaternion;
   _psend({t:'prop', pid:g.pid, x:g.mesh.position.x, y:g.mesh.position.y, z:g.mesh.position.z,
           q:[+q.x.toFixed(3),+q.y.toFixed(3),+q.z.toFixed(3),+q.w.toFixed(3)]}); }   // rotation rides along (2026-07-10)
-function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; g._shelfRest=false; claimProp(g); return g; }  // optimistic + claim; picking a shelf book clears its rest-exemption so it falls normally once thrown
+function grabProp(g){ if(!g) return null; g.carrying=true; g.vel.set(0,0,0); g._cool=0; g._shelfRest=false; g._resting=false; claimProp(g); return g; }  // optimistic + claim; clears shelf-rest exemption AND the settled flag so the next drop re-settles
 function dropProp(g){ if(!g) return; g.carrying=false; g._hy0=undefined;   // owner stays mine; propPhysics arcs it + releases on rest. _hy0: fresh rotate-with-holder baseline next grab
   if(g.isImage || g.isModel){ g.vel.set(0,0,0); g.owner=null; g._cool=0.25;   // images & 3D models don't fall — placed, not tossed
     _psend({t:'release', pid:g.pid}); return; }
@@ -1516,10 +1516,19 @@ function propPhysics(dt){
       const r2=groundHeight(g.mesh.position.x,g.mesh.position.z)+g.hh;
       if(g.mesh.position.y<=r2){ g.mesh.position.y=r2; g.vel.set(0,0,0); g.spin=null;
         const rr=Math.hypot(g.mesh.position.x,g.mesh.position.z); if(rr>WORLD_RADIUS){ g.mesh.position.x*=WORLD_RADIUS/rr; g.mesh.position.z*=WORLD_RADIUS/rr; }
-        _levelProp(g); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g); }   // rested → release ownership
-      else sendProp(g);
-    } else { g.mesh.position.y=rest; g.vel.set(0,0,0); _levelProp(g); g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g); }  // dropped in place (send final pose incl. leveled rotation)
+        _restProp(g); }   // rested → release ownership ONCE (transition, not every frame)
+      else { g._resting=false; sendProp(g); }
+    } else { g.mesh.position.y=rest; g.vel.set(0,0,0); _restProp(g); }  // already at/below rest → settle once
   } }
+// Release-on-rest fires ONCE per landing, not every frame. THE RE-GRAB BUG (Nix 2026-07-15): the old
+// code re-set g._cool=0.25 every frame while a prop sat at rest, so _cool never decayed to 0 → the
+// prop stayed permanently on grab-cooldown → grabNearest + _updateHover skipped it forever → "can't
+// pick a dropped book up again." Guarding on _resting makes it a one-shot transition.
+function _restProp(g){
+  g.vel.set(0,0,0); _levelProp(g);
+  if(g._resting) return;                                 // already settled — don't reset cooldown/owner again
+  g._resting = true; g.owner=null; g._cool=0.25; _psend({t:'release', pid:g.pid}); sendProp(g);
+}
 // authoritative owner update from the relay: grant (owner===me → keep carrying), deny/steal/free (→ let go)
 function applyOwn(pid, owner){ const g=grabbablesById[pid]||_ensureBookProp(pid); if(!g) return; g.owner=owner;
   if(owner!==myNet){ if(heldProp===g) heldProp=null; for(const h of ['left','right']) if(_heldHand[h]===g) _heldHand[h]=null; g.carrying=false; } }
@@ -6677,13 +6686,18 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    let baseline=null;
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes f8a1965-d031444e).
+    // Comparing THIS against live version.json catches a stale page on COLD load — the old code
+    // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
+    // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
+    const MY_BUILD = 'f8a1965-d031444e';
+    let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
       // by 10 min even with no-store (browser-side only). Unique query = edge cache miss.
       const r=await fetch('./version.json?ts='+Date.now(), {cache:'no-store'}); if(!r.ok) return;
       const v=(await r.json()).v; if(!v) return;
-      if(baseline===null){ baseline=v; return; }
+      if(baseline===null){ baseline=v; return; }           // fallback: un-stamped local dev → first-seen baseline
       if(v!==baseline && !document.getElementById('updBtn')){
         const b=document.createElement('button'); b.id='updBtn'; b.title='a new Porch build is live — reload';
         // slot in after the VR button (☰ | VR | pip) — measure, don't hardcode: "VR NOT SUPPORTED" is wider than "ENTER VR"
@@ -6691,7 +6705,9 @@ function remoteInEarshot(id){                                  // remote sender 
         const _pl = _vw ? Math.round(_vw.getBoundingClientRect().right) + 6 : 56;
         b.style.cssText='position:fixed;left:'+_pl+'px;top:12px;z-index:6;height:38px;padding:0 12px;cursor:pointer;border:0;border-radius:10px;background:rgba(20,26,34,.85);color:#e8dcc0;font-size:13px;font-family:Georgia,serif;box-shadow:0 2px 8px rgba(0,0,0,.4)';
         b.innerHTML='new version <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e05545;margin-left:5px;vertical-align:middle"></span>';
-        b.onclick=()=>{ const u=new URL(location.href); u.searchParams.set('v', String(Date.now())); location.href=u.toString(); };  // cache-busting reload: plain reload can re-fetch the STALE edge copy (max-age=600)
+        b.onclick=async ()=>{  // BULLETPROOF cache-busting reload: nuke any Cache-API entries + unique ?v= so the edge/browser can't serve max-age=600 stale
+          try{ if(window.caches){ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); } }catch(e){}
+          const u=new URL(location.href); u.searchParams.set('v', String(Date.now())); location.href=u.toString(); };
         document.body.appendChild(b);
       } }catch(e){} };
     check(); setInterval(check, 60000);
