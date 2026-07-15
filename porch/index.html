@@ -180,13 +180,14 @@
     <option value="2" selected>high</option>
     <option value="2.5">ultra</option>
     <option value="3">max</option>
-    <option value="4">insane (VR crawl-killer)</option>
+    <option value="4">insane (desktop only — VR is browser-capped)</option>
   </select></label>
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
-  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
+  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12) -->
+  <label class="mrow"><span>✦ star size</span><input type="range" id="starSize" min="50" max="250" value="100" style="width:120px" title="star size (per-mode default ×%)"></label><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
@@ -514,8 +515,9 @@ const _BOX_FACES = [ ['px','D','H'], ['nx','D','H'], ['py','W','D'], ['ny','W','
 // and it exists BEFORE any onBeforeCompile fires (the old per-material stash was lazy → __setGolus
 // no-op'd if called before first render; and a constant customProgramCacheKey shared one program
 // across materials so per-material uniforms didn't take). Shared uniform sidesteps both.
-const _golusWidthU = { value: (typeof window!=='undefined' && window.__golusWidth!=null) ? window.__golusWidth : 0.06 }; // 0.1→0.06 (Nix in-headset 2026-07-15: "dial it back a little more" — crisper, keep the calm)
+const _golusWidthU = { value: (typeof window!=='undefined' && window.__golusWidth!=null) ? window.__golusWidth : 0.05 }; // 0.1→0.06→0.05 (Nix in-headset 2026-07-15, two rounds: crisper, keep the calm)
 function _applyGolusAA(material, texW, texH){
+  material.userData._golusAtlas = [texW, texH];   // survives Material.clone() (which does NOT copy onBeforeCompile) — prop spawn re-injects from this
   material.onBeforeCompile = (shader)=>{
     shader.uniforms.uPixRes = { value: new THREE.Vector2(texW, texH) };
     shader.uniforms.uGolusW = _golusWidthU;               // SHARED reference — live-updatable, pre-existing
@@ -560,7 +562,7 @@ function _applyGolusAA(material, texW, texH){
 }
 window.__applyGolusAA = _applyGolusAA;
 // live tune: __setGolus(0)=razor crisp … (0.5)=max soft. Default 0.1. Now a DIRECT band width.
-window.__golusWidth = 0.1;
+window.__golusWidth = _golusWidthU.value;   // mirror the uniform (was a hardcoded 0.1 that contradicted the real default)
 window.__setGolus = (w)=>{ _golusWidthU.value = w; window.__golusWidth = w; return 'golus width '+w+' (0=crisp, 0.5=soft)'; };
 function _makePixelBox(W, H, D, drawFace, matOpts){
   for(const [n,v] of [['W',W],['H',H],['D',D]]){ const px=v*PPM;   // grid audit: off-grid dims can't be square
@@ -593,7 +595,9 @@ function _makePixelBox(W, H, D, drawFace, matOpts){
   // re-samples with head-motion-dependent offsets EVERY FRAME → shimmer at any resolution. Golus gives
   // bilinear-smooth edges exactly ~1px wide so the compositor has resampleable content. Needs BILINEAR
   // (not Nearest) mag + mips; the shader (injected below) squeezes the blend to a band at texel seams.
-  const golus = (typeof location!=='undefined') && !new URLSearchParams(location.search).has('nogolus') && (matOpts && matOpts._pixelAA);
+  // 2026-07-15 (Nix, post-headset-verdict "a million times better"): Golus is now the HOUSE DEFAULT
+  // for every _makePixelBox surface (books, oak boards, table, bookcase). Opt OUT with _pixelAA:false.
+  const golus = (typeof location!=='undefined') && !new URLSearchParams(location.search).has('nogolus') && !(matOpts && matOpts._pixelAA===false);
   tex.magFilter = golus ? THREE.LinearFilter : THREE.NearestFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -697,28 +701,22 @@ const DPR = devicePixelRatio;
 function applyAA(){
   const k = parseFloat(aaBox.value) || 1;
   renderer.setPixelRatio(Math.min(DPR * k, 8));        // desktop: supersample, clamped so we don't melt
-  renderer.xr.setFramebufferScaleFactor(k);            // VR: consumed at NEXT session start (spec: cannot change while presenting)
+  // VR: STILL SET but with honest expectations (Chromium source, 2026-07-15): the browser clamps
+  // every page request to max(nativeFbScale, 1.0). On the Windows/OpenXR path native==1.0, so
+  // values >1 are SILENTLY IGNORED — VR supersampling from the page is architecturally impossible
+  // there (measured: asked 4×, granted 1× recommended; __fbInfo().nativeFbScale is the ceiling).
+  // We keep the call because on runtimes where native>1 it grants up to native. The real VR
+  // sharpness levers are (a) the runtime's own res % (SteamVR per-app/global — needs full browser
+  // restart, crbug 40859047) and (b) our in-shader 4-tap SSAA, which no one can clamp.
+  renderer.xr.setFramebufferScaleFactor(k);            // consumed at NEXT session start; capped at nativeFbScale
   window.__lastFBScale = k;
-  // Scale is IMMUTABLE while presenting (WebXR spec; three warn+noops mid-session). The auto session-
-  // restart tried here 2026-07-15 STRANDED the VRButton state machine (Nix: in VR but button says
-  // "Enter VR", can't exit) — manual end()+re-request bypasses what the button listens to. So: NO
-  // auto-restart. Change-in-VR just queues the value for the next session + tells her.
   if(renderer.xr.isPresenting && typeof dbg==='function')
-    dbg('vr','sharpness '+k+'× queued — exit & re-enter VR to apply (cannot change while presenting)','k');
+    dbg('vr','sharpness '+k+'× is mostly a DESKTOP knob — VR is browser-capped at __fbInfo().nativeFbScale (usually 1.0)','k');
 }
 aaBox.addEventListener('change', applyAA);
-// ⚠ MANUAL console tool only — KNOWN BUG: strands the VRButton state machine ("Enter VR" while
-// presenting, can't exit — Nix 2026-07-15). No longer auto-called; prefer exit+re-enter by hand.
-window.__restartXRForScale = async ()=>{
-  try{ const s=renderer.xr.getSession(); if(!s) return 'not in VR';
-    if(typeof dbg==='function') dbg('vr','restarting XR for new scale '+ (window.__lastFBScale||'?') +'×…','k');
-    await s.end();                                     // three's sessionend fires; setFramebufferScaleFactor is already stashed
-    const ns = await navigator.xr.requestSession('immersive-vr',
-      { optionalFeatures:['local-floor','bounded-floor','hand-tracking','layers'] });
-    await renderer.xr.setSession(ns);                  // rebuilds the projection layer AT the new scaleFactor
-    return 'XR restarted at '+(window.__lastFBScale||'?')+'× — check __fbInfo()';
-  }catch(e){ if(typeof dbg==='function') dbg('vr','XR restart failed: '+e.message,'e'); return 'err '+e; }
-};
+// (__restartXRForScale + __setVRScale REMOVED 2026-07-15: both were built on the false premise that
+// a bigger scale was obtainable page-side. The restart also stranded the VRButton state machine.
+// History: git log around 2aa0762 if archaeology is ever needed.)
 applyAA();
 // VR-SPECIFIC anti-shimmer (Nix 2026-07-15: "is there a VR-specific antialias?"). Two levers beyond
 // the ctor's antialias:true (which only covers the DESKTOP framebuffer — the XR eye buffers are a
@@ -736,9 +734,6 @@ renderer.xr.addEventListener('sessionstart', ()=>{
     if(typeof dbg==='function') dbg('vr','entered VR — eye buffer '+(i.eyeBuffer||'?')+' (scale asked '+(window.__lastFBScale||'?')+'×)','k'); } }catch(e){}
 });
 window.__setFoveation = (v)=>{ try{ renderer.xr.setFoveation(v); return 'foveation '+v; }catch(e){ return 'err '+e; } };
-// VR supersample: set the framebuffer scale live-ish (takes on re-enter VR; also applied at sessionstart).
-window.__setVRScale = (k)=>{ try{ renderer.xr.setFramebufferScaleFactor(k);
-  if(aaBox){ aaBox.value=String(k); } return 'VR framebuffer scale '+k+'× (re-enter VR to apply if already in)'; }catch(e){ return 'err '+e; } };
 
 // leaving VR with a tilted/pitched headset used to strand the desktop camera at that pose —
 // level it back out on exit (keep the rig yaw, zero the head roll/pitch).
@@ -890,16 +885,17 @@ const sky = new THREE.Mesh(
         vec3 vt2 = cross(venusDir, vt1);
         float vang = atan(dot(vDir, vt2), dot(vDir, vt1));
         float adist = acos(clamp(vd, -1.0, 1.0));
-        col += vec3(1.00, 0.97, 0.90) * smoothstep(0.9999935, 0.9999985, vd) * 2.2;  // tighter, brighter core
+        // rev.5 (Nix 2026-07-15): whole evening star −40% (core, rays, halo all ×0.6 angular)
+        col += vec3(1.00, 0.97, 0.90) * smoothstep(0.9999977, 0.9999995, vd) * 2.2;  // core −40%
         // rev.3 rays (Nix): cardinal spikes (up/down/left/right) dominant, diagonals smaller.
         float card = pow(abs(cos(2.0*vang + 0.10*sin(uTime*0.5))), 40.0);
         float diag = pow(abs(sin(2.0*vang + 0.10*sin(uTime*0.5))), 52.0);
         // rev.4 (Nix 2026-07-12): cardinal rays a touch LONGER (slower falloff), halo -50% size
         // (exponent x2 = half angular radius) and -50% intensity.
         float breath = 0.75 + 0.25*sin(uTime*1.1 + vang*2.0);
-        float rays = (card * exp(-adist*130.0) + diag*0.38 * exp(-adist*175.0)) * breath;
+        float rays = (card * exp(-adist*217.0) + diag*0.38 * exp(-adist*292.0)) * breath;   // −40% ray length
         col += vec3(0.95, 0.90, 0.80) * rays * 0.85;
-        col += vec3(0.26, 0.23, 0.19) * pow(max(vd, 0.0), 3200.0) * 0.2;             // halo: half size, half strength
+        col += vec3(0.26, 0.23, 0.19) * pow(max(vd, 0.0), 8900.0) * 0.2;             // halo −40% size
         gl_FragColor = vec4(col, 1.0);
         // colorspace citizenship (mirror-brightness fix, measured thread 2026-07-10): authored values
         // are DISPLAY-space; decode to linear (exact sRGB EOTF) so the include's OETF is an identity
@@ -934,9 +930,10 @@ let _starMat = null;
     g.setAttribute('sphase', new THREE.BufferAttribute(ph,1));
     _starMat = new THREE.ShaderMaterial({
       transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, fog:false,
-      uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)} },
+      uniforms:{ uTime:{value:0}, uPx:{value:Math.min(devicePixelRatio,2)},
+        uStar:{value:1}, uBoost:{value:1} },   // per-MODE hand-tune × user slider (Nix 2026-07-15: stars read dim on desktop, right in VR — one shader, two calibrations)
       vertexShader:`attribute vec3 scolor; attribute float ssize; attribute float sphase;
-        varying vec3 vC; varying float vB; varying float vE; uniform float uTime; uniform float uPx;
+        varying vec3 vC; varying float vB; varying float vE; uniform float uTime; uniform float uPx; uniform float uStar;
         void main(){
           vec4 mv = modelViewMatrix*vec4(position,1.0);
           // ssize encodes magnitude. Brightness scales with it (magnitude made visible); saturate the
@@ -958,7 +955,7 @@ let _starMat = null;
           // raw×knee×taper stack let giants balloon then clamped them all to the same ~7-9px, so the
           // taper was invisible). Now: faint stars ~2.2px, brightest ~4.5px — a real, visible spread
           // where giants are genuinely small. uPx scales for VR/hi-dpi.
-          float target = mix(1.65, 5.6, magB) * uPx;   // variance widened ±25% (Nix 2026-07-14): faint 2.2→1.65, bright 4.5→5.6
+          float target = mix(1.65, 5.6, magB) * uPx * uStar;   // uStar = mode default × menu slider
           // ENERGY-CONSERVING SOFT POINTS (star-lab verified 2026-07-15: per-star flux flicker
           // 3.43%→2.08%, −39%): a sub-2px hard point rasterizes as 1-4 fragments depending on
           // sub-pixel position → its total light JUMPS every frame = the star swim Nix reports.
@@ -972,12 +969,12 @@ let _starMat = null;
           vE = (target/ps); vE *= vE;
           gl_PointSize = ps;
           gl_Position = projectionMatrix*mv; }`,
-      fragmentShader:`varying vec3 vC; varying float vB; varying float vE;
+      fragmentShader:`varying vec3 vC; varying float vB; varying float vE; uniform float uBoost;
         void main(){ vec2 d = gl_PointCoord - 0.5; float r2 = dot(d,d);
           // gaussian falloff (smooth derivative = calm under motion) + hot core, both flux-scaled.
           float halo = exp(-r2*14.0);
           float core = exp(-r2*44.0);
-          vec3 c = (vC + core * vB * (vec3(1.0) - vC) * 0.7) * (halo * vE * 2.78); // 1.39→2.78: 2× brightness across the whole magnitude range (Nix 2026-07-15)
+          vec3 c = (vC + core * vB * (vec3(1.0) - vC) * 0.7) * (halo * vE * 2.78 * uBoost); // 1.39→2.78: 2× brightness across the whole magnitude range (Nix 2026-07-15); uBoost = per-mode trim
           if(max(c.r,max(c.g,c.b)) < 0.004) discard;
           gl_FragColor = vec4(c, 1.0); }`
     });
@@ -988,9 +985,26 @@ let _starMat = null;
         .replace('vE = (target/ps); vE *= vE;', 'vE = 1.0;');
       _starMat.fragmentShader = _starMat.fragmentShader
         .replace('float halo = exp(-r2*14.0);', 'float halo = smoothstep(0.25, 0.0036, r2);')
-        .replace(/\* \(halo \* vE \* 2\.78\);.*$/m, '* 1.0; float a = max(halo, core*vB); c *= a;');
+        .replace(/\* \(halo \* vE \* 2\.78 \* uBoost\);.*$/m, '* 1.0; float a = max(halo, core*vB); c *= a;');
       _starMat.needsUpdate = true;
     }
+    // STAR TUNE (Nix 2026-07-15): stars read DIM/small on desktop but right-sized (slightly shimmery)
+    // in VR — different pixel densities + compositor. Hand-tuned per-mode bases (her "hard-toggle to
+    // hand-tuned values" call), × the menu slider (✦ star size, persisted) for taste on top.
+    const _STAR_BASE = { desktop:{ size:1.45, boost:1.6 }, vr:{ size:1.0, boost:1.0 } };
+    function _applyStarTune(){
+      const mode = renderer.xr.isPresenting ? 'vr' : 'desktop';
+      const slider = (parseFloat(localStorage.getItem('porchStarSize'))||100)/100;
+      _starMat.uniforms.uStar.value  = _STAR_BASE[mode].size  * slider;
+      _starMat.uniforms.uBoost.value = _STAR_BASE[mode].boost;   // brightness: mode-only (slider stays a SIZE knob)
+    }
+    window.__applyStarTune = _applyStarTune; window.__starBase = _STAR_BASE;
+    renderer.xr.addEventListener('sessionstart', _applyStarTune);
+    renderer.xr.addEventListener('sessionend', _applyStarTune);
+    const _ss = document.getElementById('starSize');
+    if(_ss){ _ss.value = parseFloat(localStorage.getItem('porchStarSize'))||100;
+      _ss.addEventListener('input', ()=>{ localStorage.setItem('porchStarSize', _ss.value); _applyStarTune(); }); }
+    _applyStarTune();
     const stars = new THREE.Points(g, _starMat); window.__stars = stars;
     // THE NORTH POLE, the night Claude was made (2026-07-10). The Porch is built so the sun
     // never rises — that IS the polar winter. So: observer at 90°N → the north celestial pole sits at
@@ -1415,11 +1429,14 @@ function _buildBookcase(){
 
 // ---- the rug (Fable's RD rug, 3×2 m) ----
 new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
-  rt.magFilter = THREE.NearestFilter; rt.minFilter = THREE.LinearMipmapLinearFilter;
+  const _rugGolus = !new URLSearchParams(location.search).has('nogolus');
+  rt.magFilter = _rugGolus ? THREE.LinearFilter : THREE.NearestFilter;   // Golus house-default (2026-07-15)
+  rt.minFilter = THREE.LinearMipmapLinearFilter;
   rt.anisotropy = renderer.capabilities.getMaxAnisotropy();
   rt.colorSpace = THREE.SRGBColorSpace;
-  const rug = new THREE.Mesh(new THREE.PlaneGeometry(3, 2),
-    new THREE.MeshStandardMaterial({map:rt, roughness:1}));
+  const _rugMat = new THREE.MeshStandardMaterial({map:rt, roughness:1});
+  if(_rugGolus) _applyGolusAA(_rugMat, rt.image.width, rt.image.height);
+  const rug = new THREE.Mesh(new THREE.PlaneGeometry(3, 2), _rugMat);
   rug.rotation.x = -Math.PI/2; rug.position.set(0, 0.012, -0.6);
   rug.receiveShadow = true; scene.add(rug);
 });
@@ -1460,6 +1477,11 @@ function _addProp(pid, mesh, hh){ mesh.castShadow=true;
   // hover-glow isolation (Nix 2026-07-12: hovering one book lit ALL its siblings): props built
   // from a shared palette material glowed together — every prop gets its OWN material instance.
   if(mesh.material && mesh.material.clone) mesh.material = mesh.material.clone();
+  // THE 3 SMEARED BOOKS (Nix screenshot 2026-07-15): Material.clone() drops onBeforeCompile, so a
+  // materialized (ever-grabbed) book lost its Golus shader but KEPT the LinearFilter map → plain
+  // bilinear smear, "looks like golus 0.5". Re-inject from the atlas tag the clone preserves.
+  if(mesh.material && mesh.material.userData && mesh.material.userData._golusAtlas && typeof _applyGolusAA==='function'){
+    const a = mesh.material.userData._golusAtlas; _applyGolusAA(mesh.material, a[0], a[1]); mesh.material.needsUpdate = true; }
   // every caster is exempt from per-cube-face culling AT CREATION (2026-07-12): the one-shot 4s
   // sweep missed late-added meshes (relay replays, async builds) — a culled caster near a cube-face
   // boundary is the binary shadow-blink signature (Nix's "8-inch shadow blinks on and off").
@@ -6941,11 +6963,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 36a79a3-9964e97e).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes ebe703e-2cc370b5).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '36a79a3-9964e97e';
+    const MY_BUILD = 'ebe703e-2cc370b5';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
