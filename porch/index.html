@@ -1750,14 +1750,13 @@ new THREE.TextureLoader().load('./assets/rug_red.png', (rt)=>{
   tableG.position.set(0, 0.014, -0.6);              // sit on the rug
   scene.add(tableG);
   _tableBox = addCollider(tableG, 'table');         // solid + gives us the tabletop height for props
-  // PHANTOM SHADOW FLICKER (Nix 2026-07-12, red-circle report): the candle is a point light with
-  // a cube shadow map — casters get frustum-culled per cube FACE, and the candle's position
-  // jitter walks the table's boards across a face boundary, popping their shadow on/off.
-  // frustumCulled=false includes them in every shadow face. Cheap: it's one table.
-  tableG.traverse(o=>{ if(o.isMesh) o.frustumCulled = false; });
-  // rev.2 (flicker survived the table-only exemption): the popping caster may not be the table
-  // at all — exempt EVERY shadow caster in the room from per-face culling. Small scene, cheap.
-  setTimeout(()=>{ scene.traverse(o=>{ if(o.isMesh && o.castShadow) o.frustumCulled = false; }); }, 4000);
+  // CULLING EXORCISMS REMOVED (perf pass 2026-07-16). History: the 07-12 phantom shadow
+  // flicker got two frustumCulled=false sweeps (table-only, then EVERY caster) before the
+  // real root cause was found — the candle's positional jitter moving the shadow light.
+  // That's fixed properly now (static `candle` casts, shadowless `candleDancer` wanders),
+  // so the cube-face culling boundaries never move and popping can't recur. The sweeps were
+  // pure leftover cost: 149 uncullable meshes × (6 shadow faces + main pass) every frame.
+  // Avatars keep frustumCulled=false individually — skinned-mesh bounds are genuinely stale.
 }
 
 // ---- physics v0: grabbable props on the table — pick up, hold, put down. Desktop: E grabs the
@@ -7978,11 +7977,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 8b9b7d5-c98d1c6e).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 1c157db-ec38f2d0).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '8b9b7d5-c98d1c6e';
+    const MY_BUILD = '1c157db-ec38f2d0';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
