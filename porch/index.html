@@ -4227,18 +4227,21 @@ window.__aimAsset = _aimAsset;                             // radial 🔧 + head
 const ACC_KINDS = ['none','shades','moon'];
 function _buildAccessory(kind){
   const g = new THREE.Group(); g.name = '_accessory';
-  if(kind === 'shades'){                                   // chunky pixel shades — house-boxy AND meme-adjacent
+  if(kind === 'shades'){                                   // BEEG aviators (Nix rev.2: "cool guys on the
+    // internet have huge glasses" — the teeny round v1 was an embarrassment to the deck)
     const dark = new THREE.MeshStandardMaterial({color:0x0a0a0d, roughness:0.25, metalness:0.35});
-    const lens = (sx)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(0.055,0.038,0.014), dark);
-      m.position.set(sx*0.036,0,0); return m; };
+    const lens = (sx)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(0.105,0.082,0.016), dark);
+      m.position.set(sx*0.062, -0.008, 0); return m; };     // tall + a little low on the face = aviator droop
     g.add(lens(-1), lens(1));
-    const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.020,0.010,0.012), dark);
-    g.add(bridge);
-    for(const sx of [-1,1]){ const arm = new THREE.Mesh(new THREE.BoxGeometry(0.012,0.010,0.085), dark);
-      arm.position.set(sx*0.062, 0.004, 0.048); g.add(arm); }
-    const glint = new THREE.Mesh(new THREE.BoxGeometry(0.014,0.008,0.002),
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.155,0.014,0.014), dark);   // the aviator brow bar
+    brow.position.set(0, 0.036, 0); g.add(brow);
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.024,0.012,0.012), dark);
+    bridge.position.set(0, 0.012, 0); g.add(bridge);
+    for(const sx of [-1,1]){ const arm = new THREE.Mesh(new THREE.BoxGeometry(0.014,0.012,0.11), dark);
+      arm.position.set(sx*0.112, 0.024, 0.06); g.add(arm); }
+    const glint = new THREE.Mesh(new THREE.BoxGeometry(0.030,0.016,0.002),
       new THREE.MeshBasicMaterial({color:0x8fb0d6}));
-    glint.position.set(-0.046, 0.010, -0.008); g.add(glint);   // the one specular pixel that sells "glass"
+    glint.position.set(-0.078, 0.016, -0.009); g.add(glint);   // bigger glass, bigger glint
   } else if(kind === 'moon'){                              // crescent halo — the resident's element, shareable
     // drawn, not lathed (rev.2: the two-arc Shape self-intersected into a full disc — a
     // waxing-gibbous halo is not the brand). Canvas circle minus offset circle = clean crescent.
@@ -8250,11 +8253,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes b5330b2-f2169b07).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2a5d1cf-28903745).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'b5330b2-f2169b07';
+    const MY_BUILD = '2a5d1cf-28903745';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
