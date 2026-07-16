@@ -154,6 +154,7 @@
 </div>
 <button id="manifestBtn" title="manifest (make things)" style="position:fixed;left:14px;bottom:248px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">✨</button>
 <button id="bodyBtn" title="avatar body" style="position:fixed;left:14px;bottom:296px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🎭</button>
+<button id="inspectBtn" title="inspect mode (I) — aim at things to identify them" style="position:fixed;left:14px;bottom:344px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🔍</button>
 <div id="bodyTray" style="position:fixed;left:66px;bottom:296px;z-index:7;display:none;background:rgba(16,19,26,0.96);border:1px solid #2f3644;border-radius:11px;padding:10px 12px;box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:Georgia,serif;color:#cbbfa4;font-size:13px">
   <div style="margin-bottom:6px;letter-spacing:0.04em">avatar body</div>
   <select id="bodySel" style="width:170px;padding:6px 8px;background:#141821;color:#e8dcc0;border:1px solid #2f3644;border-radius:7px;font-family:inherit;font-size:13px"></select>
@@ -4046,7 +4047,8 @@ let _objMenu = null;
 function _closeObjMenu(){ if(_objMenu){ _objMenu.remove(); _objMenu=null; }
   if(window._softCursor){ _softCursor.el.remove(); window._softCursor = null; } }
 addEventListener('contextmenu', e=>{
-  const g = (typeof _hoverG!=='undefined' && _hoverG) || heldProp;
+  const g = (typeof _hoverG!=='undefined' && _hoverG) || heldProp
+    || (typeof _inspectOn!=='undefined' && _inspectOn && _inspectTarget);   // label → RMB = expand into edit (Nix 2026-07-16)
   if(!g){                                                  // aimed at nothing:
     if(document.pointerLockElement){ e.preventDefault(); document.exitPointerLock(); }   // reticle → RMB = enter HUD mode (Nix 2026-07-12)
     return;                                                // HUD → default browser menu
@@ -4075,6 +4077,16 @@ addEventListener('contextmenu', e=>{
     // ^ pointerdown, NOT click (2026-07-12): the window-level close-on-pointerdown removed the menu
     // from the DOM at mousedown, so the row's click event never fired — rows had NEVER worked.
   dbg('objmenu', `open: target=${g.pid||'?'} sid=${sid||'NONE'} held=${heldProp===g}`, 'k');   // delete-bug forensics (Nix 2026-07-11: photo delete "didn't work" — this names the failing step)
+  { // INFO HEADER (inspect-mode expansion, Nix 2026-07-16): the menu IS the expanded label —
+    // same facts the hovering label shows, so both roads arrive at the same place.
+    try{ const inf = _inspectInfo(g);
+      const h = document.createElement('div');
+      h.style.cssText = 'padding:5px 14px 7px;border-bottom:1px solid rgba(203,191,164,.25);margin-bottom:3px;cursor:default';
+      h.innerHTML = '<div style="font-size:13px">'+inf.line1.replace(/</g,'&lt;')+'</div>'+
+                    '<div style="font-size:11px;color:#9aa4b4">'+inf.line2.replace(/</g,'&lt;')+'</div>';
+      m.appendChild(h);
+    }catch(e){} }
+  row(_inspectOn ? '🔍 Inspect mode: on' : '🔍 Inspect mode', ()=>window.__inspectToggle());
   row(heldProp===g ? '⬇ Put down' : '✋ Pick up', ()=>{      // TARGETED (was grab-nearest — grabbed the wrong thing)
     if(heldProp===g) __grab.grabToggleDesktop();             // holding it → toggle = drop
     else if(window.__grab && __grab.grabSpecific) __grab.grabSpecific(g); });
@@ -4112,9 +4124,89 @@ addEventListener('contextmenu', e=>{
     setTimeout(()=>addEventListener('pointerdown', _closeObjMenu, {once:true}), 0);
   }
 });
+// ---- INSPECT MODE (Nix's ask 2026-07-16): a button-toggle; whatever you AIM at gets a
+// hovering label (name + easy info). Two ways into edit: the label tells you (desktop: RMB
+// opens the object menu on the same target; VR: the 🔧 radial acts on the same aim). Agents
+// have parity by construction — the label shows exactly what {"t":"query","what":"object"}
+// returns, and every edit-menu verb is an existing wire verb (claim/prop/delobj).
+let _inspectOn = false, _inspectLbl = null, _inspectTarget = null, _inspectNext = 0;
+function _aimAsset(maxD=6){
+  // one aim rule everywhere: desktop uses the hover system's answer; VR/unlocked falls back
+  // to a head-gaze ray against all grabbable meshes (incl. owned — inspection isn't a grab).
+  if(!renderer.xr.isPresenting && _hoverG) return _hoverG;
+  _hovNDC.set(0,0); _hovRC.setFromCamera(_hovNDC, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera);
+  const pool = grabbables.filter(p=>p.mesh);
+  const hits = _hovRC.intersectObjects(pool.map(p=>p.mesh), true);
+  if(!hits.length || hits[0].distance > maxD) return null;
+  let o = hits[0].object; while(o && !pool.some(p=>p.mesh===o)) o = o.parent;
+  return pool.find(p=>p.mesh===o) || null;
+}
+function _inspectInfo(g){
+  const sid = _sidOfGrab(g) || g.pid || '?';
+  const rec = (typeof _worldLedger!=='undefined' && _worldLedger.get(sid)) || {};
+  const kind = rec.kind || (g.isImage?'image':g.isText?'text':'prop');
+  const title = rec.title || (rec.text ? '“'+String(rec.text).slice(0,26)+'”' : '') || '';
+  const box = new THREE.Box3().setFromObject(g.mesh), sz = new THREE.Vector3(); box.getSize(sz);
+  const d = g.mesh.position.distanceTo(player.position);
+  return { line1: title ? title + '  [' + sid + ']' : sid,   // built-ins: the pid IS the name (mug, d12, inkpot)
+           line2: (rec.by ? 'by ' + rec.by + ' · ' : '') + kind + ' · ' +
+                  Math.max(sz.x,sz.y,sz.z).toFixed(2) + 'm · ' + d.toFixed(1) + 'm away',
+           line3: renderer.xr.isPresenting ? '🔧 radial to edit' : 'right-click to edit' };
+}
+function _inspectLabel(){
+  if(_inspectLbl) return _inspectLbl;
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 132;
+  const tex = new THREE.CanvasTexture(cv);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.186),
+    new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false, depthWrite:false}));
+  m.renderOrder = 998; m.visible = false;
+  m.onBeforeRender = (r,s,cam)=>uprightBillboard(m, cam);
+  m.userData._cv = cv; m.userData._tex = tex;
+  scene.add(m); _inspectLbl = m; return m;
+}
+function _inspectPaint(info){
+  const cv = _inspectLbl.userData._cv, x = cv.getContext('2d');
+  x.clearRect(0,0,cv.width,cv.height);
+  x.fillStyle = 'rgba(14,18,25,0.88)';
+  x.beginPath(); x.roundRect(4,4,cv.width-8,cv.height-8,18); x.fill();
+  x.strokeStyle = 'rgba(203,191,164,0.5)'; x.lineWidth = 2; x.stroke();
+  x.fillStyle = '#e8dcc0'; x.font = '30px Georgia, serif';
+  x.fillText(info.line1, 22, 46);
+  x.fillStyle = '#9aa4b4'; x.font = '23px Georgia, serif';
+  x.fillText(info.line2, 22, 82);
+  x.fillStyle = '#7a8494'; x.font = 'italic 21px Georgia, serif';
+  x.fillText(info.line3, 22, 114);
+  _inspectLbl.userData._tex.needsUpdate = true;
+}
+window.__inspectToggle = (on)=>{
+  _inspectOn = (on!==undefined) ? !!on : !_inspectOn;
+  const b = document.getElementById('inspectBtn');
+  if(b) b.style.background = _inspectOn ? 'rgba(90,80,60,.85)' : 'rgba(20,26,34,.82)';
+  if(!_inspectOn && _inspectLbl){ _inspectLbl.visible = false; _inspectTarget = null; }
+  if(typeof dbg==='function') dbg('inspect', _inspectOn?'ON — aim at things':'off', 'k');
+  return _inspectOn ? 'inspect on' : 'inspect off';
+};
+window.__inspectTick = (now)=>{
+  if(!_inspectOn) return;
+  window.__inspectCalls = (window.__inspectCalls||0)+1;
+  if(now < _inspectNext) return; _inspectNext = now + 120;      // ~8Hz: raycasts are cheap, thrash isn't
+  window.__inspectRuns = (window.__inspectRuns||0)+1;
+  const g = _aimAsset();
+  if(!g){ if(_inspectLbl) _inspectLbl.visible = false; _inspectTarget = null; return; }
+  const lbl = _inspectLabel();
+  const box = new THREE.Box3().setFromObject(g.mesh);
+  lbl.position.set((box.min.x+box.max.x)/2, box.max.y + 0.16, (box.min.z+box.max.z)/2);
+  if(g !== _inspectTarget || now > (_inspectLbl.userData._repaint||0)){
+    _inspectPaint(_inspectInfo(g)); _inspectLbl.userData._repaint = now + 500; _inspectTarget = g; }
+  lbl.visible = true;
+};
+window.__aimAsset = _aimAsset;                             // radial 🔧 + headless tests share the aim rule
+{ const b = document.getElementById('inspectBtn'); if(b) b.addEventListener('click', ()=>window.__inspectToggle()); }
+
 addEventListener('keydown', e=>{
   if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;  // typing ≠ walking
   if(e.code==='Enter' && window.__openChat){ e.preventDefault(); window.__openChat(); return; }
+  if(e.code==='KeyI' && !e.repeat){ window.__inspectToggle(); return; }   // I = inspect mode
   if(e.code==='Backquote' && window.__toggleDbg){ e.preventDefault(); window.__toggleDbg(); return; }
   keys[e.code] = true; if(e.code==='Space') wantJump = true;
   if(e.code==='KeyB' && window.spawn){ window.spawn(_spawnKinds[_spawnI++ % _spawnKinds.length]); }
@@ -6551,6 +6643,12 @@ function _emojiTex(txt){
 // (DOM file-pickers omitted in VR as impossible-in-mode). Compass per her spec:
 // Manifest top · Emotes right · Avatars left · Controls bottom.
 const RADIAL_CATS = [
+  {key:'asset', emoji:'🔧', angle:-Math.PI/4, items:[        // top-right: asset inspect/edit (Nix 2026-07-16)
+    ['🔍', ()=>window.__inspectToggle ? __inspectToggle() : 'no inspect'],
+    ['✋', ()=>{ const g=window.__aimAsset && __aimAsset(); if(!g) return 'aim at something';
+        if(window.__grab && __grab.grabSpecific){ __grab.grabSpecific(g); return 'grab '+(g.pid||''); } return 'no grab'; }],
+    ['🗑', ()=>{ const g=window.__aimAsset && __aimAsset(); if(!g) return 'aim at something';
+        return (typeof _deleteGrab==='function') ? String(_deleteGrab(g)) : 'no delete'; }]]},
   {key:'manifest', emoji:'✨', angle:-Math.PI/2, items:[     // top
     ['✍', ()=>{ if(renderer.xr.isPresenting){ if(typeof vkbToggleText==='function') vkbToggleText(); }
         else if(window.__openTextCompose) __openTextCompose(); return 'text'; }],
@@ -7998,11 +8096,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 9d9c669-49ea4757).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes fcdb132-88bef30a).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '9d9c669-49ea4757';
+    const MY_BUILD = 'fcdb132-88bef30a';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -8820,6 +8918,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   _last = now;
   t += dt;
   if(window.__probeTick) __probeTick(t, dt);               // avatar probe lighting (candle warmth etc.)
+  if(window.__inspectTick) __inspectTick(now);             // inspect mode: label whatever's aimed at
   sky.material.uniforms.uTime.value = t;
   fenceMat.uniforms.uTime.value = t;
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
