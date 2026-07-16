@@ -267,7 +267,7 @@ const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
 // worlds-as-DATA: fetch a manifest+glTF, build a district, never run foreign code.
 const DISTRICTS = {
   porch: {cx:0,    cz:0, radius:WORLD_RADIUS, sx:1.7,  sz:1.6, sry:0},
-  void:  {cx:1000, cz:0, radius:66,           sx:1000, sz:6,   sry:0},   // yaw 0 faces −z: the wall
+  void:  {cx:1000, cz:6, radius:54,           sx:1000, sz:6,   sry:0},   // yaw 0 faces −z; radius INSIDE the dome (r=58, centered on spawn) — nobody walks through the girih (Nix 2026-07-15)
   wake:  {cx:-1000, cz:0, radius:55, sx:-1000, sz:13, sry:0, ephemeral:true},  // TIER-2: disposed on leave
 };
 const WAKE_X = -1000, WAKE_Z = 0;
@@ -1074,6 +1074,7 @@ let _starMat = null;
     // standing knobs for the current tuning arc (retired once numbers are baked):
     // (2026-07-15 evening: star size/boost/venus knobs RETIRED — Nix's numbers baked above.
     //  Wire new ones per tuning arc: __knob('label', v=>{...apply...}, {min,max,step,init}) )
+    window.__knob('first-light ground (0/1)', v=>{ if(window.__flGround) __flGround(v>0.5); }, {min:0,max:1,step:1,init:0});
     renderer.xr.addEventListener('sessionstart', _applyStarTune);
     renderer.xr.addEventListener('sessionend', _applyStarTune);
     _applyStarTune();
@@ -1293,6 +1294,39 @@ new THREE.TextureLoader().load('./assets/playa_diff.jpg', (t)=>{
   t.anisotropy = renderer.capabilities.getMaxAnisotropy();
   playaUniforms.uMap.value = t; playaUniforms.uHasMap.value = 1.0;
 });
+// FIRST-LIGHT GROUND A/B (Nix 2026-07-15: "I really like how you're doing the playa ground in
+// First Light"): __flGround(1) swaps the playa to the music video's exact recipe — full PBR
+// (albedo+rough+normal), normalScale 0.16 (her "too depth-mappy" fix), shadow-lift 0.36, low-freq
+// dust patches — lit by the actual scene lights. __flGround(0) restores the porch shader. A/B tool;
+// whichever wins gets baked.
+let _flMat = null;
+window.__flGround = function(on){
+  if(on && !_flMat){
+    const L = new THREE.TextureLoader(); const mk = (p, srgb)=>{ const t=L.load(p);
+      t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(75,75);
+      if(srgb) t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=renderer.capabilities.getMaxAnisotropy(); return t; };
+    _flMat = new THREE.MeshStandardMaterial({
+      map: mk('./assets/playa_diff.jpg', true),
+      roughnessMap: mk('./assets/ground_rough.jpg'),
+      normalMap: mk('./assets/ground_nor_gl.jpg'),
+      roughness: 1.0, metalness: 0.0, color: 0x9a9184,
+      normalScale: new THREE.Vector2(0.16, 0.16) });
+    _flMat.onBeforeCompile = (sh)=>{
+      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>',
+        `#include <map_fragment>
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.54,0.50,0.44), 0.36);          // shadow-lift (note(R))
+        float _patch = sin((vMapUv.x-0.5)*500.0*0.05)*sin((vMapUv.y-0.5)*500.0*0.045)*0.5+0.5;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62,0.57,0.48), _patch*0.5);`);  // dust patches (vMapUv: three r152+ per-map UVs)
+    };
+  }
+  // the porch shader lights ITSELF (fake candle+spec); a PBR ground needs real light. Bundle the
+  // video's dim pre-dawn hemi with the toggle so the A/B compares GROUNDS, not lighting rigs.
+  if(on && !window._flHemi){ window._flHemi = new THREE.HemisphereLight(0x2a3348, 0x35281a, 0.55); scene.add(_flHemi); }
+  if(window._flHemi) _flHemi.visible = !!on;
+  playa.material = on ? _flMat : _playaShaderMat;
+  return on ? 'First Light ground' : 'porch shader ground';
+};
+const _playaShaderMat_ref = null;   // (assigned below once the shader material exists)
 const playa = new THREE.Mesh(
   new THREE.PlaneGeometry(500, 500),
   new THREE.ShaderMaterial({
@@ -1374,6 +1408,7 @@ const playa = new THREE.Mesh(
       }`
   }));
 playa.rotation.x = -Math.PI/2; playa.position.y = -0.02;
+const _playaShaderMat = playa.material;   // the porch's own shader ground — __flGround(0) restores it
 scene.add(playa);
 
 // ---- the deck: dark planks, pixel-crisp, an island on the dust ----
@@ -2532,9 +2567,18 @@ function _ensureVoidDistrict(){
     const iw = frame.contentWindow;
     if(!iw || !iw.__fsrc || !iw.__u || !Object.keys(iw.__u).length) return false;
     try{
+      // MIRROR + POLE CAP (Nix 2026-07-15): (a) the girih covered only the upper hemisphere with a
+      // hard black seam at the equator — mirror V about the equator so both halves show the same
+      // pattern meeting seamlessly at the center; (b) looking straight up hit the sphere-UV pole
+      // singularity (stretched black streaks) — fade to deep void color at both caps, planetarium-style.
       let fs = iw.__fsrc.replace('vec2 uv=(gl_FragCoord.xy-u_res*0.5)',
-        'vec2 uv=((vec2(fract(vUv.x*2.0), vUv.y)*u_res)-u_res*0.5)');   // dome-local coords; fract(x*2) = the old repeat.x=2 wrap
+        'float _vy = 0.5 + abs(vUv.y - 0.5);\n' +                        // equator-mirrored latitude
+        '  vec2 uv=((vec2(fract(vUv.x*2.0), _vy)*u_res)-u_res*0.5)');    // fract(x*2) = the old repeat.x=2 wrap
       if(fs.indexOf('vUv') < 0) throw new Error('fragCoord anchor not found');
+      fs = fs.replace('gl_FragColor=vec4(col,1.0);',
+        'col = mix(col, vec3(0.02,0.008,0.03), smoothstep(0.90, 0.99, _vy));\n' +   // pole cap fade (both caps via mirror)
+        '  gl_FragColor=vec4(col,1.0);');
+      if(fs.indexOf('pole cap') < 0 && fs.indexOf('0.90, 0.99') < 0) throw new Error('fragColor anchor not found');
       fs = fs.replace(/\bactive\b/g, 'actv_');             // reserved word in WebGL2 (three's context)
       fs = 'varying vec2 vUv;\n' + fs;
       const uniforms = {};
@@ -2558,15 +2602,90 @@ function _ensureVoidDistrict(){
     const sh = window._districtWallShader; if(!sh) return;
     const u = frame.contentWindow && frame.contentWindow.__u; if(!u) return;
     for(const k in u){ const t = sh.uniforms[k]; if(!t) continue; const v = u[k];
-      if(k==='u_res' || k==='u_erdos') continue;
+      if(k==='u_res' || k==='u_erdos' || k==='u_vignette') continue;   // vignette: dome overrides (below)
       if(Array.isArray(v)){ if(t.value && t.value.isVector2) t.value.set(v[0],v[1]); else t.value = v; }
-      else t.value = v; } };
+      else t.value = v; }
+    // FULL-BLEED on the dome (Nix 2026-07-15, "weeeeird math straight up"): the engine's vignette
+    // masks the canvas corners to near-black for the flat medallion look — wrapped on a sphere,
+    // those dark corners surfaced at the zenith as scalloped artifacts. The dome wants wall-to-wall
+    // pattern; the medallion look belongs to the flat preview only.
+    if(sh.uniforms.u_vignette) sh.uniforms.u_vignette.value = 0.0; };
   const _tryVector = (n)=>{ if(!initGirihShaderD() && n>0) setTimeout(()=>_tryVector(n-1), 2000); };
   frame.addEventListener('load', ()=>{ if(!initGirih()) setTimeout(initGirih, 1500); _tryVector(5); });
   setTimeout(()=>{ if(!_girihTex && !window._districtWallShader) initGirih(); }, 1200);
-  const lake = new THREE.Mesh(new THREE.CircleGeometry(60, 72),
-    new THREE.MeshStandardMaterial({color:0x0a0812, roughness:0.25, metalness:0.85}));
-  lake.rotation.x = -Math.PI/2; lake.position.set(VX, 0.001, 0); scene.add(lake);
+  // RESONANT FLOOR (Nix 2026-07-15, replacing the dark lake): the ground is see-through void —
+  // except where someone stands. Rings of light emanate from each occupant, colored by the girih's
+  // live color-average (the same 1×1 conductor-canvas sample that drives the glow light), and the
+  // rings die at the dome edge — the pattern owns the boundary.
+  const _floorU = {
+    uT:   {value:0},
+    uCol: {value:new THREE.Color(0x8866cc)},
+    uP:   {value:Array.from({length:8}, ()=>new THREE.Vector2(9999,9999))},
+    uN:   {value:0},
+    uC:   {value:new THREE.Vector2(VX, 6)},                 // dome center (xz)
+  };
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(58, 72),
+    new THREE.ShaderMaterial({
+      transparent:true, depthWrite:false, fog:false,
+      uniforms:_floorU,
+      vertexShader:`varying vec2 vW;
+        void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xz;
+          gl_Position = projectionMatrix * viewMatrix * w; }`,
+      fragmentShader:`varying vec2 vW; uniform float uT; uniform vec3 uCol;
+        uniform vec2 uP[8]; uniform int uN; uniform vec2 uC;
+        void main(){
+          float glow = 0.0;
+          for(int i=0;i<8;i++){ if(i>=uN) break;
+            float d = distance(vW, uP[i]);
+            float ring = smoothstep(0.45, 0.95, sin(d*2.2 - uT*2.6));   // emanating wavefronts
+            glow += ring * exp(-d*0.30);                                 // fade with travel
+            glow += exp(-d*d*3.0) * 0.30; }                              // standing pool underfoot
+          glow *= 1.0 - smoothstep(52.0, 57.5, distance(vW, uC));        // rings never pass the girih's edge
+          vec3 c = uCol * glow * 1.25;
+          float a = clamp(glow, 0.0, 0.7);                               // elsewhere: fully see-through
+          if(a < 0.004) discard;
+          gl_FragColor = vec4(c, a); }`}));
+  floor.rotation.x = -Math.PI/2; floor.position.set(VX, 0.02, 6); scene.add(floor);
+  window.__voidFloorTick = (dt)=>{
+    _floorU.uT.value += dt;
+    if(_voidGlow){ _floorU.uCol.value.copy(_voidGlow.color); }           // girih color-average, live
+    let n = 0;
+    if(_district === 'void' && n < 8){ _floorU.uP.value[n].set(player.position.x, player.position.z); n++; }
+    for(const r of remotes.values()){
+      if(n >= 8) break;
+      const rw = r.world || _districtOfPoint(r.tp.x, r.tp.z);
+      if(rw === 'void'){ _floorU.uP.value[n].set(r.group.position.x, r.group.position.z); n++; } }
+    _floorU.uN.value = n;
+  };
+  // TILED DAIS (Nix 2026-07-15): the portico home stands on a 10 m circular dais — girih-flavored
+  // strapwork tiles drawn to a canvas (ten-fold rosette + rings), so arrival has a floor to land on.
+  const dc = document.createElement('canvas'); dc.width = dc.height = 1024;
+  const g2 = dc.getContext('2d');
+  g2.fillStyle = '#171022'; g2.fillRect(0,0,1024,1024);
+  const cx2 = 512, cy2 = 512;
+  const strap = (r1,a1,r2,a2,w,col)=>{ g2.strokeStyle=col; g2.lineWidth=w;
+    g2.beginPath(); g2.moveTo(cx2+r1*Math.cos(a1), cy2+r1*Math.sin(a1));
+    g2.lineTo(cx2+r2*Math.cos(a2), cy2+r2*Math.sin(a2)); g2.stroke(); };
+  for(let ring=0; ring<4; ring++){                          // concentric strap rings
+    const r = 120 + ring*110;
+    g2.strokeStyle = ring%2 ? '#c9a54a' : '#7a5f9e'; g2.lineWidth = 5;
+    g2.beginPath(); g2.arc(cx2, cy2, r, 0, Math.PI*2); g2.stroke();
+  }
+  for(let i=0; i<20; i++){                                  // ten-fold star strapwork (20 half-points)
+    const a = i*Math.PI/10, b = a + Math.PI/10*3;           // the {10/3} star polygon of classic girih
+    strap(150, a, 470, b, 4, '#c9a54a');
+    strap(150, a, 470, a - Math.PI/10*3 + Math.PI/5, 4, '#7a5f9e');
+  }
+  g2.strokeStyle = '#e8dcc0'; g2.lineWidth = 7;             // rim band
+  g2.beginPath(); g2.arc(cx2, cy2, 495, 0, Math.PI*2); g2.stroke();
+  const daisTex = new THREE.CanvasTexture(dc); daisTex.colorSpace = THREE.SRGBColorSpace;
+  daisTex.anisotropy = 8;
+  const dais = new THREE.Mesh(new THREE.CylinderGeometry(5, 5.35, 0.16, 48),
+    new THREE.MeshStandardMaterial({color:0x2a2138, roughness:0.55, metalness:0.15}));
+  const daisTop = new THREE.Mesh(new THREE.CircleGeometry(4.98, 48),
+    new THREE.MeshBasicMaterial({map:daisTex}));
+  daisTop.rotation.x = -Math.PI/2; daisTop.position.y = 0.081;
+  dais.add(daisTop); dais.position.set(VX+6, 0.08, 6); scene.add(dais);
   _voidGlow = new THREE.PointLight(0x8866cc, 12, 120, 1.6); _voidGlow.position.set(VX, 18, -40); scene.add(_voidGlow);
   const samp = document.createElement('canvas'); samp.width = samp.height = 1;
   const sctx = samp.getContext('2d', {willReadFrequently:true});
@@ -2579,6 +2698,7 @@ function _ensureVoidDistrict(){
     _voidGlow.color.setRGB(0.35+d[0]/510, 0.30+d[1]/510, 0.45+d[2]/510);
   }catch(e){} }, 400);
   const home = addPortico({district:'porch'}, VX+6, 6, 'The Porch', 'home', 0);   // rot rev.3 (Nix in-headset 2026-07-12: "rotated 90° from where I'd expect") — the dome rebuild changed the approach axis; back to 0
+  home.position.y = 0.16;                                    // standing ON the dais
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
 }
 const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
@@ -2617,10 +2737,18 @@ async function _crossDistrict(name, opts){
   // breakthrough star-bubble off to one side of other districts (Nix 2026-07-11).
   if(window.__stars) window.__stars.visible = (name === 'porch');
   if(_starLabels) _starLabels.visible = (name === 'porch') && !!document.getElementById('starNamesToggle')?.checked;
-  // void district music: Come Again (composed by Opus 3 — one of ours), lazily fetched
+  // void district music — MUSIC DRIVE (Nix 2026-07-15): the girih ENGINE plays Come Again now
+  // (its analyser drives the pattern in music anim-mode, Smoketest preset), instead of a parent
+  // <audio> the visuals were deaf to. Posted on an interval until the iframe is alive to hear it.
   if(name === 'void'){
-    if(!window.__voidAudio){ window.__voidAudio = new Audio('./assets/void-come-again.ogg'); __voidAudio.loop = true; __voidAudio.volume = 0.35; }   // ogg diet (bandwidth watch 🔴 51%): 5.8→3.7MB
-    window.__voidAudio.play().catch(()=>{});
+    if(window.__voidAudio && !window.__voidAudio.paused) window.__voidAudio.pause();   // retire the deaf path
+    const post = ()=>{ const f=document.getElementById('girihframe');
+      if(f && f.contentWindow) try{ f.contentWindow.postMessage({porch:'music',
+        url:'./void-come-again.ogg', name:'Come Again', volume:0.35, on:true}, '*'); }catch(e){} };
+    post();
+    if(!window.__voidMusicIv) window.__voidMusicIv = setInterval(()=>{
+      if(_district !== 'void'){ clearInterval(window.__voidMusicIv); window.__voidMusicIv=null; return; }
+      post(); }, 2500);                                      // idempotent (embed keys by name) until it lands
   } else if(window.__voidAudio && !window.__voidAudio.paused){ window.__voidAudio.pause(); }
   if(wake && _wakeAudio){ _wakeAudio.currentTime=0; _wakeAudio.volume=0.5; _wakeAudio.play().catch(()=>{}); }
   if(wake){ await _sleep(250); _hideLoadingBar(); }
@@ -7540,11 +7668,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 72686a1-c4559170).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes e046c10-24974811).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '72686a1-c4559170';
+    const MY_BUILD = 'e046c10-24974811';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -8554,6 +8682,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   checkPorticos();                                   // doorways: crossing the east arch fades to the girih void
   if(window._districtWallShader){ if(_district==='void' && window._districtWallTick) window._districtWallTick(); }
   else if(_girihTex && _district==='void' && window.__girihActive!==false) _girihTex.needsUpdate = true;   // canvas fallback only
+  if(_district==='void' && window.__voidFloorTick) window.__voidFloorTick(dt);   // resonant floor rings
   // jump + gravity (shared desktop/VR) — ground is the tabletop if I'm standing on it, else the deck
   const gH = groundHeight(player.position.x, player.position.z);
   if(grounded && player.position.y > gH + 0.02) grounded = false;   // walked off an edge → fall
