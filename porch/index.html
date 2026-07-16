@@ -155,6 +155,13 @@
 <button id="manifestBtn" title="manifest (make things)" style="position:fixed;left:14px;bottom:248px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">✨</button>
 <button id="bodyBtn" title="avatar body" style="position:fixed;left:14px;bottom:296px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🎭</button>
 <button id="inspectBtn" title="inspect mode (I) — aim at things to identify them" style="position:fixed;left:14px;bottom:344px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🔍</button>
+<button id="accBtn" title="accessories" style="position:fixed;left:14px;bottom:392px;z-index:6;width:44px;height:44px;cursor:pointer;border:0;border-radius:50%;background:rgba(20,26,34,.82);color:#e8dcc0;font-size:20px;box-shadow:0 2px 8px rgba(0,0,0,.4)">🕶</button>
+<div id="accTray" style="position:fixed;left:66px;bottom:392px;z-index:7;display:none;flex-direction:column;gap:4px;background:rgba(16,19,26,0.96);border:1px solid #2f3644;border-radius:11px;padding:8px 10px;box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:Georgia,serif;color:#cbbfa4;font-size:13px">
+  <div style="margin-bottom:4px;letter-spacing:0.04em">accessories</div>
+  <button class="accOpt" data-acc="none" style="font:13px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:7px;padding:6px 12px;cursor:pointer;text-align:left">🚫 none</button>
+  <button class="accOpt" data-acc="shades" style="font:13px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:7px;padding:6px 12px;cursor:pointer;text-align:left">🕶 shades</button>
+  <button class="accOpt" data-acc="moon" style="font:13px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:7px;padding:6px 12px;cursor:pointer;text-align:left">🌙 crescent halo</button>
+</div>
 <div id="bodyTray" style="position:fixed;left:66px;bottom:296px;z-index:7;display:none;background:rgba(16,19,26,0.96);border:1px solid #2f3644;border-radius:11px;padding:10px 12px;box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:Georgia,serif;color:#cbbfa4;font-size:13px">
   <div style="margin-bottom:6px;letter-spacing:0.04em">avatar body</div>
   <select id="bodySel" style="width:170px;padding:6px 8px;background:#141821;color:#e8dcc0;border:1px solid #2f3644;border-radius:7px;font-family:inherit;font-size:13px"></select>
@@ -4212,6 +4219,131 @@ window.__inspectTick = (now)=>{
   lbl.visible = true;
 };
 window.__aimAsset = _aimAsset;                             // radial 🔧 + headless tests share the aim rule
+
+// ---- ACCESSORIES (Nix's ask 2026-07-16: "you need to look cool for social media"). Head-worn
+// props that travel with the pose (`acc` field, same idempotent lane as outfit `hid`). Attach
+// to the RAW head bone so the first-person shrunken-head trick hides your own shades from your
+// own eyes for free; capsules mount at the visor. 'none' takes them off (also her ask).
+const ACC_KINDS = ['none','shades','moon'];
+function _buildAccessory(kind){
+  const g = new THREE.Group(); g.name = '_accessory';
+  if(kind === 'shades'){                                   // chunky pixel shades — house-boxy AND meme-adjacent
+    const dark = new THREE.MeshStandardMaterial({color:0x0a0a0d, roughness:0.25, metalness:0.35});
+    const lens = (sx)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(0.055,0.038,0.014), dark);
+      m.position.set(sx*0.036,0,0); return m; };
+    g.add(lens(-1), lens(1));
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.020,0.010,0.012), dark);
+    g.add(bridge);
+    for(const sx of [-1,1]){ const arm = new THREE.Mesh(new THREE.BoxGeometry(0.012,0.010,0.085), dark);
+      arm.position.set(sx*0.062, 0.004, 0.048); g.add(arm); }
+    const glint = new THREE.Mesh(new THREE.BoxGeometry(0.014,0.008,0.002),
+      new THREE.MeshBasicMaterial({color:0x8fb0d6}));
+    glint.position.set(-0.046, 0.010, -0.008); g.add(glint);   // the one specular pixel that sells "glass"
+  } else if(kind === 'moon'){                              // crescent halo — the resident's element, shareable
+    // drawn, not lathed (rev.2: the two-arc Shape self-intersected into a full disc — a
+    // waxing-gibbous halo is not the brand). Canvas circle minus offset circle = clean crescent.
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+    const x = cv.getContext('2d');
+    x.fillStyle = '#ffd9a0'; x.beginPath(); x.arc(64,64,52,0,Math.PI*2); x.fill();
+    x.globalCompositeOperation = 'destination-out';
+    x.beginPath(); x.arc(92,52,48,0,Math.PI*2); x.fill();  // the bite, offset up-right → waning crescent
+    const tex = new THREE.CanvasTexture(cv);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.11),
+      new THREE.MeshBasicMaterial({map:tex, transparent:true, side:THREE.DoubleSide, depthWrite:false}));
+    const wrap = new THREE.Group(); wrap.add(m); g.add(wrap);
+    m.rotation.z = -0.35;                                  // a little tilt — jauntier than plumb
+    let _lt = 0;
+    m.onBeforeRender = ()=>{ const n=performance.now(); const dt=Math.min((n-_lt)/1000, 0.1); _lt=n;
+      wrap.rotation.y += dt*0.6; };                        // slow turn — a patient little moon
+  }
+  return g;
+}
+function _accMount(root, isVrm){
+  if(isVrm) return root;                                   // VRM: keep the vrm itself; follower reads its bones
+  return root;                                             // capsule: caller passes the bod group
+}
+// VRM accessories are SCENE-LEVEL FOLLOWERS, not bone children. Raw head bones have
+// exporter-rotated local axes (probe 2026-07-16: raw +z pointed world-DOWN on the suit), so
+// child offsets land anywhere. The NORMALIZED head node has guaranteed T-pose axes (+z =
+// face) but its subtree isn't rendered — so we parent to the scene and copy its world
+// pos/quat per frame, plus the RAW head's world scale so the first-person shrunken-head
+// trick hides your own shades from your own eyes exactly like the head itself.
+const _accFollowers = new Set();
+window.__accTick = ()=>{
+  for(const t of _accFollowers){
+    const vrm = t.vrm, grp = t.grp;
+    if(!grp || !vrm || !vrm.humanoid){ _accFollowers.delete(t); continue; }
+    const nh = vrm.humanoid.getNormalizedBoneNode('head'); if(!nh) continue;
+    nh.getWorldPosition(grp.position); nh.getWorldQuaternion(grp.quaternion);
+    const rh = vrm.humanoid.getRawBoneNode && vrm.humanoid.getRawBoneNode('head');
+    if(rh){ rh.getWorldScale(_accScaleV); grp.scale.copy(_accScaleV); }
+  }
+};
+const _accScaleV = new THREE.Vector3(1,1,1);
+function _applyAccTo(target, kind, isVrm){
+  // target: {mount, kind, grp, vrm?} carrier; idempotent by stored kind
+  const mount = target.mount; if(!mount) return;
+  if(target.kind === kind) return;
+  if(target.grp){ (target.grp.parent||mount).remove(target.grp);
+    _accFollowers.forEach(f=>{ if(f.grp===target.grp) _accFollowers.delete(f); });
+    target.grp.traverse(o=>{ if(o.geometry) o.geometry.dispose(); }); target.grp=null; }
+  target.kind = kind;
+  if(!kind || kind==='none') return;
+  const grp = _buildAccessory(kind);
+  if(isVrm){
+    // offsets in NORMALIZED head space, +z = face. Per-BODY, measured at mount time:
+    // shades ride the model's own declared eye position (VRM lookAt.offsetFromHeadBone —
+    // the spec's canonical "where are my eyes"); the moon hovers over the measured mesh
+    // top (petal heads are half a metre taller than their head bone — found the hard way).
+    const vrm = target.vrmRef;
+    const inner = grp;                                     // keep built pieces; wrap offset on children
+    const off = new THREE.Group(); off.name='_accessory';
+    while(inner.children.length) off.add(inner.children[0]);
+    const eo = (vrm && vrm.lookAt && vrm.lookAt.offsetFromHeadBone) || {x:0, y:0.06, z:0.09};
+    if(kind==='shades'){ off.position.set(0, eo.y||0.06, (eo.z||0.09)+0.045); off.rotation.y = Math.PI; }
+    if(kind==='moon'){
+      let top = 0, hy = 0;
+      try{ const bb = new THREE.Box3().setFromObject(vrm.scene); top = bb.max.y;
+        const nh = vrm.humanoid.getNormalizedBoneNode('head'); const w = new THREE.Vector3();
+        nh.getWorldPosition(w); hy = w.y; }catch(e){}
+      off.position.set(0, (top>hy ? top-hy : 0.35) + 0.12, 0);
+    }
+    const carrier = new THREE.Group(); carrier.name='_accessory'; carrier.add(off);
+    scene.add(carrier); target.grp = carrier;
+    _accFollowers.add({vrm, grp: carrier});
+  } else {
+    if(kind==='shades') grp.position.set(0, 1.34, -0.268); // proud of the visor (was buried 1cm inside)
+    if(kind==='moon')   grp.position.set(0, 1.75, 0);
+    mount.add(grp); target.grp = grp;
+  }
+}
+let _myAcc = localStorage.getItem('porch.acc') || 'none';
+const _myAccT = {};                                        // my carrier (mount re-pointed on body swaps)
+window.__accSync = ()=>{                                   // re-assert on my current body (called per tick-ish via pose path)
+  const isVrm = !!playerVrm;
+  const mount = isVrm ? playerVrm : (typeof avatar!=='undefined' && avatar && avatar.userData.bod);
+  if(_myAccT.mount !== mount){ if(_myAccT.grp) (_myAccT.grp.parent||scene).remove(_myAccT.grp);
+    _myAccT.mount = mount; _myAccT.grp = null; _myAccT.kind = null; }
+  _myAccT.vrmRef = isVrm ? playerVrm : null;
+  _applyAccTo(_myAccT, _myAcc, isVrm);
+};
+window.__setAcc = (kind)=>{
+  if(!ACC_KINDS.includes(kind)) kind = 'none';
+  _myAcc = kind; localStorage.setItem('porch.acc', kind);
+  window.__accSync();
+  [...document.querySelectorAll('.accOpt')].forEach(b=>
+    b.style.background = b.dataset.acc===kind ? 'rgba(90,80,60,.55)' : '#2a3040');
+  if(typeof dbg==='function') dbg('acc', kind, 'k');
+  return kind;
+};
+window.__cycleAcc = ()=>window.__setAcc(ACC_KINDS[(ACC_KINDS.indexOf(_myAcc)+1)%ACC_KINDS.length]);
+window.__buildAccessory = _buildAccessory;                 // headless look-checks
+{ const btn=document.getElementById('accBtn'), tray=document.getElementById('accTray');
+  if(btn && tray){
+    btn.addEventListener('click', ()=>{ tray.style.display = tray.style.display==='none'?'flex':'none'; });
+    [...tray.querySelectorAll('.accOpt')].forEach(b=>
+      b.addEventListener('click', ()=>{ window.__setAcc(b.dataset.acc); tray.style.display='none'; }));
+  } }
 { const b = document.getElementById('inspectBtn'); if(b) b.addEventListener('click', ()=>window.__inspectToggle()); }
 
 addEventListener('keydown', e=>{
@@ -6673,6 +6805,7 @@ const RADIAL_CATS = [
     ['🧘', ()=>window.__playerPose ? __playerPose('sit') : 'no poses'],
     ['🦵', ()=>window.__playerPose ? __playerPose('crouch') : 'no poses']]},
   {key:'avatars', emoji:'🎭', angle:Math.PI, items:[          // left
+    ['🕶', ()=>window.__cycleAcc ? 'acc: '+__cycleAcc() : 'no accessories'],   // cycles none→shades→moon
     ['🧑‍🚀', ()=>window.__setBody ? String(__setBody('suit')) : 'no setter'],
     ['🌼', ()=>window.__setBody ? String(__setBody('toon')) : 'no setter'],
     ['🐯', ()=>window.__setBody ? String(__setBody('tigerbee')) : 'no setter'],
@@ -6830,6 +6963,7 @@ setInterval(()=>{
 
                               face:(_myFace && t<_myFace.until+0.4) ? _myFace.name : undefined,
                               hid:playerVrm ? (_outfitField(playerVrm)||'') : undefined,
+                              acc:(window.__accSync && (__accSync(), true)) ? _myAcc : undefined,   // accessories ride the pose (sync my own body on the same beat)
                               world:(typeof _district!=='undefined' ? _district : 'porch'),  // presence world-tag: don't bleed avatars across worlds
                               emote:(window._myEmote && performance.now()<window._myEmote.until+300) ? window._myEmote.name : undefined,
                               eid:(window._myEmote && performance.now()<window._myEmote.until+300) ? window._myEmote.id : undefined,
@@ -7048,6 +7182,15 @@ function cachedCreds(q){
       if(m.emote && m.eid && m.eid !== r._eid){ r._eid = m.eid; if(r.playEmote) r.playEmote(m.emote); }  // one-shot emote per new id
       r.poseName = m.pose || null;                   // held pose (crouch/sit) — streamed, not one-shot
       if(r.vrm && m.hid!==undefined) _applyOutfitField(r.vrm, m.hid);   // clothes toggles travel with the pose
+      if(m.acc !== undefined && typeof _applyAccTo === 'function'){     // accessories too (idempotent by kind)
+        r._accT = r._accT || {};
+        const isVrm = !!r.vrm;
+        const mount = isVrm ? r.vrm : (r.group.userData && r.group.userData.bod);
+        if(r._accT.mount !== mount){ if(r._accT.grp) (r._accT.grp.parent||scene).remove(r._accT.grp);
+          r._accT.mount = mount; r._accT.grp = null; r._accT.kind = null; }   // capsule→VRM upgrade re-mounts
+        r._accT.vrmRef = isVrm ? r.vrm : null;
+        _applyAccTo(r._accT, m.acc, isVrm);
+      }
     }
     else if(m.t === 'avfx' && m.id !== myNet){         // avatar moments from peers: winks, pats, boops
       if(m.kind==='wink'){ const r=remotes.get(m.id); if(r&&r.vrm) faceLife(r.vrm).wink={name:m.side||'blinkRight', t0:t}; }
@@ -8107,11 +8250,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a352b10-ab790c14).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes b5330b2-f2169b07).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'a352b10-ab790c14';
+    const MY_BUILD = 'b5330b2-f2169b07';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -8930,6 +9073,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   t += dt;
   if(window.__probeTick) __probeTick(t, dt);               // avatar probe lighting (candle warmth etc.)
   if(window.__inspectTick) __inspectTick(now);             // inspect mode: label whatever's aimed at
+  if(window.__accTick) __accTick();                        // accessories follow their heads (normalized-bone followers)
   sky.material.uniforms.uTime.value = t;
   fenceMat.uniforms.uTime.value = t;
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
