@@ -195,6 +195,7 @@
   <label class="mrow"><input type="checkbox" id="softShadowToggle" checked><span>◐ Soft shadow edges</span></label>
   <label class="mrow"><input type="checkbox" id="hemiToggle" checked><span>🌗 Directional night ambient</span></label>
   <label class="mrow"><input type="checkbox" id="envToggle" checked><span>✨ Environment reflections</span></label>
+  <label class="mrow"><input type="checkbox" id="probeToggle" checked><span>🕯 Probe light on avatars (candle warmth)</span></label>
   <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
   <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
   <label class="mrow"><button id="lrTestBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">◐ L/R channel test (3s each)</button></label>
@@ -1352,6 +1353,7 @@ window.__setStarNames = setStarNames;
     _knob('softShadowToggle','softShadow', on=>{ renderer.shadowMap.type = on?THREE.PCFSoftShadowMap:THREE.PCFShadowMap; _remat(); });
     _knob('hemiToggle','hemi', on=>window.__setHemi(on));
     _knob('envToggle','env', on=>window.__setEnv(on));
+    _knob('probeToggle','probe', ()=>{});   // __probeTick reads the key itself (and restores colors on off)
     const ex=document.getElementById('acesExp'), exv=document.getElementById('acesExpVal');
     if(ex){ ex.value = Math.round(parseFloat(localStorage.getItem('porch.exposure')||'1.45')*100);
       if(exv) exv.textContent = ' '+(ex.value/100).toFixed(2);
@@ -3062,6 +3064,9 @@ async function _buildWake(){
   };
   _clickables.push(wicks);
   window.__wakeCandles = ()=>({lit:_lit.size, of:placed.length});
+  // world-space positions of LIT candles only — the avatar probe-light samples these, so
+  // people literally warm up as remembrance accumulates around them (Nix 2026-07-16)
+  window.__wakeLitXZ = ()=>[..._lit].map(i=>({x:placed[i].x+WAKE_X, z:placed[i].z+WAKE_Z}));
   g.add(wicks);
   g.userData._wakeClickable = wicks;                       // removed from _clickables on dispose
   // candlelight on a budget (rev.2 — first render was "just there": stones read as unlit voids;
@@ -7993,11 +7998,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2b7e793-37194447).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 9d9c669-49ea4757).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '2b7e793-37194447';
+    const MY_BUILD = '9d9c669-49ea4757';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -8732,10 +8737,89 @@ let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
 const _VEN = new THREE.Vector3(0.62, 0, -0.78).normalize();   // venus azimuth, horizontal
 // (film-matte blob REMOVED 2026-07-11 — its plane edge drew a hard line in the sky, worse than
 // the seam it was hiding. The sky shader's gaussian seam glow carries the soften alone now.)
+// ---- avatar probe lighting (Nix's ask 2026-07-16): the VRC-light-probe analog. One
+// ambient color per avatar, whole-mesh, no shadows — but where VRC samples a BAKED probe
+// grid, we compute the ambient ANALYTICALLY because we know where every emitter is.
+// Porch: cooler + darker with distance from the deck toward the trash fence; warm boost
+// near the table candle and the stove. Wake: dim cool base + warmth summed from LIT
+// candles only (the room warms people as remembrance accumulates). Void: violet breath.
+// Applied as a smoothed multiply on each avatar's own material instances (VRM MToon
+// exposes .color → litFactor; capsules are MeshStandard) — nameplates excluded by
+// construction (capsule mats come from userData.bod; VRM mats from vrm.scene).
+const _probeCache = new WeakMap();       // root -> {mats:[{m,orig}], cur:Color}
+const _prTint = new THREE.Color(), _prPos = new THREE.Vector3();
+function _probeEntry(root){
+  let e = _probeCache.get(root);
+  if(!e){
+    const mats = [];
+    root.traverse(o=>{ if(o.isMesh && !o.isSprite){
+      (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>{
+        if(m && m.color && !(m.map && m.map.isCanvasTexture)) mats.push({m, orig:m.color.clone()}); }); }});
+    e = {mats, cur:new THREE.Color(1,1,1)}; _probeCache.set(root, e);
+  }
+  return e;
+}
+function _probeAmbient(x, z, t, out){
+  const d2 = (ax,az)=>{ const dx=x-ax, dz=z-az; return dx*dx+dz*dz; };
+  if(Math.abs(x-WAKE_X) < 300){                          // the wake: grief-warm accumulation
+    out.setRGB(0.42, 0.40, 0.47);
+    let w = 0;
+    if(window.__wakeLitXZ) for(const c of __wakeLitXZ()) w += 0.9/(1 + d2(c.x,c.z)*0.35);
+    w = Math.min(w, 1.15);
+    out.r += w*0.95; out.g += w*0.60; out.b += w*0.28;
+  } else if(Math.abs(x-1000) < 300){                     // the void: the dome breathes on you
+    const p = 0.80 + 0.16*Math.sin(t*0.9) + 0.05*Math.sin(t*2.3);
+    out.setRGB(0.20+0.62*p, 0.18+0.55*p, 0.18+0.85*p);   // violet, girih-glow flavored (live palette later)
+  } else {                                               // the porch: candle-warm core, fence-cool rim
+    const k = THREE.MathUtils.smoothstep(Math.hypot(x, z), 7, 95);
+    out.setRGB(1-0.42*k, 1-0.36*k, 1-0.18*k);            // → (0.58,0.64,0.82) at the trash fence
+    const w = Math.min(1.10/(1 + d2(0.42,-0.88)*0.30)    // table candle
+                     + 0.80/(1 + d2(2.6,-1.4)*0.35), 1.2); // stove
+    out.r += w*0.42; out.g += w*0.26; out.b += w*0.10;
+  }
+  out.r = Math.min(out.r, 1.6); out.g = Math.min(out.g, 1.6); out.b = Math.min(out.b, 1.6);
+}
+let _probeWasOn = true;
+window.__probeTick = (t, dt)=>{
+  const on = (localStorage.getItem('porch.probe') ?? '1') === '1';
+  if(!on){
+    if(_probeWasOn){                                     // knob just flipped off: restore originals
+      const restore = r=>{ if(!r) return; const e=_probeCache.get(r); if(e) e.mats.forEach(({m,orig})=>m.color.copy(orig)); };
+      for(const r of remotes.values()) restore(r.vrm ? r.vrm.scene : (r.group.userData&&r.group.userData.bod));
+      if(typeof avatar!=='undefined' && avatar) restore(playerVrm ? playerVrm.scene : avatar.userData.bod);
+      if(typeof residentVrm!=='undefined' && residentVrm) restore(residentVrm.scene);
+    }
+    _probeWasOn = false; return;
+  }
+  _probeWasOn = true;
+  const lerpK = Math.min(1, dt*3);                       // smooth: no popping when crossing falloffs
+  const apply = (root, x, z)=>{
+    if(!root) return;
+    const e = _probeEntry(root);
+    _probeAmbient(x, z, t, _prTint);
+    e.cur.lerp(_prTint, lerpK);
+    for(const {m, orig} of e.mats) m.color.copy(orig).multiply(e.cur);
+  };
+  let _dbgN=0;
+  for(const r of remotes.values()){
+    apply(r.vrm ? r.vrm.scene : (r.group.userData && r.group.userData.bod), r.group.position.x, r.group.position.z); _dbgN++; }
+  if(typeof avatar!=='undefined' && avatar){
+    apply(playerVrm ? playerVrm.scene : avatar.userData.bod, player.position.x, player.position.z); _dbgN++; }
+  if(window.__probeDebug)                                  // headless-test channel — set the flag first
+    window.__probeDbg = {targets:_dbgN, self: typeof avatar!=='undefined' && !!avatar,
+      selfMats: (typeof avatar!=='undefined' && avatar) ? _probeEntry(playerVrm?playerVrm.scene:avatar.userData.bod).mats.length : -1,
+      selfCur: (typeof avatar!=='undefined' && avatar) ? _probeEntry(playerVrm?playerVrm.scene:avatar.userData.bod).cur.toArray().map(v=>+v.toFixed(3)) : null};
+  if(typeof residentVrm!=='undefined' && residentVrm){
+    residentVrm.scene.getWorldPosition(_prPos);
+    apply(residentVrm.scene, _prPos.x, _prPos.z);
+  }
+};
+
 renderer.setAnimationLoop((now, xrFrame)=>{
   const dt = _last ? Math.min((now - _last)/1000, 0.05) : 0.016;
   _last = now;
   t += dt;
+  if(window.__probeTick) __probeTick(t, dt);               // avatar probe lighting (candle warmth etc.)
   sky.material.uniforms.uTime.value = t;
   fenceMat.uniforms.uTime.value = t;
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
