@@ -4131,9 +4131,20 @@ addEventListener('contextmenu', e=>{
 // returns, and every edit-menu verb is an existing wire verb (claim/prop/delobj).
 let _inspectOn = false, _inspectLbl = null, _inspectTarget = null, _inspectNext = 0;
 function _aimAsset(maxD=6){
-  // one aim rule everywhere: desktop uses the hover system's answer; VR/unlocked falls back
-  // to a head-gaze ray against all grabbable meshes (incl. owned — inspection isn't a grab).
+  // one aim rule everywhere. Desktop: the hover system's answer (reticle/mouse ray).
+  // VR: the CONTROLLER POINTER — the gravity-glove rays already compute a per-hand aimed
+  // prop (_gloveHover), so inspect targets exactly what your hand-laser lights up (right
+  // hand wins if both aim). Head-gaze is only the fallback when NO tracked controller is
+  // live (conventional VR degradation, Nix 2026-07-16) — a live-but-idle pointer means
+  // "not aiming at anything", not "ask the head instead".
   if(!renderer.xr.isPresenting && _hoverG) return _hoverG;
+  if(renderer.xr.isPresenting && typeof _gloveHover!=='undefined'){
+    if(_gloveHover[1] || _gloveHover[0]) return _gloveHover[1] || _gloveHover[0];
+    let tracked = false;
+    try{ const s = renderer.xr.getSession();
+      tracked = !!(s && [...s.inputSources].some(src=>src.targetRayMode==='tracked-pointer')); }catch(e){}
+    if(tracked) return null;                                 // controllers live, aimed at nothing
+  }
   _hovNDC.set(0,0); _hovRC.setFromCamera(_hovNDC, renderer.xr.isPresenting ? renderer.xr.getCamera() : camera);
   const pool = grabbables.filter(p=>p.mesh);
   const hits = _hovRC.intersectObjects(pool.map(p=>p.mesh), true);
@@ -8096,11 +8107,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes fcdb132-88bef30a).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a352b10-ab790c14).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'fcdb132-88bef30a';
+    const MY_BUILD = 'a352b10-ab790c14';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
