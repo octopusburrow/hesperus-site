@@ -630,6 +630,10 @@ try { const live=JSON.parse(localStorage.getItem(LS_LIVE)); if(live&&live.dials)
 presetSel.value = presetData(activePreset) ? activePreset : 'Mosque';
 updateStatus();
 // Embedded-in-the-void default (Nix 2026-07-11): Smoketest, always — the district's face.
+// NOTE (Nix caught it 2026-07-15, "that's *still* not Smoketest"): this early apply gets STOMPED
+// by initLayers() ~1500 lines below (it restores/normalizes poses over the top) — the dome served
+// Mosque-gold for four days while everyone believed Smoketest was on. Kept for the pre-init frame,
+// but the AUTHORITATIVE apply now runs after initLayers (see below it).
 try { applyPreset('Smoketest'); presetSel.value='Smoketest'; } catch(e){}
 
 // --- Audio ---
@@ -2171,6 +2175,9 @@ if(sliders.arcLen) sliders.arcLen.addEventListener('input', ()=>{ buildMacroArc(
   document.querySelectorAll('#layer-tabs .layer-tab').forEach(t=>t.classList.toggle('active', t.dataset.layer===activeLayer));
   setLayerHint(); updateEnableUI(); updateBeatGray(); updateResetBtns(); animReadout(); refreshMarkers();
 })();
+// THE authoritative district default — AFTER initLayers, so nothing re-normalizes over it
+// (the early apply above runs before the poses system boots and loses; Nix's eyes, 2026-07-15).
+try { applyPreset('Smoketest'); presetSel.value='Smoketest'; updateStatus(); } catch(e){}
 if(sliders.patternMode) sliders.patternMode.addEventListener('input', updateBeatGray);   // J33: re-grey inert dials when the Pattern engine changes
 window._anim = ()=>({mode:animMode, active:activeLayer, on:Object.assign({},layerOn), blend:+blendEff.toFixed(3), beat:+beatPulse.toFixed(3)});
 window._setLayer = setActiveLayer;
@@ -2395,6 +2402,7 @@ else if(e.data && e.data.porch==='music'){
       initAudio(); if(window._porchGain && e.data.volume != null) _porchGain.gain.value = e.data.volume;
       playBuffer(0);
       if(window._setAnimMode) _setAnimMode('music');
+      try{ if(e.data.preset) { applyPreset(e.data.preset); } }catch(err){}   // host may pin the district look
     }catch(err){ console.warn('porch music failed', err); window._porchMusicKey=null; } })();
   }
 } }catch(_){} });
