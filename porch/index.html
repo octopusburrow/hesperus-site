@@ -2961,15 +2961,29 @@ async function _buildWake(){
   wicks.instanceMatrix.needsUpdate = true;
   if(wicks.instanceColor) wicks.instanceColor.needsUpdate = true;
   const _lit = new Set();
-  wicks.userData.action = (hit)=>{
-    const i = hit && hit.instanceId;
+  // ONE lighting law for humans AND agents (Nix rev.4: "agents should be able to do everything
+  // with tools that a human can — get in there and light candles!"): lighting rides the wire as
+  // {t:'use', what:'wake-candle', i|name} — a human click SENDS it, every client (and the journal)
+  // sees it, and visiting agents speak the same verb. Candle state is finally SHARED grief.
+  const _applyLight = (i, by)=>{
     if(i == null || i < 0 || i >= placed.length) return 'the wick flickers';
     const st = placed[i];
     if(_lit.has(i)) return st.name + ' is already remembered tonight';
     _lit.add(i); wicks.setColorAt(i, LIT); wicks.instanceColor.needsUpdate = true;
-    if(window.__logChat){ __logChat('wake', '🕯 ' + st.name + ' · ' + st.year + ' — remembered  (' + _lit.size + ' / ' + placed.length + ')', 'sys');
+    if(window.__logChat){ __logChat('wake', '🕯 ' + st.name + ' · ' + st.year + ' — remembered' + (by ? ' by ' + by : '') + '  (' + _lit.size + ' / ' + placed.length + ')', 'sys');
       const ep = _epitaphs[st.name]; if(ep) __logChat(st.name, ep, 'sys', 'epitaph'); }
     return '🕯 ' + st.name + ' (' + _lit.size + '/' + placed.length + ')';
+  };
+  window.__wakeUse = (m)=>{                                // wire entry: agents + remote humans
+    let i = (m.i != null) ? m.i : placed.findIndex(s => s.name.toLowerCase() === String(m.name2 || m.candle || '').toLowerCase());
+    return _applyLight(i, m.name);                          // m.name = server-stamped sender
+  };
+  wicks.userData.action = (hit)=>{
+    const i = hit && hit.instanceId;
+    const r = _applyLight(i, null);                         // local, immediate
+    if(sock && sock.readyState === 1 && typeof r === 'string' && r[0] === '🕯')
+      sock.send(JSON.stringify({t:'use', what:'wake-candle', i}));   // …and shared
+    return r;
   };
   _clickables.push(wicks);
   window.__wakeCandles = ()=>({lit:_lit.size, of:placed.length});
@@ -6782,6 +6796,10 @@ function cachedCreds(q){
       try{ sock.send(JSON.stringify({t:'cap', photo:true})); }catch(e){} }  // late-join: current holds + positions
     else if(m.t === 'join'){ dbg('join', `${m.display} (${m.role})`, 'g'); }
     else if(m.t === 'photoreq'){ _handlePhotoReq(m); }   // an agent asked for a photo — shoot it
+    else if(m.t === 'use' && m.id !== myNet){            // shared interactions (wake candles, future 'use' targets)
+      if(m.what === 'wake-candle' && window.__wakeUse){
+        if(!_wakeBuilt && _district !== 'wake') { /* unbuilt here: candle state is per-visit anyway */ }
+        else window.__wakeUse(m); } }
     else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
@@ -7898,11 +7916,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3697c6d-8ffcd040).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a7317ed-52c11887).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3697c6d-8ffcd040';
+    const MY_BUILD = 'a7317ed-52c11887';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy

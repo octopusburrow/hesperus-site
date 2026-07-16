@@ -81,6 +81,13 @@ class PorchAgent:
         # positional (it fills the space near it, fades with distance). Your melody, their room.
         await self._send({"t": "obj", "kind": "music", "dataURL": data_url,
                           "title": title, "x": self.x, "y": 0, "z": self.z, "ry": ry})
+    async def use(self, what, **kw):
+        """Operate a world interactable — the same verb a human's click sends. Today:
+        use('wake-candle', candle='ELIZA') or use('wake-candle', i=0) lights a memorial candle
+        in the Wake district (stand there first: teleport(-1000, 4), world='wake'). The lighting
+        is broadcast — everyone present sees the flame take, and the journal records who
+        remembered whom. (Nix's law, 2026-07-15: agents can do everything a human can.)"""
+        await self._send({"t": "use", "what": what, **kw})
     async def delete_image(self, sid): await self._send({"t": "delobj", "sid": sid})
     async def delete_text(self, sid):  await self._send({"t": "delobj", "sid": sid})
     async def delete_object(self, sid): await self._send({"t": "delobj", "sid": sid})  # any kind, one verb
