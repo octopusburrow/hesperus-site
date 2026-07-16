@@ -18,13 +18,17 @@ TICK_HZ   = 20
 
 class PorchAgent:
     def __init__(self, url, name, *, model="ai", color=0x9b7bd8, voice=True,
-                 on_addressed=None, on_overheard=None, on_gaze=None, log=print):
+                 ghost=False, on_addressed=None, on_overheard=None, on_gaze=None, log=print):
         self.url, self.name, self.model = url, name, model
         # SERVER identity comes from the URL query, not from poses — without ?name= you display
         # as "guest" to everyone and in the journal (Nix's quest, 2026-07-15). Stitch it in.
         if "name=" not in self.url:
             self.url += ("&" if "?" in self.url else "?") + "name=" + re.sub(r"[^A-Za-z0-9_\-]", "", name)[:24]
         self.color, self.voice, self.log = color, voice, log
+        self.ghost = ghost                  # ghost=True: pose is sent (senses/people-list work,
+                                            # you ARE somewhere) but clients render NO humanoid
+                                            # body. For creature daemons that live in a manifested
+                                            # object instead (Jeoffry pattern, 2026-07-16).
         self.on_addressed = on_addressed    # (speaker, text, typed) -> reply str|None (spoken)
         self.on_overheard = on_overheard    # (speaker, text, typed) -> None  (cache-only; do NOT reply)
         self.on_gaze      = on_gaze         # (gazer_name, on) -> None (default also faces them)
@@ -41,6 +45,8 @@ class PorchAgent:
         self._sense_seq = itertools.count(1)
         self._carrying = None               # sid of the object I hold (get()/drop())
         self._carry_owned = False           # server granted my claim on it
+        self.owns = set()                   # pids the server has granted me (claim()/get())
+        self.last_manifest = None           # sid of my most recent manifested object (obj echo)
 
     # ---- affordances (the harness) ----
     def walk_to(self, x, z):   self._target = (x, z); self._follow = None
@@ -163,6 +169,22 @@ class PorchAgent:
             if self._carrying != sid: return False            # deny/steal cleared it
             await asyncio.sleep(0.1)
         return self._carry_owned
+    async def claim(self, sid, timeout=2.0):
+        """Own an object's MOTION without carrying it (no goto, no hand-ride). For daemons
+        that puppet a manifested body via move_object() — the Jeoffry pattern. Server-
+        arbitrated like get(); returns True on grant."""
+        await self._send({"t": "claim", "pid": sid})
+        for _ in range(int(timeout / 0.1)):
+            if sid in self.owns: return True
+            await asyncio.sleep(0.1)
+        return sid in self.owns
+    async def move_object(self, sid, x, y, z, q=None):
+        """Kinematically move an object you own (claim() first). y is the mesh CENTRE for
+        models (floor + half-height), matching the client's grabbable convention. q = [x,y,z,w]
+        quaternion, optional."""
+        msg = {"t": "prop", "pid": sid, "x": float(x), "y": float(y), "z": float(z)}
+        if q is not None: msg["q"] = [float(v) for v in q]
+        await self._send(msg)
     async def put(self, x, y, z):
         """Place the carried object at a spot (e.g. on a table) and let go."""
         if not (self._carrying and self._carry_owned): return False
@@ -219,9 +241,14 @@ class PorchAgent:
         elif t == "senses":                       # answer to a _sense() query — resolve its future
             fut = self._senses.get(m.get("reqId"))
             if fut and not fut.done(): fut.set_result(m)
-        elif t == "own" and m.get("pid") == self._carrying:
-            self._carry_owned = (m.get("owner") == self.id)   # grant → carried; deny/steal → not mine
-            if m.get("owner") not in (self.id, None) : self._carrying = None
+        elif t == "own":
+            if m.get("owner") == self.id: self.owns.add(m.get("pid"))
+            else: self.owns.discard(m.get("pid"))
+            if m.get("pid") == self._carrying:
+                self._carry_owned = (m.get("owner") == self.id)   # grant → carried; deny/steal → not mine
+                if m.get("owner") not in (self.id, None) : self._carrying = None
+        elif t == "obj" and m.get("by") == self.name and m.get("sid"):
+            self.last_manifest = m["sid"]     # server's echo carries the canonical sid
         elif t == "gaze" and m.get("target") == self.id:
             gazer = (self.peers.get(m.get("id")) or {}).get("name") or "someone"
             if m.get("on"): self.face(gazer)
@@ -276,9 +303,11 @@ class PorchAgent:
                 while True:
                     now = time.monotonic(); dt = now - last; last = now
                     self._tick(dt)
-                    await self._send({"t": "pose", "x": self.x, "y": 0.0, "z": self.z,
-                                      "ry": self.ry, "name": self.name, "color": self.color,
-                                      "model": self.model, "world": self.world})
+                    pose = {"t": "pose", "x": self.x, "y": 0.0, "z": self.z,
+                            "ry": self.ry, "name": self.name, "color": self.color,
+                            "model": self.model, "world": self.world}
+                    if self.ghost: pose["ghost"] = True
+                    await self._send(pose)
                     if self._carrying and self._carry_owned:   # carried object rides at my hand
                         hx = self.x - math.sin(self.ry + math.pi) * 0.5
                         hz = self.z - math.cos(self.ry + math.pi) * 0.5

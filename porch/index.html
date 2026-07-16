@@ -6814,6 +6814,8 @@ function cachedCreds(q){
       if(rec && !(rec.hostOnly && m.id !== rec.ownerId)) rec.applyCtl(m.playing, m.time); }   // host-mode: only the placer's ctl is law
     else if(m.t === 'pose' && m.id !== myNet){
       if(window.agent && m.name === window.agent.name) return;   // my own resident's echo — the VRM is already here
+      if(m.ghost) return;   // ghost peer: present to senses/journal but bodiless — its body is a
+                            // manifested object its daemon puppets via t:'prop' (Jeoffry, 2026-07-16)
       let r = remotes.get(m.id);
       const _mBody = AVATAR_BODIES[m.body] ? m.body : 'suit';
       if(!r){
@@ -7916,11 +7918,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a7317ed-52c11887).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes d01a384-3ae43be7).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'a7317ed-52c11887';
+    const MY_BUILD = 'd01a384-3ae43be7';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
