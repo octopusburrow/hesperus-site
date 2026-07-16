@@ -754,7 +754,23 @@ function applyAA(){
   if(renderer.xr.isPresenting && typeof dbg==='function')
     dbg('vr','sharpness '+k+'× is mostly a DESKTOP knob — VR is browser-capped at __fbInfo().nativeFbScale (usually 1.0)','k');
 }
-aaBox.addEventListener('change', applyAA);
+aaBox.addEventListener('change', ()=>{ localStorage.setItem('porch.aa', aaBox.value); applyAA(); });
+// AA persistence + weak-GPU auto-default (Nix 2026-07-16 "easy wins"). Two fixes in one:
+// (1) LATENT BUG: the dropdown SHOWED 'high' selected but applyAA never ran at boot — the real
+//     default was 1×; the menu lied. Now boot applies whatever the dropdown claims.
+// (2) 'high' = pixelRatio 2 = 4× the fragments — fine on a discrete GPU, punishing on
+//     integrated/mobile. First visit (no saved choice): sniff the unmasked renderer string
+//     and start weak GPUs at 'off'. Any explicit user choice is saved and always wins.
+{
+  const saved = localStorage.getItem('porch.aa');
+  if(saved && [...aaBox.options].some(o=>o.value===saved)) aaBox.value = saved;
+  else {
+    let gpu=''; try{ const gl=renderer.getContext(); const ext=gl.getExtension('WEBGL_debug_renderer_info');
+      gpu = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : ''); }catch(e){}
+    if(/swiftshader|llvmpipe|intel|mali|adreno|xclipse|powervr/i.test(gpu)) aaBox.value = '1';
+  }
+  applyAA();
+}
 // (__restartXRForScale + __setVRScale REMOVED 2026-07-15: both were built on the false premise that
 // a bigger scale was obtainable page-side. The restart also stranded the VRButton state machine.
 // History: git log around 2aa0762 if archaeology is ever needed.)
@@ -7977,11 +7993,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 1c157db-ec38f2d0).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2b7e793-37194447).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '1c157db-ec38f2d0';
+    const MY_BUILD = '2b7e793-37194447';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
