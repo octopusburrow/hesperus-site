@@ -2826,6 +2826,7 @@ async function _crossDistrict(name, opts){
       player.rotation.y = Math.atan2(-(vx/vl), -(vz/vl));   // face into the district (forward = (-sin ry, -cos ry))
       _landed = true; } }
   if(!_landed){ player.position.set(D.sx, 0, D.sz); player.rotation.y = D.sry; }
+  if(playerVrm && window.__resetSprings) __resetSprings(playerVrm);   // 1000 m snap: petals/tail/tie must not whip
   scene.fog = wake ? _wakeFog : (name === 'void') ? _voidFog : _porchFog;
   scene.background = wake ? _wakeBg : (name === 'void') ? _voidBg : _porchBg;
   if(typeof sky !== 'undefined') sky.visible = (name === 'porch');
@@ -7176,7 +7177,8 @@ function cachedCreds(q){
       // but a cross-district teleport left the avatar CRAWLING the playa for seconds (worse under
       // a throttled/headless rAF) — the girih selfie shot an empty dome while its subject was
       // still mid-flight. Past the FX threshold the ghost-walk serves nobody: snap.
-      if(_jump > 30) r.group.position.copy(r.tp);
+      if(_jump > 30){ r.group.position.copy(r.tp);
+        if(r.vrm && typeof _resetSprings==='function') _resetSprings(r.vrm); }   // remote snapped (teleport/crossing): don't whip their petals
       if(m.world !== undefined) r.world = m.world;   // agents can now declare their district (see porch_agent.world)
       r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
       if(m.spk) r.spkUntil = performance.now() + 350;   // mic-audible window (10Hz stream keeps it alive)
@@ -7339,12 +7341,20 @@ function sendAct(detail){                                 // actions transcribe;
 }
 function sendQuery(q){ if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'query', ...q}));
   else cmdNote('not connected'); }
+// teleporting is a POSITION change, not a VELOCITY — but verlet spring chains (petals, tails,
+// ties) read the snap as an enormous impulse and whip violently, then settle over seconds.
+// (Nix spotted it in screenshots 2026-07-16: "why are the head petals bending forward?" —
+// worst at district crossings, which are 1000 m snaps.) Reset spring state after any snap.
+function _resetSprings(vrm){ try{ if(vrm && vrm.springBoneManager) vrm.springBoneManager.reset(); }catch(e){} }
 function doTeleport(x, z, detail){
   teleportFX(player.position.x, player.position.z, false);
   player.position.x = x; player.position.z = z; clampToWorld();
   teleportFX(player.position.x, player.position.z, true);
+  if(playerVrm) _resetSprings(playerVrm);
   if(detail) sendAct(detail);
 }
+window.__resetSprings = _resetSprings;                     // district-crossing + tests share it
+window.__teleport = doTeleport;                            // headless tests take the REAL path (incl. spring reset)
 function doGoto(target){
   if(!target){ cmdNote('usage: /goto <name|sid>'); return; }
   for(const r of remotes.values()){
@@ -8253,11 +8263,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 2a5d1cf-28903745).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes d16699e-41a7732a).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '2a5d1cf-28903745';
+    const MY_BUILD = 'd16699e-41a7732a';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
