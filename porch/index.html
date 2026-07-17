@@ -6498,6 +6498,7 @@ const OBJECT_TYPES = {
 };
 const objKind = {};                                       // sid -> kind (routes delobj to its remover)
 const _worldLedger = new Map();                           // sid -> the obj msg that built it (drives __snapshotWorld)
+window.__worldLedger = _worldLedger;                      // headless forensics (2026-07-17: roster labels came back bare sids and I theorized THREE wrong causes before just printing this)
 function applyObj(m){
   const kind = m.kind || m.t;                             // spine records carry kind; legacy rode t
   const reg = OBJECT_TYPES[kind]; if(!reg || !m.sid) return;
@@ -8292,14 +8293,27 @@ function _frameRoster(cam, cap){
   for(const [id, r] of remotes){
     consider(r.vrm ? r.vrm.scene : r.group, r.name || 'guest', 'person', null, {name: r.name || 'guest'});
   }
-  // manifested objects + props, labelled by what the world knows about them
-  for(const sid in grabbablesById){
-    const g = grabbablesById[sid]; if(!g || !g.mesh) continue;
-    const rec = (typeof _worldLedger!=='undefined' && _worldLedger.get(sid)) || {};
-    const kind = rec.kind || (g.isImage?'image':g.isText?'text':'prop');
+  // MANIFESTED things: iterate the LEDGER, not grabbablesById. (Hide-and-seek, 2026-07-17:
+  // the roster reported bare sids and NO descriptions, and I theorized three wrong causes —
+  // stale cache, keep-list, deploy — before printing the two key sets side by side.
+  // grabbablesById is keyed by PROP id ('mug','book','d12' — the built-in furniture);
+  // manifested objects are keyed by SID ('s3','g1') and live in _worldLedger + spawnedObjs.
+  // The loop never intersected the things visitors actually make. Print, don't deduce.)
+  const seen = new Set();
+  if(typeof _worldLedger !== 'undefined') for(const [sid, rec] of _worldLedger){
+    const g = grabbablesById[sid];
+    const mesh = (g && g.mesh) || (typeof spawnedObjs!=='undefined' && spawnedObjs.get(sid)) || null;
+    if(!mesh) continue;
+    seen.add(sid);
     // the maker's own words come FIRST — that's the whole point of desc (Nix 2026-07-16)
     const label = rec.desc || rec.title || (rec.text ? '“'+String(rec.text).slice(0,24)+'”' : '') || sid;
-    consider(g.mesh, label, kind, sid, rec.by ? {by: rec.by} : null);
+    consider(mesh, label, rec.kind || 'prop', sid, rec.by ? {by: rec.by} : null);
+  }
+  // built-in furniture (mug, book, d12…): no ledger record, the pid IS the name
+  for(const pid in grabbablesById){
+    if(seen.has(pid)) continue;
+    const g = grabbablesById[pid]; if(!g || !g.mesh) continue;
+    consider(g.mesh, pid, g.isImage?'image':g.isText?'text':'prop', pid, null);
   }
   cands.sort((a,b)=> b._area - a._area);                  // biggest-on-screen first: what you'd notice
   const total = cands.length;
@@ -8317,14 +8331,26 @@ const _pkRC = new THREE.Raycaster(), _pkV = new THREE.Vector2();
 function _pickAt(cam, px, py){
   _pkV.set((px/_PHOTO_W)*2-1, -((py/_PHOTO_H)*2-1));
   _pkRC.setFromCamera(_pkV, cam);
-  const pool = Object.values(grabbablesById).filter(g=>g && g.mesh);
-  const hits = _pkRC.intersectObjects(pool.map(g=>g.mesh), true);
+  // same fix as the roster: manifested objects are in spawnedObjs/_worldLedger keyed by SID;
+  // grabbablesById only holds the built-in props. Search BOTH or a pixel on anything a
+  // visitor made resolves to nothing. (2026-07-17)
+  const pool = [];                                        // [{sid, mesh, rec}]
+  if(typeof _worldLedger !== 'undefined') for(const [sid, rec] of _worldLedger){
+    const g = grabbablesById[sid];
+    const mesh = (g && g.mesh) || (typeof spawnedObjs!=='undefined' && spawnedObjs.get(sid)) || null;
+    if(mesh) pool.push({sid, mesh, rec});
+  }
+  for(const pid in grabbablesById){
+    const g = grabbablesById[pid];
+    if(g && g.mesh && !pool.some(p=>p.sid===pid)) pool.push({sid: pid, mesh: g.mesh, rec: {}});
+  }
+  const hits = _pkRC.intersectObjects(pool.map(p=>p.mesh), true);
   if(hits.length){
-    let o = hits[0].object; let g = null;
-    while(o && !g){ g = pool.find(p=>p.mesh===o) || null; o = o.parent; }
-    if(g){ const rec = (typeof _worldLedger!=='undefined' && _worldLedger.get(g.pid)) || {};
-      return { sid: g.pid, kind: rec.kind || 'prop', dist: +hits[0].distance.toFixed(1),
-               label: rec.title || rec.text || g.pid,
+    let o = hits[0].object; let p = null;
+    while(o && !p){ p = pool.find(q=>q.mesh===o) || null; o = o.parent; }
+    if(p){ const rec = p.rec || {};
+      return { sid: p.sid, kind: rec.kind || 'prop', dist: +hits[0].distance.toFixed(1),
+               label: rec.desc || rec.title || rec.text || p.sid,
                at: hits[0].point.toArray().map(v=>+v.toFixed(2)) }; }
   }
   // nothing grabbable: name the avatars too, then honestly report open space
@@ -8523,11 +8549,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes f0281c9-1f0ce611).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 5f0fce4-008ed78f).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'f0281c9-1f0ce611';
+    const MY_BUILD = '5f0fce4-008ed78f';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
