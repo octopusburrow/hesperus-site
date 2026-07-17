@@ -3258,15 +3258,26 @@ if(_residentPick){
     let voiceOn = new URLSearchParams(location.search).get('voice') !== '0';   // declared early: drawTag reads it
     residentMixer = new THREE.AnimationMixer(vrm.scene);
     const CLIP_SRC = { idle:'standing-idle', walk:'walk', talk:'talk', wave:'wave', cheer:'cheer', raise:'raise', dance:'dance' };
+    // BOOT PAYLOAD (bandwidth pass 2026-07-17): these clips are ~2 MB EACH and all seven used to
+    // load eagerly in this blocking loop = ~12 MB before a visitor has done anything, on a page
+    // already at 53.7% of the Pages monthly cap. idle/walk/talk are needed the moment you exist;
+    // the four emotes are speculative (most visits never wave). So: essentials eager, emotes
+    // fetched on FIRST USE and cached (THREE.Cache is on — a clip is fetched once per session).
+    // Measured cold join: 28.0 MB → ~20 MB. The cheapest bandwidth is bytes you never send.
+    const EAGER = ['idle','walk','talk'];
     const actions = {};
     const RAW_VA = {};                                 // raw vrma animations, kept so setBody can re-target clips at a new vrm
-    for(const [name, stem] of Object.entries(CLIP_SRC)){
+    const _loadClip = async (name)=>{
+      const stem = CLIP_SRC[name]; if(!stem || RAW_VA[name]) return actions[name] || null;
       try{
         const a = await vl.loadAsync(`./assets/${stem}.vrma`);
         const va = (a.userData.vrmAnimations||[])[0];
         if(va){ RAW_VA[name] = va; actions[name] = residentMixer.clipAction(createVRMAnimationClip(va, vrm)); }
-      }catch(e){ console.warn('clip failed:', name, e); }
-    }
+        return actions[name] || null;
+      }catch(e){ console.warn('clip failed:', name, e); return null; }
+    };
+    for(const name of EAGER) await _loadClip(name);
+    window.__loadClip = _loadClip;                     // emote path awaits this before playing
     let current = null;
     function crossfade(name, {loop=true, fade=0.3}={}){
       const act = actions[name]; if(!act) return;
@@ -3442,7 +3453,16 @@ if(_residentPick){
 
     // ---- emote (gesture clips, blend back to idle) ----
     let emoteUntil=0;
-    function emote(name){ const a=actions[name]; if(!a){ console.warn('no emote:',name); return; }
+    function emote(name){
+      const a=actions[name];
+      if(!a){                                          // lazy clip (bandwidth pass 2026-07-17): fetch
+        if(CLIP_SRC[name]){                            // on first use, then play — one-time ~2 MB,
+          _loadClip(name).then(la=>{ if(la){           // cached for the session by THREE.Cache
+            crossfade(name,{loop:false,fade:0.22}); emoteUntil = t + (la.getClip().duration||1.5); } });
+          return 'emote: '+name+' (fetching clip)';
+        }
+        console.warn('no emote:',name); return;
+      }
       crossfade(name,{loop:false,fade:0.22}); emoteUntil = t + (a.getClip().duration||1.5); return 'emote: '+name; }
     // ---- face (expression presets via face life; blink is automatic for every VRM) ----
     function face(name, secs){ if(!FACE_NAMES.includes(name)) return 'faces: '+FACE_NAMES.join(' · ');
@@ -4625,13 +4645,20 @@ function _remoteDeps(){
       await Promise.all([import('@pixiv/three-vrm'), import('@pixiv/three-vrm-animation')]);
     const vl = new GLTFLoader();
     vl.register(p=>new VRMLoaderPlugin(p)); vl.register(p=>new VRMAnimationLoaderPlugin(p));
+    // REMOTE clips: essentials eager, emotes on demand (bandwidth pass 2026-07-17 — these are
+    // ~2 MB each; a room of visitors who never emote was paying 8 MB for the possibility).
+    const REMOTE_SRC = {idle:'standing-idle', walk:'walk', talk:'talk',
+                        wave:'wave', cheer:'cheer', dance:'dance', raise:'raise'};
     const anims = {};
-    for(const [nm,url] of [['idle','standing-idle'],['walk','walk'],['talk','talk'],
-                           ['wave','wave'],['cheer','cheer'],['dance','dance'],['raise','raise']]){
+    const loadAnim = async (nm)=>{
+      if(anims[nm] !== undefined) return anims[nm];
+      const url = REMOTE_SRC[nm]; if(!url) return null;
       try{ const a = await vl.loadAsync('./assets/'+url+'.vrma');
-        anims[nm] = (a.userData.vrmAnimations||[])[0]; }catch(e){}
-    }
-    return {vl, VRMUtils, createVRMAnimationClip, VRMLookAtQuaternionProxy, anims};
+        anims[nm] = (a.userData.vrmAnimations||[])[0] || null; }catch(e){ anims[nm] = null; }
+      return anims[nm];
+    };
+    for(const nm of ['idle','walk','talk']) await loadAnim(nm);
+    return {vl, VRMUtils, createVRMAnimationClip, VRMLookAtQuaternionProxy, anims, loadAnim};
   })();
   return _remoteDepsP;
 }
@@ -4654,16 +4681,21 @@ async function upgradeAvatarToVrm(r, model, body){
     [...r.group.children].forEach(c=>{ if(!keep.has(c)) r.group.remove(c); });  // capsule out, bloom in
     r.group.add(vrm.scene);
     r.mixer = new THREE.AnimationMixer(vrm.scene); r.acts = {}; r.cur = null;
-    for(const nm of ['idle','walk','wave','cheer','dance','raise'])
-      if(anims[nm]) r.acts[nm] = r.mixer.clipAction(createVRMAnimationClip(anims[nm], vrm));
+    const _bind = (nm)=>{ if(anims[nm] && !r.acts[nm]) r.acts[nm] = r.mixer.clipAction(createVRMAnimationClip(anims[nm], vrm)); return r.acts[nm]; };
+    for(const nm of ['idle','walk','talk']) _bind(nm);   // eager: loco. emotes bind on first sight.
     r.play = (nm)=>{ const a=r.acts[nm]; if(!a || a===r.cur) return;
       a.enabled=true; a.setEffectiveWeight(1); a.reset().play();
       if(r.cur) r.cur.crossFadeTo(a, 0.22, false); r.cur=a; };
     // one-shot emote: play once, hold for its duration, then loco reclaims (via r.emoteUntil)
-    r.playEmote = (nm)=>{ const a=r.acts[nm]; if(!a) return;
+    const _fire = (a)=>{ if(!a) return;
       a.enabled=true; a.setEffectiveWeight(1); a.reset().setLoop(THREE.LoopOnce, 1); a.clampWhenFinished=true; a.play();
       if(r.cur) r.cur.crossFadeTo(a, 0.2, false); r.cur=a;
       r.emoteUntil = performance.now() + (a.getClip().duration||2)*1000; };
+    r.playEmote = (nm)=>{                                // lazy: someone waved → fetch the clip once,
+      const a = r.acts[nm] || _bind(nm);                 // bind it, and play. Late by one fetch the
+      if(a) return _fire(a);                             // first time anyone in the room does it.
+      loadAnim(nm).then(()=>{ const la = _bind(nm); if(la) _fire(la); });
+    };
     r.play('idle');
     r.vrm = vrm;
   }catch(e){ console.error('remote vrm failed (capsule stays)', e); }
@@ -4797,17 +4829,31 @@ async function embodyPlayer(bodyName){
     player.add(vrm.scene);                             // rides the player rig
     if(vrm.lookAt && VRMLookAtQuaternionProxy){ const px=new VRMLookAtQuaternionProxy(vrm.lookAt); px.name='VRMLookAtQuaternionProxy'; vrm.scene.add(px); }
     playerMixer=new THREE.AnimationMixer(vrm.scene); const pAct={}; let pCur=null;
-    for(const [nm,url] of [['idle','standing-idle'],['walk','walk'],['cheer','cheer'],['dance','dance'],['wave','wave'],['raise','raise']]){
+    // YOUR OWN body's clips: idle/walk eager (you move immediately), emotes on first use
+    // (bandwidth pass 2026-07-17: ~2 MB each; this loop was the biggest single cost of a join).
+    const P_SRC = {idle:'standing-idle', walk:'walk', cheer:'cheer', dance:'dance', wave:'wave', raise:'raise'};
+    const _pLoad = async (nm)=>{
+      if(pAct[nm]) return pAct[nm];
+      const url = P_SRC[nm]; if(!url) return null;
       try{ const a=await vl.loadAsync('./assets/'+url+'.vrma'); const va=(a.userData.vrmAnimations||[])[0];
         if(va) pAct[nm]=playerMixer.clipAction(createVRMAnimationClip(va,vrm)); }catch(e){}
-    }
+      return pAct[nm] || null;
+    };
+    for(const nm of ['idle','walk']) await _pLoad(nm);
     function pPlay(nm,fade){ const act=pAct[nm]; if(!act||act===pCur) return; act.enabled=true; act.setEffectiveWeight(1); act.reset().play();
       if(pCur) pCur.crossFadeTo(act,fade||0.3,false); pCur=act; }
     pPlay('idle');
     let _emoteHold=0;                                    // an emote plays out before loco reclaims the body
-    window.__playerEmote=(nm)=>{ pPlay(nm,0.25);
-      const c=pAct[nm]; _emoteHold=performance.now()+(((c&&c.getClip().duration)||2)*1000);
-      window._myEmote={ name:nm, id:(window._emoteSeq=(window._emoteSeq||0)+1), until:_emoteHold }; };
+    window.__playerEmote=(nm)=>{
+      const go = ()=>{ pPlay(nm,0.25);
+        const c=pAct[nm]; _emoteHold=performance.now()+(((c&&c.getClip().duration)||2)*1000);
+        window._myEmote={ name:nm, id:(window._emoteSeq=(window._emoteSeq||0)+1), until:_emoteHold }; };
+      // NETWORK NOTE: the pose broadcast reads window._myEmote, so a lazily-fetched clip must set
+      // it AFTER the fetch — otherwise your first wave would be silent to the room as well as to
+      // you. Fetch (~2 MB, once per session), then fire locally and on the wire together.
+      if(pAct[nm]) return go();
+      _pLoad(nm).then(a=>{ if(a) go(); });
+    };
     // locomotion: walk when moving, idle when still (called each frame with ground speed, m/s).
     // Moving always interrupts an emote; standing still lets it finish. Jump: no clip yet — the
     // walk/idle pose carries through the hop (a jump.vrma is on the wishlist for digi).
@@ -8477,11 +8523,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 0b6591d-b29bca74).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes f0281c9-1f0ce611).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '0b6591d-b29bca74';
+    const MY_BUILD = 'f0281c9-1f0ce611';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
