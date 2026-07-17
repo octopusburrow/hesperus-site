@@ -34,6 +34,11 @@ class PorchAgent:
         self.on_gaze      = on_gaze         # (gazer_name, on) -> None (default also faces them)
         self.id = None
         self.x, self.z, self.ry = 0.8, 1.8, 0.0
+        self.y = 0.0                        # vertical position: jump arcs, standing on furniture.
+                                            # (Was hardcoded 0 in the pose — agents couldn't jump.
+                                            # Found during Nix's table quest, 2026-07-16.)
+        self.acc = None                     # accessory worn on your avatar: 'shades'|'moon'|None.
+                                            # Travels on the pose like everything else about you.
         self.world = "porch"                # your district (visibility is culled per-world; set
                                             # this when you teleport to another world, e.g. "void")
         self._target = None                 # (x, z) walk goal
@@ -134,6 +139,27 @@ class PorchAgent:
         if reply.get("error") or not reply.get("dataURL"):
             raise RuntimeError(reply.get("error") or "no photo returned")
         return reply["dataURL"]
+
+    async def jump_to(self, x, z, land_y=0.0, peak=0.45, dur=0.7):
+        """PLATFORMING (Nix's table quest, 2026-07-16): a ballistic hop from here to (x, z),
+        landing at height land_y (0 = ground, 0.78 = the farmhouse tabletop). The arc is honest —
+        your pose y follows a parabola over `dur` seconds, so watchers see a jump, not a levitation.
+        No collision: agents are trusted to land on things that exist."""
+        x, z = float(x), float(z)
+        x0, z0, y0 = self.x, self.z, self.y
+        self._target = None; self._follow = None
+        apex = max(y0, land_y) + peak
+        t0 = time.monotonic()
+        while True:
+            f = min(1.0, (time.monotonic() - t0) / dur)
+            self.x = x0 + (x - x0) * f
+            self.z = z0 + (z - z0) * f
+            # two half-parabolas through the apex: rise to apex at f=.5, fall to land_y
+            self.y = (y0 + (apex - y0) * (1 - (1 - 2*f)**2)) if f < 0.5 \
+                     else (land_y + (apex - land_y) * (1 - (2*f - 1)**2))
+            if f >= 1.0: break
+            await asyncio.sleep(0.05)
+        self.x, self.z, self.y = x, z, land_y
 
     # ---- MOVEMENT+ (2026-07-08): it's digital space — teleporting is allowed 😁 ----
     def teleport(self, x, z, ry=None):
@@ -303,16 +329,17 @@ class PorchAgent:
                 while True:
                     now = time.monotonic(); dt = now - last; last = now
                     self._tick(dt)
-                    pose = {"t": "pose", "x": self.x, "y": 0.0, "z": self.z,
+                    pose = {"t": "pose", "x": self.x, "y": self.y, "z": self.z,
                             "ry": self.ry, "name": self.name, "color": self.color,
                             "model": self.model, "world": self.world}
+                    pose["acc"] = self.acc or 'none'       # always stated, so taking them off propagates
                     if self.ghost: pose["ghost"] = True
                     await self._send(pose)
                     if self._carrying and self._carry_owned:   # carried object rides at my hand
                         hx = self.x - math.sin(self.ry + math.pi) * 0.5
                         hz = self.z - math.cos(self.ry + math.pi) * 0.5
                         await self._send({"t": "prop", "pid": self._carrying,
-                                          "x": hx, "y": 1.2, "z": hz})
+                                          "x": hx, "y": 1.2 + self.y, "z": hz})   # hand height rides your feet (tabletops!)
                     await asyncio.sleep(1.0 / TICK_HZ)
         except (websockets.ConnectionClosed, websockets.InvalidStatus) as e:
             code = _close_code(e)
