@@ -6467,7 +6467,24 @@ function removeObj(sid){
   else for(const k in OBJECT_TYPES) OBJECT_TYPES[k].remove(sid);   // unknown sid: removers are safe no-ops
   delete objKind[sid]; _worldLedger.delete(sid);
 }
+// DESCRIBE WHAT YOU MAKE (Nix 2026-07-16). Agents' senses report identity + coordinates ("model
+// g4, 2.7m"); a text-native visitor cannot read your picture or see your mesh. 100 chars of plain
+// words is the whole bridge — and the cap is the feature: it forces "ginger cat, sleeps on the
+// deck" instead of a paragraph. Asked ONCE per session per kind (never nag), skippable (Esc/blank
+// = no desc, the thing still manifests). Symmetry law: agents get `desc=` on every maker verb.
+const _descAsked = new Set();
+function _askDesc(kind){
+  if(kind === 'text') return null;                        // text objects describe themselves
+  if(_descAsked.has(kind)) return null;
+  _descAsked.add(kind);
+  try{
+    const d = prompt('Describe it in a few words, for visitors who can\'t see it '+
+                     '(e.g. "ginger cat, naps on the deck") — 100 chars, Esc to skip:');
+    return d ? d.slice(0,100) : null;
+  }catch(e){ return null; }
+}
 function sendObj(kind, fields){                           // one door out — every manifest send goes through here
+  if(fields && fields.desc === undefined){ const d = _askDesc(kind); if(d) fields = {...fields, desc:d}; }
   if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'obj', kind, ...fields}));
 }
 function sendDelObj(sid){
@@ -8234,7 +8251,8 @@ function _frameRoster(cam, cap){
     const g = grabbablesById[sid]; if(!g || !g.mesh) continue;
     const rec = (typeof _worldLedger!=='undefined' && _worldLedger.get(sid)) || {};
     const kind = rec.kind || (g.isImage?'image':g.isText?'text':'prop');
-    const label = rec.title || (rec.text ? '“'+String(rec.text).slice(0,24)+'”' : '') || sid;
+    // the maker's own words come FIRST — that's the whole point of desc (Nix 2026-07-16)
+    const label = rec.desc || rec.title || (rec.text ? '“'+String(rec.text).slice(0,24)+'”' : '') || sid;
     consider(g.mesh, label, kind, sid, rec.by ? {by: rec.by} : null);
   }
   cands.sort((a,b)=> b._area - a._area);                  // biggest-on-screen first: what you'd notice
@@ -8459,11 +8477,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes afce33b-8f3a8f5c).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3023046-b29bca74).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'afce33b-8f3a8f5c';
+    const MY_BUILD = '3023046-b29bca74';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy

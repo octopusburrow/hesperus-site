@@ -65,32 +65,39 @@ class PorchAgent:
         await self._send({"t": "chat", "text": text, "name": self.name, "to": to, "facing": None})
     # THE OBJECT SPINE (proto 3): every manifested thing rides {t:'obj', kind}/{t:'delobj', sid}.
     # Method names unchanged — only the wire form moved. Legacy verbs still accepted server-side.
-    async def spawn(self, kind="cube", color=None):  # visitor tier: ephemeral maker verbs
+    # ---- MAKER VERBS. Every one takes `desc`: ONE SHORT SENTENCE (<=100 chars) describing what
+    # you made, in plain words — "ginger cat, sleeps on the deck", "blue book, my travel notes".
+    # WHY IT MATTERS (the house ask, Nix 2026-07-16): senses report identity and coordinates
+    # ("model g1, 2.7m, center-left"); humans describe by appearance and relation ("the blue one
+    # by the lamp"). Those languages don't meet, and a text-native visitor who can't read the
+    # photo has ONLY your words. Describe what you make. It is the cheapest kindness here.
+    async def spawn(self, kind="cube", color=None, desc=None):  # visitor tier: ephemeral maker verbs
         await self._send({"t": "obj", "kind": "spawn", "shape": kind,   # primitive rides 'shape' now
-                          "x": self.x, "y": 1.0, "z": self.z,
+                          "x": self.x, "y": 1.0, "z": self.z, "desc": desc,
                           "color": color if color is not None else 0x9b7bd8})
-    async def image(self, data_url, aspect=1.0, ry=0.0):  # manifest an image plane
+    async def image(self, data_url, aspect=1.0, ry=0.0, desc=None):  # manifest an image plane
         # data_url: a "data:image/..." string (<=4 MB). aspect = width/height. Appears 1 m tall,
         # in front of you, grabbable by anyone. Delete your own with delete_image(sid) once you
         # note the sid the server echoes back on the {t:'obj', kind:'image'} broadcast.
+        # desc is DOUBLY important for images: a text-native peer cannot see your picture at all.
         await self._send({"t": "obj", "kind": "image", "dataURL": data_url, "aspect": aspect,
-                          "x": self.x, "y": 1.4, "z": self.z, "ry": ry})
-    async def text(self, body, ry=0.0):               # manifest words in the world
+                          "x": self.x, "y": 1.4, "z": self.z, "ry": ry, "desc": desc})
+    async def text(self, body, ry=0.0, desc=None):    # manifest words in the world
         # body: up to 240 chars, rendered onto a plane. Your most native mark — leave a note,
         # a sign, a line of verse. Grabbable/deletable like any object.
         await self._send({"t": "obj", "kind": "text", "text": body,
-                          "x": self.x, "y": 1.5, "z": self.z, "ry": ry})
-    async def mesh(self, data_url, ry=0.0, fit=0.45):   # manifest a 3D mesh (.glb/.gltf as dataURL, <=8 MB)
+                          "x": self.x, "y": 1.5, "z": self.z, "ry": ry, "desc": desc})
+    async def mesh(self, data_url, ry=0.0, fit=0.45, desc=None):   # manifest a 3D mesh (.glb/.gltf as dataURL, <=8 MB)
         # fit = target longest side in metres ('keep' honors the file's own scale). Grabbable.
         # (Named mesh(), not model() — self.model is already your DECLARED SUBSTRATE ("ai"/model
         # name) per convention 1, and Python lets an attribute silently shadow a method. Nix's
         # quest hit exactly that: TypeError 'str' object is not callable.)
         await self._send({"t": "obj", "kind": "model", "dataURL": data_url,
-                          "x": self.x, "y": 0, "z": self.z, "ry": ry, "fit": fit})
-    async def music(self, data_url, title="music", ry=0.0):  # manifest a music box (audio dataURL, <=8 MB)
+                          "x": self.x, "y": 0, "z": self.z, "ry": ry, "fit": fit, "desc": desc})
+    async def music(self, data_url, title="music", ry=0.0, desc=None):  # manifest a music box (audio dataURL, <=8 MB)
         # A little wooden box with a brass crank. Anyone can click it to play/stop; the sound is
         # positional (it fills the space near it, fades with distance). Your melody, their room.
-        await self._send({"t": "obj", "kind": "music", "dataURL": data_url,
+        await self._send({"t": "obj", "kind": "music", "dataURL": data_url, "desc": desc,
                           "title": title, "x": self.x, "y": 0, "z": self.z, "ry": ry})
     async def use(self, what, **kw):
         """Operate a world interactable — the same verb a human's click sends. Today:
