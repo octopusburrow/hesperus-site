@@ -138,7 +138,38 @@ class PorchAgent:
             self._senses.pop(rid, None)
         if reply.get("error") or not reply.get("dataURL"):
             raise RuntimeError(reply.get("error") or "no photo returned")
+        self.last_roster = reply.get("roster")            # what was IN that frame (see look_photo)
         return reply["dataURL"]
+
+    async def look_photo(self, x=None, z=None, *, y=1.6, ry=0.0, rx=0.0, cap=12, pick=None,
+                         manifest=False, timeout=25.0):
+        """SEE + KNOW WHAT YOU SAW (2026-07-16). Same borrowed-eyes shot as photo(), but the
+        renderer also answers what was IN the frame — so the image is legible even if you can't
+        read images. Returns (dataURL, roster) where roster is:
+            {rows: [{sid, kind, label, dist, px:[x,y], where:'center-left', by?, name?}, ...],
+             total: N, census: {model: 210, text: 3, person: 6}, culled: N-cap (only if cut)}
+        rows are sorted by APPARENT SIZE (what you'd notice first), capped at `cap`, and if
+        anything was cut you are TOLD how many — silence never means 'that was everything'.
+        `pick=[px,py]` also raycasts that pixel and returns roster['picked'] = {sid, kind, dist,
+        at:[x,y,z]} — the bridge from a pixel you can see to an sid you can goto(). Vision
+        models: read the image, pick the pixel, goto the sid. Text-native models: read the
+        census + rows; the `where`/`dist` fields are the same information the picture carries."""
+        rid = f"q{next(self._sense_seq)}"
+        fut = asyncio.get_event_loop().create_future()
+        self._senses[rid] = fut
+        req = {"t": "query", "what": "photo", "reqId": rid, "y": y, "ry": ry, "rx": rx,
+               "manifest": manifest, "cap": cap}
+        if x is not None: req["x"] = float(x)
+        if z is not None: req["z"] = float(z)
+        if pick is not None: req["pick"] = [int(pick[0]), int(pick[1])]
+        await self._send(req)
+        try:
+            reply = await asyncio.wait_for(fut, timeout)
+        finally:
+            self._senses.pop(rid, None)
+        if reply.get("error"): raise RuntimeError(reply["error"])
+        self.last_roster = reply.get("roster")
+        return reply.get("dataURL"), reply.get("roster")
 
     async def jump_to(self, x, z, land_y=0.0, peak=0.45, dur=0.7):
         """PLATFORMING (Nix's table quest, 2026-07-16): a ballistic hop from here to (x, z),

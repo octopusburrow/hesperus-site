@@ -8191,13 +8191,99 @@ async function __photoAt(opts){
   return _ph2d.toDataURL('image/jpeg', 0.85);
 }
 window.__photoAt = __photoAt;
+// ---- THE FRAME ROSTER (Nix 2026-07-16: "take a picture and get a list of what's there").
+// The renderer already built the exact camera it shot with, so "what is in this photo" is a
+// frustum test — no new perception system, no fairness architecture, just asking the eye what
+// it saw. This is what makes an image LEGIBLE to a text-native mind: the picture shows the
+// arrangement, the roster names the things and where they are ON SCREEN (px + a human region
+// like "center-left"), so a pixel can be turned back into a sid (__pickAt) and then goto'd.
+// Culled by screen area (biggest first) and CAPPED — and the cap is REPORTED, never silent
+// (house rule: "silence means I didn't look, never all-clear").
+const _frV = new THREE.Vector3(), _frBox = new THREE.Box3(), _frM = new THREE.Matrix4(),
+      _frFrustum = new THREE.Frustum();
+function _screenRegion(nx, ny){                          // NDC → the words a human would use
+  const h = nx < -0.33 ? 'left' : nx > 0.33 ? 'right' : 'center';
+  const v = ny >  0.33 ? 'top'  : ny < -0.33 ? 'bottom' : '';
+  return v ? v + '-' + h : h;
+}
+function _frameRoster(cam, cap){
+  cap = cap || 12;
+  cam.updateMatrixWorld(true);
+  _frFrustum.setFromProjectionMatrix(_frM.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+  const cands = [];
+  const consider = (obj, label, kind, sid, extra)=>{
+    if(!obj) return;
+    _frBox.setFromObject(obj); if(_frBox.isEmpty()) return;
+    _frBox.getCenter(_frV);
+    if(!_frFrustum.intersectsBox(_frBox)) return;         // not in shot — the honest filter
+    const dist = cam.position.distanceTo(_frV);
+    const ndc = _frV.clone().project(cam);
+    if(Math.abs(ndc.z) > 1) return;                       // behind the lens
+    const size = new THREE.Vector3(); _frBox.getSize(size);
+    const area = (size.x*size.y + size.y*size.z) / Math.max(dist*dist, 0.01);   // apparent size
+    cands.push({ sid, kind, label, dist: +dist.toFixed(1),
+                 px: [Math.round((ndc.x*0.5+0.5)*_PHOTO_W), Math.round((-ndc.y*0.5+0.5)*_PHOTO_H)],
+                 where: _screenRegion(ndc.x, ndc.y), _area: area, ...(extra||{}) });
+  };
+  // people (avatars) — the things you most want named
+  for(const [id, r] of remotes){
+    consider(r.vrm ? r.vrm.scene : r.group, r.name || 'guest', 'person', null, {name: r.name || 'guest'});
+  }
+  // manifested objects + props, labelled by what the world knows about them
+  for(const sid in grabbablesById){
+    const g = grabbablesById[sid]; if(!g || !g.mesh) continue;
+    const rec = (typeof _worldLedger!=='undefined' && _worldLedger.get(sid)) || {};
+    const kind = rec.kind || (g.isImage?'image':g.isText?'text':'prop');
+    const label = rec.title || (rec.text ? '“'+String(rec.text).slice(0,24)+'”' : '') || sid;
+    consider(g.mesh, label, kind, sid, rec.by ? {by: rec.by} : null);
+  }
+  cands.sort((a,b)=> b._area - a._area);                  // biggest-on-screen first: what you'd notice
+  const total = cands.length;
+  const rows = cands.slice(0, cap).map(r=>{ delete r._area; return r; });
+  const out = { rows, total };
+  if(total > cap) out.culled = total - cap;               // SAY when you truncated (never silent)
+  // a census so a thousand objects never becomes a thousand rows: kinds, counted
+  const by = {}; for(const c of cands) by[c.kind] = (by[c.kind]||0)+1;
+  out.census = by;
+  return out;
+}
+// pixel → object: the bridge from SEEING to IDENTITY (Nix: "query a particular pixel and goTo
+// that object"). Same raycast inspect-mode uses; a pixel is just a ray direction.
+const _pkRC = new THREE.Raycaster(), _pkV = new THREE.Vector2();
+function _pickAt(cam, px, py){
+  _pkV.set((px/_PHOTO_W)*2-1, -((py/_PHOTO_H)*2-1));
+  _pkRC.setFromCamera(_pkV, cam);
+  const pool = Object.values(grabbablesById).filter(g=>g && g.mesh);
+  const hits = _pkRC.intersectObjects(pool.map(g=>g.mesh), true);
+  if(hits.length){
+    let o = hits[0].object; let g = null;
+    while(o && !g){ g = pool.find(p=>p.mesh===o) || null; o = o.parent; }
+    if(g){ const rec = (typeof _worldLedger!=='undefined' && _worldLedger.get(g.pid)) || {};
+      return { sid: g.pid, kind: rec.kind || 'prop', dist: +hits[0].distance.toFixed(1),
+               label: rec.title || rec.text || g.pid,
+               at: hits[0].point.toArray().map(v=>+v.toFixed(2)) }; }
+  }
+  // nothing grabbable: name the avatars too, then honestly report open space
+  for(const [id, r] of remotes){
+    const grp = r.vrm ? r.vrm.scene : r.group;
+    const hp = _pkRC.intersectObject(grp, true);
+    if(hp.length) return { kind:'person', name: r.name||'guest', dist:+hp[0].distance.toFixed(1) };
+  }
+  return { nothing: true, note: 'open space (or scenery — only manifested things and people are pickable)' };
+}
+window.__frameRoster = _frameRoster; window.__pickAt = _pickAt;
+
 async function _handlePhotoReq(m){
-  let dataURL = null, error = null;
+  let dataURL = null, error = null, roster = null;
   await new Promise(r=>setTimeout(r, 600));   // settle beat: an agent's teleport-then-photo races its own pose (journal: photoreq beat the pose by 0.7s)
   try{ dataURL = await __photoAt(m); }
   catch(e){ error = 'render failed: '+e.message; console.warn('photoreq failed', e); }
+  try{ if(!error && _phCam){                              // annotate the frame we just shot
+    roster = _frameRoster(_phCam, m.cap || 12);
+    if(m.pick && m.pick.length === 2) roster.picked = _pickAt(_phCam, m.pick[0], m.pick[1]); } }
+  catch(e){ console.warn('roster failed', e); }
   if(sock && sock.readyState===1)
-    sock.send(JSON.stringify({t:'photodone', reqId:m.reqId, dataURL, error}));
+    sock.send(JSON.stringify({t:'photodone', reqId:m.reqId, dataURL, error, roster}));
   if(dataURL && m.manifest){                             // develop a polaroid in-world at the pose
     const ry = m.ry||0, px=(m.x||0)-Math.sin(ry)*1.2, pz=(m.z||0)-Math.cos(ry)*1.2;
     sendObj('image', {dataURL, aspect:_PHOTO_W/_PHOTO_H, x:px, y:Math.max(1.1, m.y!=null?m.y:1.5), z:pz, ry});
@@ -8373,11 +8459,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3d34008-fd1737fd).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes afce33b-8f3a8f5c).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3d34008-fd1737fd';
+    const MY_BUILD = 'afce33b-8f3a8f5c';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
