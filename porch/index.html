@@ -5161,6 +5161,113 @@ _wristCalR.fromArray([0.5812875774993174, 0.7123369384133019, 0.0858677936574096
 function _mirrorWristQuat(qR, out){
   return (out||new THREE.Quaternion()).set(qR.x, -qR.y, -qR.z, qR.w).normalize();
 }
+// ---- PARTNERING (Nix's ask 2026-07-16): "mirror or twin someone's rig — we could dance
+// together in the girih, even if you don't have the skill or latency to do it by yourself yet."
+// The insight is that a partner doesn't need to CHOOSE moves — it needs to WEAR yours. Latency
+// stops mattering when your motion is the source: the partner is a function of your pose, not a
+// reactor to it. Two modes, the ballroom distinction:
+//   TWIN   — same-facing, side by side: your left arm is its left arm. Unison. (Copy, no flip.)
+//   MIRROR — opposite-facing, face to face: your left arm is its RIGHT arm. Reflection, the way
+//            a partner or a dance-studio wall gives it back to you.
+// Mirroring is a REFLECTION (opposite chirality), not a rotation — the same trap the left-wrist
+// cal fell into (naive quat mirror doubles the error, ~80° wrong). Correct op = conjugation by
+// the sagittal reflection: (x,-y,-z,w), and the L/R bone roles SWAP. Both facts learned above.
+const _PARTNER_BONES = ['hips','spine','chest','upperChest','neck','head',
+  'leftShoulder','leftUpperArm','leftLowerArm','leftHand',
+  'rightShoulder','rightUpperArm','rightLowerArm','rightHand',
+  'leftUpperLeg','leftLowerLeg','leftFoot','rightUpperLeg','rightLowerLeg','rightFoot'];
+const _MIRROR_SWAP = {};                                   // left↔right role swap for mirror mode
+for(const b of _PARTNER_BONES){
+  if(b.startsWith('left'))  _MIRROR_SWAP[b] = 'right' + b.slice(4);
+  if(b.startsWith('right')) _MIRROR_SWAP[b] = 'left'  + b.slice(5);
+}
+// pack: the normalized local rotation of each bone, quantized to 3 decimals (~0.1° — under the
+// noise floor of a tracked wrist) so a 20-bone frame is ~400 bytes at 10 Hz ≈ 4 KB/s. The relay
+// already carries this shape of chatter for poses; no new server surface.
+function _packBones(vrm){
+  if(!vrm || !vrm.humanoid) return undefined;
+  const out = {};
+  for(const b of _PARTNER_BONES){
+    const n = vrm.humanoid.getNormalizedBoneNode(b); if(!n) continue;
+    const q = n.quaternion;
+    out[b] = [+q.x.toFixed(3), +q.y.toFixed(3), +q.z.toFixed(3), +q.w.toFixed(3)];
+  }
+  return out;
+}
+const _pbQ = new THREE.Quaternion();
+// apply someone's bone frame to a vrm. mirror=false → twin (unison); mirror=true → reflection.
+function _applyBones(vrm, bones, mirror){
+  if(!vrm || !vrm.humanoid || !bones) return;
+  for(const b in bones){
+    const a = bones[b]; if(!a || a.length !== 4) continue;
+    const target = mirror ? (_MIRROR_SWAP[b] || b) : b;    // your left → their right, face to face
+    const n = vrm.humanoid.getNormalizedBoneNode(target); if(!n) continue;
+    if(mirror) _pbQ.set(a[0], -a[1], -a[2], a[3]);         // sagittal reflection-conjugation
+    else       _pbQ.set(a[0],  a[1],  a[2], a[3]);
+    n.quaternion.copy(_pbQ);
+  }
+  if(vrm.humanoid.update) vrm.humanoid.update();           // flush normalized → raw
+}
+window.__packBones = _packBones; window.__applyBones = _applyBones;
+
+// THE PARTNER: a second body that wears someone's rig live. Local-only (no relay round-trip on
+// its motion — it IS your motion), so it never lags the source it copies.
+//   __dance('mirror')  — faces you, offset in front, reflected: your left is its right.
+//   __dance('twin')    — beside you, same-facing, unison.
+//   __dance('off')     — dismissed.
+// Source = your own rig by default, or a named peer's streamed bones (__dance(mode, 'Nix')),
+// which is the shape that lets a human lead and an AI follow across the wire.
+let _partner = null, _partnerMode = null, _partnerSrc = null;
+const _dnQ = new THREE.Quaternion(), _dnV = new THREE.Vector3();
+async function _spawnPartner(){
+  const {VRMLoaderPlugin, VRMUtils} = await import('@pixiv/three-vrm');
+  const l = new GLTFLoader(); l.register(p=>new VRMLoaderPlugin(p));
+  const g = await l.loadAsync(AVATAR_BODIES.suit.url);
+  const vrm = g.userData.vrm;
+  VRMUtils.rotateVRM0(vrm);
+  vrm.scene.traverse(o=>{ if(o.isMesh||o.isSkinnedMesh){ o.castShadow=true; o.frustumCulled=false; } });
+  scene.add(vrm.scene);
+  return vrm;
+}
+window.__partnerVrm = ()=>_partner;                        // headless verification handle
+window.__dance = async (mode, srcName)=>{
+  mode = mode || 'mirror';
+  if(mode === 'off'){
+    if(_partner){ scene.remove(_partner.scene); _partner = null; }
+    _partnerMode = null; _partnerSrc = null; return 'partner dismissed';
+  }
+  if(!['mirror','twin'].includes(mode)) return "mode: 'mirror' | 'twin' | 'off'";
+  _partnerMode = mode; _partnerSrc = srcName || null;
+  window.__partnerShare = true;                            // stream my rig so remote partners can wear it
+  if(!_partner) _partner = await _spawnPartner();
+  return `partner: ${mode}${srcName ? ' following ' + srcName : ' following you'}`;
+};
+window.__partnerTick = ()=>{
+  if(!_partner || !_partnerMode) return;
+  // pick the source rig frame: a named peer's streamed bones, or my own live rig
+  let bones = null, srcPos = null, srcYaw = 0;
+  if(_partnerSrc){
+    for(const r of remotes.values()){
+      if((r.name||'') === _partnerSrc){ bones = r.bones; srcPos = r.group.position; srcYaw = r.try_ || 0; break; }
+    }
+  } else if(playerVrm){
+    bones = _packBones(playerVrm); srcPos = player.position; srcYaw = playerVrm.scene.rotation.y + player.rotation.y;
+  }
+  if(!bones || !srcPos) return;
+  _applyBones(_partner, bones, _partnerMode === 'mirror');
+  // placement: mirror faces you across a 1.4 m gap; twin stands at your left shoulder, same facing
+  if(_partnerMode === 'mirror'){
+    const fx = -Math.sin(srcYaw), fz = -Math.cos(srcYaw);   // porch forward convention
+    _partner.scene.position.set(srcPos.x + fx*1.9, srcPos.y, srcPos.z + fz*1.9);   // 1.9m: dance-hold distance, and the 3rd-person cam can see you both (1.4 put a face in the lens)
+    _partner.scene.rotation.y = srcYaw + Math.PI;           // turn to face you
+  } else {
+    const rx = Math.cos(srcYaw), rz = -Math.sin(srcYaw);    // your right-hand side
+    _partner.scene.position.set(srcPos.x + rx*0.9, srcPos.y, srcPos.z + rz*0.9);
+    _partner.scene.rotation.y = srcYaw;
+  }
+  if(_partner.update) _partner.update(0.016);               // springs/blinks live on the partner too
+};
+
 window.__mirrorWristFromRight = ()=>{ _mirrorWristQuat(_wristCalR, _wristCalL);
   try{ localStorage.setItem('porch.wristcal', JSON.stringify({l:_wristCalL.toArray(), r:_wristCalR.toArray()})); }catch(e){}
   return 'left wrist = mirror of right (saved) '+JSON.stringify(_wristCalL.toArray().map(n=>+n.toFixed(3))); };
@@ -6971,6 +7078,7 @@ setInterval(()=>{
                               world:(typeof _district!=='undefined' ? _district : 'porch'),  // presence world-tag: don't bleed avatars across worlds
                               emote:(window._myEmote && performance.now()<window._myEmote.until+300) ? window._myEmote.name : undefined,
                               eid:(window._myEmote && performance.now()<window._myEmote.until+300) ? window._myEmote.id : undefined,
+                              bones: (window.__partnerShare && playerVrm) ? __packBones(playerVrm) : undefined,  // dance partnering: stream my rig
                               pose: window.__netPose}));
 }, 100);
 const _voice = window.speechSynthesis;
@@ -7187,6 +7295,8 @@ function cachedCreds(q){
       if(m.emote && m.eid && m.eid !== r._eid){ r._eid = m.eid; if(r.playEmote) r.playEmote(m.emote); }  // one-shot emote per new id
       r.poseName = m.pose || null;                   // held pose (crouch/sit) — streamed, not one-shot
       if(r.vrm && m.hid!==undefined) _applyOutfitField(r.vrm, m.hid);   // clothes toggles travel with the pose
+      if(m.bones){ r.bones = m.bones;                      // their rig frame (partnering source)
+        if(r.vrm) _applyBones(r.vrm, m.bones, false); }    // a streamed rig wears ITSELF exactly (mirroring is the partner's job)
       if(m.acc !== undefined && typeof _applyAccTo === 'function'){     // accessories too (idempotent by kind)
         r._accT = r._accT || {};
         const isVrm = !!r.vrm;
@@ -8263,11 +8373,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes dd97241-41a7732a).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3d34008-fd1737fd).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'dd97241-41a7732a';
+    const MY_BUILD = '3d34008-fd1737fd';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9087,6 +9197,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window.__probeTick) __probeTick(t, dt);               // avatar probe lighting (candle warmth etc.)
   if(window.__inspectTick) __inspectTick(now);             // inspect mode: label whatever's aimed at
   if(window.__accTick) __accTick();                        // accessories follow their heads (normalized-bone followers)
+  if(window.__partnerTick) __partnerTick();                // the dance partner wears your rig (mirror/twin)
   sky.material.uniforms.uTime.value = t;
   fenceMat.uniforms.uTime.value = t;
   _veilMat.uniforms.uTime.value = t;                       // portal ripple
