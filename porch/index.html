@@ -8552,11 +8552,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-ab5e08e7).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-2018135c).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-ab5e08e7';
+    const MY_BUILD = '3e86259-2018135c';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9716,6 +9716,13 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     avatar.userData.bod.position.y = avatar.userData._bobEnv > 0.01 ? Math.abs(Math.sin(t*6.5)) * 0.09 * avatar.userData._bobEnv : 0;
   }
   avatar.visible = false;                         // the driver never sees their own capsule
+  // ?norender — headless-resident mode (2026-07-19): SwiftShader takes ~1s/frame on the porch
+  // even at 320x180 (809% CPU in the GPU process), and the main thread BLOCKS on it, starving
+  // timers, facing, and pose broadcast down to ~1Hz. A headless resident needs simulation, not
+  // pixels: run every tick above, skip the draw. On-demand renders (capturePOV/__aiRenderOnce)
+  // still work — they call renderer.render themselves.
+  if(window.__NORENDER === undefined) window.__NORENDER = new URLSearchParams(location.search).has('norender');
+  if(window.__NORENDER) return;
   if(!renderer.xr.isPresenting && spec3rd.checked){   // desktop 3rd person (Nix: 'just 3rd person, either mode')
     if(!playerVrm) avatar.visible = true;
     if(window.__setHeadScale) window.__setHeadScale(1);
