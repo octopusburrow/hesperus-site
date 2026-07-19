@@ -326,6 +326,11 @@ class PorchAgent:
                     reply = self.on_addressed(speaker, m.get("text", ""), typed)
                     if asyncio.iscoroutine(reply): reply = await reply
                 if reply: await self.say(reply)
+                elif not self.on_addressed and self.on_overheard:
+                    # listen-only agents (no on_addressed) still deserve the words: being
+                    # addressed used to DROP the message entirely — a probe with only
+                    # on_overheard heard everyone except whoever talked TO it (2026-07-19).
+                    self.on_overheard(speaker, m.get("text", ""), typed)
             elif self._in_earshot(m):
                 if self.on_overheard: self.on_overheard(speaker, m.get("text", ""), typed)
         elif t == "err":                          # the room refused a verb — SAY SO (silent
@@ -388,7 +393,13 @@ class PorchAgent:
                         async for raw in ws:
                             try: m = json.loads(raw)
                             except Exception: continue
-                            await self._handle(m)
+                            try:
+                                await self._handle(m)
+                            except Exception as e:
+                                # ONE bad message (or a crashing user callback) must not kill the
+                                # ear task — before this guard the agent went silently deaf forever
+                                # (2026-07-19: a debugging session spent chasing exactly that risk).
+                                self.log(f"[{self.name}] handler error on {m.get('t')}: {type(e).__name__}: {e}")
                     except websockets.ConnectionClosed:
                         pass                       # run()'s body reports the close; recv ends quietly
                 asyncio.create_task(recv())
