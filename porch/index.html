@@ -8552,11 +8552,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-68085a03).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-ab5e08e7).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-68085a03';
+    const MY_BUILD = '3e86259-ab5e08e7';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9370,8 +9370,10 @@ window.__probeTick = (t, dt)=>{
 };
 
 renderer.setAnimationLoop((now, xrFrame)=>{
-  const dt = _last ? Math.min((now - _last)/1000, 0.05) : 0.016;
-  _last = now;
+  const realDt = _last ? (now - _last)/1000 : 0.016;   // UNclamped wall-clock delta — for eases that
+  const dt = Math.min(realDt, 0.05);                   // must converge under throttled rAF (headless/
+  _last = now;                                         // backgrounded pages tick ~0.3Hz; clamped-dt
+                                                       // eases move 15%/tick there = glacial turns)
   t += dt;
   if(window.__probeTick) __probeTick(t, dt);               // avatar probe lighting (candle warmth etc.)
   if(window.__inspectTick) __inspectTick(now);             // inspect mode: label whatever's aimed at
@@ -9483,7 +9485,9 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       const want = _yawToward(rp, ftgt) + (window.__resFaceFlip||0);   // __resFaceFlip: live-tunable if the convention is backwards
       let dy = want - residentVrm.scene.rotation.y;
       while(dy >  Math.PI) dy -= 2*Math.PI; while(dy < -Math.PI) dy += 2*Math.PI;
-      residentVrm.scene.rotation.y += dy * Math.min(1, dt*3);
+      // frame-rate-independent ease (realDt, NOT clamped dt): under throttled rAF the clamped
+      // version stepped ~15%/3s and never arrived (Nix live-tested it, 2026-07-19)
+      residentVrm.scene.rotation.y += dy * Math.min(1, 1 - Math.exp(-3*realDt));
     }
   }
   if(residentVrm) residentVrm.update(dt);
