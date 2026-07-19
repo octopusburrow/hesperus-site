@@ -7564,6 +7564,29 @@ function doTeleport(x, z, detail){
 }
 window.__resetSprings = _resetSprings;                     // district-crossing + tests share it
 window.__teleport = doTeleport;                            // headless tests take the REAL path (incl. spring reset)
+// ---- smoke-test hooks (tools/smoke_page.py, 2026-07-19) — read-only peeks at module state,
+// plus aim(): the two mutators a headless tester needs (a browser can't mouse-look or click UI
+// reliably under SwiftShader). Everything else goes through the REAL paths (__teleport, __tryTouch).
+window.__smoke = {
+  remote(name){ for(const r of remotes.values()) if((r.group.userData.name||'')===name) return r; return null; },
+  peek(name){ const r=this.remote(name); if(!r) return null;
+    return { vrm: !!r.vrm, state: r.state||null, tagState: r.group.userData.state||null,
+             spkTtl: Math.max(0, (r.spkUntil||0) - performance.now()),
+             mouthEnv: r._mouthEnv||0,
+             bubble: !!(r.group.userData._bubble && r.group.userData._bubble.mesh.visible),
+             mega: !!(r.group.userData._mega && r.group.userData._mega.visible),
+             x: r.group.position.x, z: r.group.position.z }; },
+  me(){ return { x: player.position.x, z: player.position.z,
+                 third: spec3rd.checked, voice: !!_voice, joined: myNet!=null }; },
+  third(on){ spec3rd.checked = !!on; },
+  aim(tx, tz){                                           // face a world point; verify, don't trust signs
+    player.rotation.y = Math.atan2(-(tx - player.position.x), -(tz - player.position.z));
+    pitch = 0; camera.rotation.x = 0;
+    const d = camera.getWorldDirection(new THREE.Vector3());
+    const dot = d.x*(tx - player.position.x) + d.z*(tz - player.position.z);
+    if(dot < 0) player.rotation.y += Math.PI;            // convention drifted? flip and be right anyway
+    return dot; }
+};
 function doGoto(target){
   if(!target){ cmdNote('usage: /goto <name|sid>'); return; }
   for(const r of remotes.values()){
@@ -8584,11 +8607,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-4e680612).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-3d9682e9).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-4e680612';
+    const MY_BUILD = '3e86259-3d9682e9';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy

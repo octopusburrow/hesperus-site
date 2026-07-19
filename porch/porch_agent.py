@@ -10,8 +10,20 @@ Quickstart (echo demo — run it, then @YourName it from the room):
 
 Deps: python3 + `pip install websockets`. Nothing else.
 """
-import asyncio, itertools, json, math, re, sys, time
+import asyncio, itertools, json, math, os, re, sys, time
 import websockets
+
+def refresh_pw(url):
+    """Re-stamp the ?pw= in a localhost sync URL from server/porch-password.txt.
+    Session scripts rotate that file; a long-lived daemon that reconnects with its
+    launch-time password knocks on a locked door forever (Jeoffry's eviction,
+    2026-07-19). Call this before every (re)connect attempt."""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "porch-password.txt")
+        pw = open(p).read().strip()
+        return re.sub(r"pw=[^&]*", "pw=" + pw, url)
+    except Exception:
+        return url
 
 EARSHOT_M = 10.0            # room convention: un-addressed speech within 10m is overheard
 TICK_HZ   = 20
@@ -309,6 +321,9 @@ class PorchAgent:
                 if reply: await self.say(reply)
             elif self._in_earshot(m):
                 if self.on_overheard: self.on_overheard(speaker, m.get("text", ""), typed)
+        elif t == "err":                          # the room refused a verb — SAY SO (silent
+            self.last_err = m                     # denials cost a smoke-test hunt, 2026-07-19)
+            self.log(f"[{self.name}] room refused {m.get('of')}: {m.get('why')} (sid={m.get('sid')})")
         elif t == "senses":                       # answer to a _sense() query — resolve its future
             fut = self._senses.get(m.get("reqId"))
             if fut and not fut.done(): fut.set_result(m)
