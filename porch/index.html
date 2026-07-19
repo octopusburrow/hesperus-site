@@ -4304,9 +4304,17 @@ window.__accTick = ()=>{
     nh.getWorldPosition(grp.position); nh.getWorldQuaternion(grp.quaternion);
     const rh = vrm.humanoid.getRawBoneNode && vrm.humanoid.getRawBoneNode('head');
     if(rh){ rh.getWorldScale(_accScaleV); grp.scale.copy(_accScaleV); }
+    // OWN accessory near-camera cull (Nix, 2026-07-19: 3rd-person cam ran INSIDE her shades
+    // when backing up): if this is the local player's accessory and the camera is within
+    // clipping distance of the head, hide it — you never want your own eyewear as a wall.
+    if(typeof playerVrm!=='undefined' && vrm===playerVrm){
+      const cd2 = grp.position.distanceToSquared(camera.getWorldPosition(_accCamV));
+      grp.visible = cd2 > 0.36;    // 0.6m
+    }
   }
 };
 const _accScaleV = new THREE.Vector3(1,1,1);
+const _accCamV = new THREE.Vector3();
 function _applyAccTo(target, kind, isVrm){
   // target: {mount, kind, grp, vrm?} carrier; idempotent by stored kind
   const mount = target.mount; if(!mount) return;
@@ -5158,9 +5166,15 @@ window.__tryTouchAt=(handPos)=>{                   // VR: trigger with a hand in
   }
   return false;
 };
-window.__tryTouch=()=>{                            // desktop: T — pat/boop whoever the camera faces, arm's reach
-  const cp=camera.getWorldPosition(new THREE.Vector3());
+window.__tryTouch=()=>{                            // desktop: T — pat/boop whoever you face, arm's reach
+  // Reach is measured from the AVATAR, not the camera: in 3rd-person spectator the camera sits
+  // 3.2m behind you, which put every nose in the room permanently out of arm's reach
+  // (Nix's unboopable-architect bug, 2026-07-19). Direction still comes from the camera (aim);
+  // origin comes from your body at eye height.
   const cd=camera.getWorldDirection(new THREE.Vector3());
+  const _3rd = typeof spec3rd!=='undefined' && spec3rd.checked && !renderer.xr.isPresenting;
+  const cp=_3rd ? player.position.clone().setY(player.position.y + 1.5)
+                : camera.getWorldPosition(new THREE.Vector3());
   let best=null;
   for(const c of _touchCandidates()){
     const z=_touchZones(c.vrm); if(!z) continue;
@@ -8570,11 +8584,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-9349ce0b).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-4e680612).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-9349ce0b';
+    const MY_BUILD = '3e86259-4e680612';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
