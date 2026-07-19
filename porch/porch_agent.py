@@ -287,7 +287,10 @@ class PorchAgent:
                      f"peers={[p.get('display') for p in m.get('peers', [])]}")
         elif t == "pose" and m.get("id") != self.id:
             self.peers[m["id"]] = {"name": m.get("name", "guest"), "x": m.get("x", 0),
-                                   "z": m.get("z", 0), "model": m.get("model", "human")}
+                                   "z": m.get("z", 0), "model": m.get("model", "human"),
+                                   "ts": time.time()}   # freshness: stale entries linger after
+                                                        # reconnects (no leave for a dead id) —
+                                                        # consumers should ignore ts older than ~3s
         elif t == "leave":
             self.peers.pop(m.get("id"), None)
         elif t in ("chat", "stt") and m.get("id") != self.id:

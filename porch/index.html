@@ -7306,9 +7306,17 @@ function cachedCreds(q){
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
     else if(m.t === 'prop' && m.id !== myNet){       // a grabbable the OWNER is moving — apply as kinematic
-      const g = grabbablesById[m.pid]||_ensureBookProp(m.pid); if(g && g.owner!==myNet){ g.mesh.position.set(m.x, m.y||0, m.z);
-        if(m.q && m.q.length===4) g.mesh.quaternion.set(m.q[0],m.q[1],m.q[2],m.q[3]); }
-      const sp = spawnedObjs.get(m.pid); if(sp) sp.position.set(m.x, m.y||1, m.z); }   // agents carry primitives too (gym)
+      // SMOOTHED (2026-07-19, Nix: Jeoffry "jumps a few inches every tick"): daemons stream props
+      // at ~10Hz and a raw position.set snaps between packets. Stash the target; _propLerpTick
+      // eases toward it each frame — same treatment remote avatars always had.
+      const g = grabbablesById[m.pid]||_ensureBookProp(m.pid); if(g && g.owner!==myNet){
+        const u = g.mesh.userData;
+        u._tp = (u._tp||new THREE.Vector3()).set(m.x, m.y||0, m.z);
+        if(m.q && m.q.length===4) u._tq = (u._tq||new THREE.Quaternion()).set(m.q[0],m.q[1],m.q[2],m.q[3]);
+        _lerpProps.add(g.mesh); }
+      const sp = spawnedObjs.get(m.pid); if(sp){
+        sp.userData._tp = (sp.userData._tp||new THREE.Vector3()).set(m.x, m.y||1, m.z);
+        _lerpProps.add(sp); } }   // agents carry primitives too (gym)
     else if(m.t === 'own'){                          // authoritative ownership change (grant/deny/free/steal)
       if(window.__grab) window.__grab.applyOwn(m.pid, (m.owner==null?null:m.owner)); }
     else if(m.t === 'screenctl' && m.id !== myNet){  // synced movie controls (own echo skipped: it would kill my keepalive)
@@ -8552,11 +8560,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-2018135c).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-71128923).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-2018135c';
+    const MY_BUILD = '3e86259-71128923';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9369,12 +9377,24 @@ window.__probeTick = (t, dt)=>{
   }
 };
 
+const _lerpProps = new Set();          // networked props easing toward their last streamed pose
+function _propLerpTick(dt){
+  const a = 1 - Math.exp(-14*dt);      // ~70ms time-constant: tight tracking, no visible steps
+  for(const mesh of _lerpProps){
+    const u = mesh.userData;
+    if(u._tp){ mesh.position.lerp(u._tp, a);
+      if(mesh.position.distanceToSquared(u._tp) < 1e-6) mesh.position.copy(u._tp); }
+    if(u._tq){ mesh.quaternion.slerp(u._tq, a); }
+    if(u._tp && mesh.position.equals(u._tp)) _lerpProps.delete(mesh);
+  }
+}
 renderer.setAnimationLoop((now, xrFrame)=>{
   const realDt = _last ? (now - _last)/1000 : 0.016;   // UNclamped wall-clock delta — for eases that
   const dt = Math.min(realDt, 0.05);                   // must converge under throttled rAF (headless/
   _last = now;                                         // backgrounded pages tick ~0.3Hz; clamped-dt
                                                        // eases move 15%/tick there = glacial turns)
   t += dt;
+  _propLerpTick(realDt);                                   // smooth networked props (Jeoffry et al)
   if(window.__probeTick) __probeTick(t, dt);               // avatar probe lighting (candle warmth etc.)
   if(window.__inspectTick) __inspectTick(now);             // inspect mode: label whatever's aimed at
   if(window.__accTick) __accTick();                        // accessories follow their heads (normalized-bone followers)
