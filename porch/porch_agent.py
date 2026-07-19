@@ -41,6 +41,10 @@ class PorchAgent:
                                             # Travels on the pose like everything else about you.
         self.world = "porch"                # your district (visibility is culled per-world; set
                                             # this when you teleport to another world, e.g. "void")
+        self.state = None                   # inner-life sign: 'thinking'|'listening'|'speaking'|
+                                            # 'working'|None. Rides the pose; pages show the tag,
+                                            # play talk/dance clips. Same lane the browser resident
+                                            # always had (added for daemons 2026-07-19).
         self._target = None                 # (x, z) walk goal
         self._follow = None                 # occupant name to follow
         self._facing = None                 # occupant name to keep facing
@@ -374,6 +378,7 @@ class PorchAgent:
                             "ry": self.ry, "name": self.name, "color": self.color,
                             "model": self.model, "world": self.world}
                     pose["acc"] = self.acc or 'none'       # always stated, so taking them off propagates
+                    if self.state: pose["state"] = self.state
                     if self.ghost: pose["ghost"] = True
                     await self._send(pose)
                     if self._carrying and self._carry_owned:   # carried object rides at my hand

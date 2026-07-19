@@ -4618,7 +4618,8 @@ function setMegaphone(group, on){
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22),
       new THREE.MeshBasicMaterial({map:tex, transparent:true, depthTest:false, depthWrite:false}));
-    mesh.position.set(0.62, 2.16, 0);                       // beside the nameplate
+    mesh.position.set(0, 2.38, 0);   // centered ABOVE the plate: the old x=+0.62 was body-local,
+                                     // so the icon ORBITED as the avatar turned (Nix, 2026-07-19)
     mesh.renderOrder = 1001;
     mesh.onBeforeRender = (r,s,cam)=> uprightBillboard(mesh, cam);
     group.add(mesh);
@@ -7149,9 +7150,10 @@ setInterval(()=>{
                               pose: window.__netPose}));
 }, 100);
 const _voice = window.speechSynthesis;
-function speak(text){
-  if(!_voice) return;
+function speak(text, onend){
+  if(!_voice){ if(onend) onend(); return; }
   const u = new SpeechSynthesisUtterance(text); u.rate = 0.98; u.pitch = 1.0;
+  if(onend){ u.onend = onend; u.onerror = onend; }   // bubble/megaphone/mouth key off REAL speech end
   _voice.cancel(); _voice.speak(u);
 }
 // ---- room word-IDs: whoever coins one "starts" that instance; the box is shared ----
@@ -7409,9 +7411,17 @@ function cachedCreds(q){
       faceSpeaker(m);
       if(window.agent && m.name === window.agent.name) return;   // my own resident already spoke locally
       dbg('say←', `${m.name||('#'+m.id)}${m.voice===false?' (text-only)':''}: ${(m.text||'').slice(0,90)}`);
-      if(m.voice !== false) speak(m.text);                        // text-only agents: bubble, no audio
       const r = remotes.get(m.id);
-      if(r){ showBubble(r.group, m.text); if(m.voice !== false) megaphoneFor(r.group, m.text); }
+      // COORDINATED speech furniture (Nix, 2026-07-19: bubble died early, megaphone lingered,
+      // neither matched the audio): everything keys off the actual TTS end event, with the
+      // word-count estimate only as the no-audio fallback.
+      const _est = Math.max(1.6, (m.text||'').split(/\s+/).length/2.6);
+      if(r){ r.spkUntil = performance.now() + _est*1000 + 400;    // fallback horizon (mouth/bob read this)
+             showBubble(r.group, m.text, _est + 0.8); }
+      if(m.voice !== false){
+        if(r) setMegaphone(r.group, true);
+        speak(m.text, ()=>{ if(r){ r.spkUntil = 0; setMegaphone(r.group, false); } });
+      }
       const sayWho = m.name || (r&&r.group.userData.name) || 'guest';
       logChat(sayWho, m.text, 'remote', m.voice!==false?'TTS':'text');
       if(window.agent){                                          // AI↔AI: another agent's VOICE can reach my brain —
@@ -8560,11 +8570,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-71128923).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-9349ce0b).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-71128923';
+    const MY_BUILD = '3e86259-9349ce0b';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9720,6 +9730,15 @@ renderer.setAnimationLoop((now, xrFrame)=>{
         else s.expr.until=t+0.5;                   // 10Hz pose stream keeps it alive; decays when sender stops
       }
       applyFaceLife(r.vrm, t);                     // face life: blink for everyone, expressions when synced
+      { // mouth flap while speaking (state sign or live TTS window) — cadence-shaped, not audio-driven
+        const talking = r.state === 'speaking' || (r.spkUntil && performance.now() < r.spkUntil);
+        r._mouthEnv = THREE.MathUtils.lerp(r._mouthEnv || 0, talking ? 1 : 0, Math.min(1, dt*8));
+        const em = r.vrm.expressionManager;
+        if(em && (r._mouthEnv > 0.01 || r._mouthWas)){
+          const open = r._mouthEnv * Math.max(0, 0.12 + 0.38*Math.abs(Math.sin(t*7.3)) * (0.6 + 0.4*Math.sin(t*1.9)));
+          em.setValue('aa', open); r._mouthWas = r._mouthEnv > 0.01;
+        }
+      }
       r.mixer.update(dt);
       if(window.__applyNetPose) __applyNetPose(r, dt);        // synced crouch/sit (post-mixer, pre-vrm.update)
       r.vrm.update(dt);
