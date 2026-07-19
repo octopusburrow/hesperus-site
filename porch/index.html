@@ -7236,7 +7236,7 @@ function cachedCreds(q){
   _authVeil(true);                                            // veil from the FIRST frame: resolveSyncUrl is a
   // network fetch, and the world was painting for the ~1s it took (Nix saw the glimpse survive rev.1 of this fix)
   const q = new URLSearchParams(location.search);
-  const base = await resolveSyncUrl(q);
+  let base = await resolveSyncUrl(q);   // let: a dead tunnel's replacement arrives via re-resolution (2026-07-19)
   if(!base){ dbg('sync','no server endpoint yet (no ?sync, no sync.json)','e');
     _authVeil(false); const ov=document.getElementById('signin'); if(ov) ov.style.display='none';
     _bootLoadSnapshot(); return; }              // solo mode: no relay authority → serve the persisted world from static files
@@ -7260,11 +7260,11 @@ function cachedCreds(q){
   let url = buildUrl();
   // RECONNECT (2026-07-07): server restarts used to silently kill everyone's socket for the rest
   // of the session. Backoff 1s→10s forever. Auth reject (4001) → re-prompt instead of spin-retry.
-  let retryMs = 1000, _everWelcomed = false, _veilOff = false;
+  let retryMs = 1000, _everWelcomed = false, _veilOff = false, _failN = 0;
   function connect(){
   if(!_everWelcomed && !_veilOff) _authVeil(true);             // every pre-accept attempt stays behind the backdrop
   try { sock = new WebSocket(url); } catch(e){ console.warn('sync connect failed', e); return; }
-  sock.onopen = ()=>{ console.log('sync: connected', room); retryMs = 1000; dbg('sync', 'connected', 'g'); };
+  sock.onopen = ()=>{ console.log('sync: connected', room); retryMs = 1000; _failN = 0; dbg('sync', 'connected', 'g'); };
   sock.onclose = (ev)=>{
     if(ev && ev.code===4001){                                  // bad password → clear cache, re-prompt, retry
       try{ localStorage.setItem('porch.creds', JSON.stringify({name:creds.name||''})); }catch(e){}   // drop only the pw: the name still greets them
@@ -7279,6 +7279,19 @@ function cachedCreds(q){
       return; }
     if(!_everWelcomed){ _veilOff=true; _authVeil(false); const ov=document.getElementById('signin'); if(ov) ov.style.display='none'; }  // server unreachable ≠ veil-lock: show the world, keep retrying
     dbg('sync', `disconnected — retrying in ${retryMs/1000}s`, 'e');
+    // DEAD-DOOR UX (2026-07-19 onboarding dogfood): guests used to get a silently-empty world
+    // with the only clue in the dev panel. Say it once, in the chat, in words.
+    _failN++;
+    if(_failN === 3 && window.__logChat)
+      __logChat('porch', "can't reach the porch host — the door may be shut right now (host asleep, or the tunnel moved). I'll keep knocking…", 'sys');
+    // TUNNEL-MOVED SELF-HEAL: the host's watchdog rewrites sync.json when it re-opens the tunnel;
+    // an already-open tab should FOLLOW it instead of knocking on the old door forever.
+    // (Explicit ?sync= stays pinned: resolveSyncUrl returns the param first, so base never changes.)
+    if(_failN >= 3 && _failN % 3 === 0)
+      resolveSyncUrl(new URLSearchParams(location.search)).then(w=>{
+        if(w && w !== base){ base = w; url = buildUrl();
+          dbg('sync', 'endpoint moved — following sync.json → ' + w, 'g');
+          if(window.__logChat) __logChat('porch', 'found the new door — reconnecting…', 'sys'); } });
     setTimeout(connect, retryMs); retryMs = Math.min(retryMs*2, 10000); };
   sock.onmessage = (ev)=>{
     let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
@@ -8608,11 +8621,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-44301185).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-81eb63a3).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-44301185';
+    const MY_BUILD = '3e86259-81eb63a3';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
