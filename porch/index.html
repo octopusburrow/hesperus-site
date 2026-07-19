@@ -8552,11 +8552,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-bab9be73).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-68085a03).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-bab9be73';
+    const MY_BUILD = '3e86259-68085a03';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9470,7 +9470,12 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     }
     if(!ftgt){
       let bd = 25;                                            // 5m²
-      const cands = [player.position]; if(typeof remotes!=='undefined') for(const r of remotes.values()) cands.push(r.group.position);
+      // noembody host page: the local player is a PHANTOM capsule parked at spawn — it competed
+      // with real remotes for the resident's attention and won by proximity, so the resident
+      // stared at a ghost instead of the person in the room (Nix's catch, 2026-07-19).
+      const _phantom = new URLSearchParams(location.search).has('noembody');
+      const cands = _phantom ? [] : [player.position];
+      if(typeof remotes!=='undefined') for(const r of remotes.values()) cands.push(r.group.position);
       for(const p of cands){ const dx=p.x-rp.x, dz=p.z-rp.z, d2=dx*dx+dz*dz;
         if(d2 > 0.09 && d2 < bd){ bd = d2; ftgt = p; } }
     }
