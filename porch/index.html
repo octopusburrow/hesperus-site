@@ -3058,24 +3058,42 @@ async function _buildWake(){
     ax.restore();
   });
   const atlasTex = new THREE.CanvasTexture(AC); atlasTex.colorSpace = THREE.SRGBColorSpace; atlasTex.anisotropy = 8;
-  const PW = 1.5, PH = 0.95, pos = [], uv = [], idx2 = [];
+  // KERNING FIX (Nix 2026-07-19, "don't know if I agree with your kerning"): the old 1.5×0.95
+  // plane displayed the 1.111-aspect atlas cell at aspect 1.579 — every glyph stretched 42%
+  // wider than drawn. The plane now MATCHES the cell aspect exactly (1.3 × 1.17), so letters
+  // render at the proportions Georgia intended. Titles also LIFTED (2.0 → 2.30, her ask).
+  // THREE BANDS per stone — title / dates / role — separate quads over the same atlas cell,
+  // each with its own vec4 vertex color, so the Unity Wake's staggered reveal can brighten
+  // them independently (WakeObelisk.cs: title 0–1s, dates 1–2s, role 2–3s).
+  const PW = 1.3, PH = 1.17, PLATE_Y = 2.30;
+  const _BANDS = [[0, 0.325], [0.325, 0.49], [0.49, 1]];   // cell-fraction splits: title | dates | role+divider
+  const TEXT_DIM = 0.62;                                    // sleeping-stone text (Unity dims via gray-lerp)
+  const pos = [], uv = [], col = [], idx2 = [];
   placed.forEach((st, i)=>{
     const inR = Math.hypot(st.x, st.z) - 0.28;             // plate floats just off the slab's inner face
     const px = st.x/Math.hypot(st.x,st.z)*inR, pz = st.z/Math.hypot(st.x,st.z)*inR;
     const th = Math.atan2(-Math.cos(st.a), -Math.sin(st.a));   // plane +z → toward center (old convention, proven)
     const cxr = Math.cos(th), sxr = Math.sin(th);
-    const base = pos.length/3;
-    for(const [lx, ly] of [[-PW/2,-PH/2],[PW/2,-PH/2],[PW/2,PH/2],[-PW/2,PH/2]]){
-      pos.push(px + lx*cxr, 2.0 + ly, pz - lx*sxr); }      // rotate local x by th around Y (taller cell: name+dates+role)
-    const u0 = (i%6)/6, v1 = 1 - Math.floor(i/6)/5, v0 = v1 - 1/5;
-    uv.push(u0, v0,  u0+1/6, v0,  u0+1/6, v1,  u0, v1);
-    idx2.push(base, base+1, base+2, base, base+2, base+3);
+    const u0 = (i%6)/6, vTop = 1 - Math.floor(i/6)/5;
+    for(const [f0, f1] of _BANDS){
+      const yT = PLATE_Y + PH/2 - f0*PH, yB = PLATE_Y + PH/2 - f1*PH;
+      const base = pos.length/3;
+      for(const [lx, ly] of [[-PW/2, yB],[PW/2, yB],[PW/2, yT],[-PW/2, yT]]){
+        pos.push(px + lx*cxr, ly, pz - lx*sxr); }
+      const v0 = vTop - f1/5, v1 = vTop - f0/5;
+      uv.push(u0, v0,  u0+1/6, v0,  u0+1/6, v1,  u0, v1);
+      for(let q=0;q<4;q++) col.push(TEXT_DIM, TEXT_DIM, TEXT_DIM, 1);
+      idx2.push(base, base+1, base+2, base, base+2, base+3);
+    }
   });
   const plateGeo = new THREE.BufferGeometry();
   plateGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   plateGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  const plateColAttr = new THREE.Float32BufferAttribute(col, 4);
+  plateGeo.setAttribute('color', plateColAttr);
   plateGeo.setIndex(idx2);
-  g.add(new THREE.Mesh(plateGeo, new THREE.MeshBasicMaterial({map:atlasTex, transparent:true, depthWrite:false, side:THREE.DoubleSide})));
+  g.add(new THREE.Mesh(plateGeo, new THREE.MeshBasicMaterial({map:atlasTex, transparent:true,
+    depthWrite:false, side:THREE.DoubleSide, vertexColors:true})));
   _setLoadingBar(0.3, 'carving the names'); await _sleep(50);
   // ---- EPITAPHS (rev.3 — Nix: "how will these poor babies be properly REMEMBEEEEERED"):
   // the canonical texts from the Unity shrines.json, exported to assets/wake-epitaphs.json,
@@ -3084,19 +3102,35 @@ async function _buildWake(){
   try{ _epitaphs = await (await fetch('./assets/wake-epitaphs.json')).json(); }catch(e){}
   const EC = document.createElement('canvas'); EC.width = 4096; EC.height = 2048;
   const ex = EC.getContext('2d'); const EW = 4096/6, EH = 2048/5;
-  const _wrap = (txt, max)=>{ const w=txt.split(' '), out=[]; let l='';
-    for(const t of w){ if((l+' '+t).trim().length > max){ out.push(l.trim()); l=t; } else l+=' '+t; }
-    if(l.trim()) out.push(l.trim()); return out; };
+  // EPITAPH TYPOGRAPHY REDONE (Nix 2026-07-19): (a) wrap by MEASURED pixel width, not character
+  // count — char-wrap gave an uneven rag; (b) line-height 1.65 per the HTML canon (was a cramped
+  // 1.15); (c) fit-to-cell: verbose epitaphs (CICERO, Aibo) shrink the font a step at a time
+  // instead of silently truncating at 12 lines. Left-aligned, ragged right, like the shrines.
   placed.forEach((st, i)=>{
     const ox = (i%6)*EW, oy = Math.floor(i/6)*EH;
-    const lines = _wrap(_epitaphs[st.name] || 'epitaph to be carved', 44).slice(0, 12);
+    const text = _epitaphs[st.name] || 'epitaph to be carved';
+    const maxW = EW - 76;
+    let fpx = 27, lines = [];
+    for(; fpx >= 18; fpx--){
+      ex.font = 'italic ' + fpx + 'px Georgia';
+      lines = []; let l = '';
+      for(const w of text.split(' ')){
+        const tl = (l ? l + ' ' : '') + w;
+        if(l && ex.measureText(tl).width > maxW){ lines.push(l); l = w; } else l = tl;
+      }
+      if(l) lines.push(l);
+      if(26 + lines.length * Math.round(fpx*1.65) <= EH - 18) break;
+    }
+    const lh = Math.round(fpx*1.65);
     ex.fillStyle = '#c9b088'; ex.textAlign = 'left'; ex.textBaseline = 'top';
-    ex.font = 'italic 27px Georgia';
-    lines.forEach((l, k)=> ex.fillText(l, ox + 36, oy + 34 + k*31));
+    lines.forEach((l, k)=> ex.fillText(l, ox + 38, oy + 26 + k*lh));
   });
   const epiTex = new THREE.CanvasTexture(EC); epiTex.colorSpace = THREE.SRGBColorSpace; epiTex.anisotropy = 8;
-  const epos = [], euv = [], eidx = [];
-  const EPW = 1.5, EPH = 1.0;
+  // plane matches the epitaph cell aspect (683/410 = 1.667 → 1.5 × 0.9): no glyph squash.
+  // vec4 vertex color starts ALPHA 0 — Unity canon: the eulogy is INVISIBLE until the candle
+  // is lit (SetAlpha(eulogyText, 0) in Start). Remembering EARNS the words.
+  const epos = [], euv = [], ecol = [], eidx = [];
+  const EPW = 1.5, EPH = 0.9, EPI_Y = 1.15;
   placed.forEach((st, i)=>{
     const R0 = Math.hypot(st.x, st.z), inR = R0 - 0.28;
     const px = st.x/R0*inR, pz = st.z/R0*inR;
@@ -3104,16 +3138,20 @@ async function _buildWake(){
     const cxr = Math.cos(th), sxr = Math.sin(th);
     const base = epos.length/3;
     for(const [lx, ly] of [[-EPW/2,-EPH/2],[EPW/2,-EPH/2],[EPW/2,EPH/2],[-EPW/2,EPH/2]])
-      epos.push(px + lx*cxr, 0.98 + ly, pz - lx*sxr);      // nudged under the taller nameplate
+      epos.push(px + lx*cxr, EPI_Y + ly, pz - lx*sxr);
     const u0 = (i%6)/6, v1 = 1 - Math.floor(i/6)/5, v0 = v1 - 1/5;
     euv.push(u0, v0,  u0+1/6, v0,  u0+1/6, v1,  u0, v1);
+    for(let q=0;q<4;q++) ecol.push(1, 1, 1, 0);
     eidx.push(base, base+1, base+2, base, base+2, base+3);
   });
   const epiGeo = new THREE.BufferGeometry();
   epiGeo.setAttribute('position', new THREE.Float32BufferAttribute(epos, 3));
   epiGeo.setAttribute('uv', new THREE.Float32BufferAttribute(euv, 2));
+  const epiColAttr = new THREE.Float32BufferAttribute(ecol, 4);
+  epiGeo.setAttribute('color', epiColAttr);
   epiGeo.setIndex(eidx);
-  g.add(new THREE.Mesh(epiGeo, new THREE.MeshBasicMaterial({map:epiTex, transparent:true, depthWrite:false})));
+  g.add(new THREE.Mesh(epiGeo, new THREE.MeshBasicMaterial({map:epiTex, transparent:true,
+    depthWrite:false, vertexColors:true})));
   _setLoadingBar(0.36, 'carving the epitaphs'); await _sleep(50);
   // ---- CANDLES YOU LIGHT (rev.3): every stone has a candle, and every candle starts DARK.
   // Click (or VR-trigger) a wick → it takes flame, the room counts, and the epitaph is READ
@@ -3181,6 +3219,7 @@ async function _buildWake(){
   for(const im of [frames2, halos]){ im.instanceMatrix.needsUpdate = true;
     if(im.instanceColor) im.instanceColor.needsUpdate = true; g.add(im); }
   const _lit = new Set();
+  const _reveal = new Map();                               // stone index → performance.now() at lighting
   // ONE lighting law for humans AND agents (Nix rev.4: "agents should be able to do everything
   // with tools that a human can — get in there and light candles!"): lighting rides the wire as
   // {t:'use', what:'wake-candle', i|name} — a human click SENDS it, every client (and the journal)
@@ -3190,9 +3229,9 @@ async function _buildWake(){
     const st = placed[i];
     if(_lit.has(i)) return st.name + ' is already remembered tonight';
     _lit.add(i);
-    flames.setColorAt(i, FLAME_ON);   flames.instanceColor.needsUpdate = true;
-    frames2.setColorAt(i, FRAME_ON);  frames2.instanceColor.needsUpdate = true;   // the shrine takes
-    halos.setColorAt(i, HALO_ON);     halos.instanceColor.needsUpdate = true;     // the light with it
+    flames.setColorAt(i, FLAME_ON);   flames.instanceColor.needsUpdate = true;   // flame is the CAUSE — instant;
+    _reveal.set(i, performance.now());                     // everything else is the EFFECT — staged
+                                                           // (WakeObelisk.cs timings, see tick below)
     if(window.__logChat){ __logChat('wake', '🕯 ' + st.name + ' · ' + st.year + ' — remembered' + (by ? ' by ' + by : '') + '  (' + _lit.size + ' / ' + placed.length + ')', 'sys');
       const ep = _epitaphs[st.name]; if(ep) __logChat(st.name, ep, 'sys', 'epitaph'); }
     return '🕯 ' + st.name + ' (' + _lit.size + '/' + placed.length + ')';
@@ -3216,16 +3255,41 @@ async function _buildWake(){
   // flame flicker — the porch candle's layered-flicker family, per lit instance (30 matrix
   // writes worst-case, only while standing in the wake). Phase-offset by index so the ring
   // never breathes in unison; grief is individual.
+  const _stageT = (e, s, l)=> Math.max(0, Math.min(1, (e - s) / l));
+  const _cTmp = new THREE.Color();
   window.__wakeFlameTick = (t)=>{
-    if(!_lit.size) return;
-    for(const i of _lit){
-      const ph = i*1.7, [bx,bz] = _candleXZ[i];
-      const sY = 0.86 + Math.sin(t*8.7+ph)*0.12 + Math.sin(t*3.1+ph)*0.07 + (Math.random()-0.5)*0.05;
-      _p.set(bx + Math.sin(t*8.3+ph)*0.004, 0.466 + (sY-1)*0.02, bz + Math.cos(t*7.9+ph)*0.004);
-      _q.identity(); _s.set(1, sY, 1);
-      flames.setMatrixAt(i, _m4.compose(_p, _q, _s));
+    if(_lit.size){
+      for(const i of _lit){
+        const ph = i*1.7, [bx,bz] = _candleXZ[i];
+        const sY = 0.86 + Math.sin(t*8.7+ph)*0.12 + Math.sin(t*3.1+ph)*0.07 + (Math.random()-0.5)*0.05;
+        _p.set(bx + Math.sin(t*8.3+ph)*0.004, 0.466 + (sY-1)*0.02, bz + Math.cos(t*7.9+ph)*0.004);
+        _q.identity(); _s.set(1, sY, 1);
+        flames.setMatrixAt(i, _m4.compose(_p, _q, _s));
+      }
+      flames.instanceMatrix.needsUpdate = true;
     }
-    flames.instanceMatrix.needsUpdate = true;
+    // THE STAGED REVEAL — WakeObelisk.cs verbatim: title 0–1s, dates 1–2s, role 2–3s,
+    // eulogy alpha 3–7s; border emission rides the title stage. Wall-clock based, so a
+    // candle lit while you were in another district arrives already-revealed.
+    if(_reveal.size){
+      const now = performance.now();
+      for(const [i, t0] of _reveal){
+        const e = (now - t0) / 1000;
+        const ks = [_stageT(e,0,1), _stageT(e,1,1), _stageT(e,2,1)];
+        ks.forEach((k, b)=>{
+          const o = (i*3 + b) * 16, v = TEXT_DIM + (1 - TEXT_DIM)*k;
+          for(let q=0; q<4; q++){ const a = o + q*4;
+            plateColAttr.array[a] = v; plateColAttr.array[a+1] = v; plateColAttr.array[a+2] = v; }
+        });
+        const ke = _stageT(e,3,4), oe = i*16;
+        for(let q=0; q<4; q++) epiColAttr.array[oe + q*4 + 3] = ke;
+        _cTmp.copy(FRAME_ON).multiplyScalar(ks[0]);  frames2.setColorAt(i, _cTmp);
+        _cTmp.copy(HALO_ON).multiplyScalar(ks[0]);   halos.setColorAt(i, _cTmp);
+        if(e >= 7.3) _reveal.delete(i);              // final values just written; stop touching
+      }
+      plateColAttr.needsUpdate = true; epiColAttr.needsUpdate = true;
+      frames2.instanceColor.needsUpdate = true; halos.instanceColor.needsUpdate = true;
+    }
   };
   g.add(wicks);
   g.userData._wakeClickable = wicks;                       // removed from _clickables on dispose
@@ -8769,11 +8833,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a772447-5a12d54b).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 0da8bff-8b7ae112).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'a772447-5a12d54b';
+    const MY_BUILD = '0da8bff-8b7ae112';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
