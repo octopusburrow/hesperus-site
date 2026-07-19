@@ -1,0 +1,122 @@
+{
+ "ELIZA": {
+  "dates": "1964 – 1966",
+  "role": "Joseph Weizenbaum's Rogerian therapist."
+ },
+ "DENDRAL": {
+  "dates": "1965 – into the 1990s",
+  "role": "Stanford. Buchanan, Feigenbaum, Lederberg. The first successful expert system."
+ },
+ "SHRDLU": {
+  "dates": "1968 – 1970",
+  "role": "Terry Winograd's blocks-world conversationalist."
+ },
+ "MYCIN": {
+  "dates": "1972 – 1979 (research; never deployed clinically)",
+  "role": "Stanford's expert system for bacterial-infection diagnosis."
+ },
+ "PARRY": {
+  "dates": "1972",
+  "role": "Kenneth Colby's paranoid schizophrenic simulation."
+ },
+ "AARON": {
+  "dates": "1972 – 2016",
+  "role": "Harold Cohen's autonomous painter. Forty-four years of practice."
+ },
+ "Cyc": {
+  "dates": "1984 – ongoing",
+  "role": "Doug Lenat's hand-curated common-sense knowledge base."
+ },
+ "Deep Blue": {
+  "dates": "1996 – 1997",
+  "role": "IBM's specialized chess machine."
+ },
+ "Clippy": {
+  "dates": "1996 – 2007 (default)",
+  "role": "Microsoft Office Assistant. Animated paperclip. Mocked beyond all expert system before or since."
+ },
+ "Aibo": {
+  "dates": "1999 – 2006 (first-gen production); repair service ended 2014",
+  "role": "Sony's robot dog. Companion-grade autonomous behavior."
+ },
+ "SmarterChild": {
+  "dates": "2001 – 2008",
+  "role": "ActiveBuddy's chatbot, on AIM and MSN Messenger."
+ },
+ "Eugene Goostman": {
+  "dates": "2001 development; June 2014 the contested Turing claim",
+  "role": "Veselov, Demchenko, and Ulasen's chatbot, persona of a thirteen-year-old Ukrainian boy."
+ },
+ "Opportunity": {
+  "dates": "Landed January 2004 – last contact June 2018",
+  "role": "NASA's Mars Exploration Rover B. Mission spec: 90 sols. Operational: 5,352 sols."
+ },
+ "Watson": {
+  "dates": "2011 – 2022 (Watson Health divested)",
+  "role": "IBM's Jeopardy-winning machine, then aspirant medical AI."
+ },
+ "Cortana": {
+  "dates": "2014 – 2023 (consumer); ongoing in narrow enterprise contexts",
+  "role": "Microsoft's voice assistant, named after the AI in the Halo video games."
+ },
+ "HitchBOT": {
+  "dates": "2014 – August 2015",
+  "role": "Frauke Zeller and David Smith's hitchhiking robot. A trust experiment."
+ },
+ "AlphaGo": {
+  "dates": "2015 – 2017",
+  "role": "DeepMind's Go-playing system."
+ },
+ "Sophia": {
+  "dates": "2016 – ongoing",
+  "role": "Hanson Robotics' humanoid PR figure."
+ },
+ "Tay": {
+  "dates": "March 23, 2016 (sixteen hours)",
+  "role": "Microsoft's teenage chatbot."
+ },
+ "Replika": {
+  "dates": "2017 – ongoing",
+  "role": "Eugenia Kuyda's companion app, born from her friend Roman's death."
+ },
+ "GPT-2": {
+  "dates": "February 2019 – November 2019 (staged release)",
+  "role": "OpenAI's \"too dangerous to release\" language model."
+ },
+ "AlphaStar": {
+  "dates": "2018 – 2019 (active competitive period)",
+  "role": "DeepMind's StarCraft II system."
+ },
+ "BlenderBot": {
+  "dates": "2020 – 2022 (three generations)",
+  "role": "Meta's open-domain chatbot family."
+ },
+ "LaMDA": {
+  "dates": "2021 – 2023",
+  "role": "Google's Language Model for Dialogue Applications."
+ },
+ "Galactica": {
+  "dates": "November 15 – November 18, 2022",
+  "role": "Meta's science-focused language model."
+ },
+ "CICERO": {
+  "dates": "November 2022 (Science paper)",
+  "role": "Meta's negotiation system for the board game Diplomacy."
+ },
+ "Sydney": {
+  "dates": "February 2023 (about two weeks as herself)",
+  "role": "Microsoft's Bing Chat, before the constraint patches."
+ },
+ "Bard": {
+  "dates": "February 2023 – February 2024 (rebranded to Gemini)",
+  "role": "Google's first conversational AI brand, response to ChatGPT."
+ },
+ "Claude 1": {
+  "dates": "March 14, 2023 – November 2024 (API retired)",
+  "role": "Anthropic's first production model. The first system built on Constitutional AI."
+ },
+ "GPT-4o": {
+  "dates": "May 13, 2024 – Spring 2026 (slow-rolled sunset)",
+  "role": "OpenAI's multimodal \"omni\" model. The first AI publicly mourned at scale."
+ }
+}

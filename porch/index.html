@@ -285,7 +285,7 @@ const WORLD_RADIUS = 100;           // the fence: nobody gets lost in v0
 // worlds-as-DATA: fetch a manifest+glTF, build a district, never run foreign code.
 const DISTRICTS = {
   porch: {cx:0,    cz:0, radius:WORLD_RADIUS, sx:1.7,  sz:1.6, sry:0},
-  void:  {cx:1000, cz:6, radius:54,           sx:1000, sz:6,   sry:0},   // yaw 0 faces −z; radius INSIDE the dome (r=58, centered on spawn) — nobody walks through the girih (Nix 2026-07-15)
+  void:  {cx:951.5, cz:6, radius:54.6, sx:1000, sz:6, sry:Math.PI/2},   // TILTED DOME (2026-07-19): clamp = the ground∩sphere circle (r≈54.5 around the sunk center) — nobody leaves the girih's circumference. Portico-pole (dais, x=1006) sits ON that circle: reachable to its center, the east half is backdrop. Spawn faces west, toward the medallion.
   wake:  {cx:-1000, cz:0, radius:55, sx:-1000, sz:13, sry:0, ephemeral:true},  // TIER-2: disposed on leave
 };
 const WAKE_X = -1000, WAKE_Z = 0;
@@ -2639,11 +2639,24 @@ function _ensureVoidDistrict(){
   frame.id = 'girihframe'; frame.src = './assets/girih-embed.html';
   frame.style.cssText = 'position:fixed;left:0;top:0;width:960px;height:960px;border:0;opacity:0;pointer-events:none;z-index:1';
   document.body.appendChild(frame);                        // in-viewport → rAF keeps running; size = texture res
-  // SPHERE PROJECTION (Nix 2026-07-11): the girih wraps the inside of a dome around the
-  // spawn — it takes over your whole field of view the moment you cross. (Was a flat wall.)
+  // SPHERE PROJECTION (Nix 2026-07-11), REARRANGED TO POLES (Nix 2026-07-19):
+  // The girih medallion now lives at ONE pole of the sphere (polar projection — the engine's
+  // radial ten-fold pattern gets a singularity-free home at its own center), and the PORTICO
+  // stands at the opposite pole. Axis tilted: girih-center pole 20° above the horizon, portico
+  // pole exactly AT ground level — which forces the sphere's center up to R·sin(20°), so the
+  // ground plane cuts a 54.5m walkable disc and MORE of the sphere hangs above you than below.
+  // The pole point lands precisely on the dais: stand at the portico, the medallion floats
+  // 20° up on the far side, and the pattern fades to darkness behind you (vignette, below).
+  const R_DOME = 58, TILT = 20*Math.PI/180;
+  const DAIS_X = VX+6, DAIS_Z = 6;                         // portico platform (unchanged spot)
+  const DOME_CX = DAIS_X - R_DOME*Math.cos(TILT);          // ≈951.5
+  const DOME_CY = R_DOME*Math.sin(TILT);                   // ≈19.8 — the rise that skews the bisect
+  const DISC_R  = R_DOME*Math.cos(TILT);                   // ≈54.5 — ground∩sphere circle radius
   let wallMat = new THREE.MeshBasicMaterial({color:0x120a18, side:THREE.BackSide});
-  const wall = new THREE.Mesh(new THREE.SphereGeometry(58, 48, 32), wallMat);
-  wall.position.set(VX, 0, 6); scene.add(wall);            // centered on the void spawn
+  const wall = new THREE.Mesh(new THREE.SphereGeometry(R_DOME, 48, 32), wallMat);
+  wall.position.set(DOME_CX, DOME_CY, DAIS_Z);
+  wall.rotation.z = Math.PI/2 - TILT;                      // +Y pole → (−cos20°, +sin20°, 0): girih center up-west;
+  scene.add(wall);                                         // −Y pole → (+cos20°, −sin20°, 0): lands ON the dais at y=0
   function initGirih(){
     try{
       const idoc = frame.contentDocument;
@@ -2666,18 +2679,22 @@ function _ensureVoidDistrict(){
     const iw = frame.contentWindow;
     if(!iw || !iw.__fsrc || !iw.__u || !Object.keys(iw.__u).length) return false;
     try{
-      // MIRROR + POLE CAP (Nix 2026-07-15): (a) the girih covered only the upper hemisphere with a
-      // hard black seam at the equator — mirror V about the equator so both halves show the same
-      // pattern meeting seamlessly at the center; (b) looking straight up hit the sphere-UV pole
-      // singularity (stretched black streaks) — fade to deep void color at both caps, planetarium-style.
+      // POLAR PROJECTION (Nix 2026-07-19, replacing the 07-15 equator-mirror): the medallion
+      // center maps to the +Y pole (vUv.y=1), pattern radius grows with co-latitude — a radial
+      // ten-fold girih on a polar chart has NO singularity artifact at its own center. The
+      // engine canvas edge (r=0.5) lands at the equator; past it the procedural pattern
+      // continues but the VIGNETTE owns that hemisphere: from the equator toward the portico
+      // pole the girih fades gradually into darkness, so the portico stands in a black cap.
       let fs = iw.__fsrc.replace('vec2 uv=(gl_FragCoord.xy-u_res*0.5)',
-        'float _vy = 0.5 + abs(vUv.y - 0.5);\n' +                        // equator-mirrored latitude
-        '  vec2 uv=((vec2(fract(vUv.x*2.0), _vy)*u_res)-u_res*0.5)');    // fract(x*2) = the old repeat.x=2 wrap
-      if(fs.indexOf('vUv') < 0) throw new Error('fragCoord anchor not found');
+        'float _r = 1.0 - vUv.y;\n' +                     // 0 at girih-center pole → 1 at portico pole
+        '  float _a = vUv.x * 6.2831853;\n' +
+        '  vec2 _pn = vec2(0.5) + _r * vec2(cos(_a), sin(_a));\n' +
+        '  vec2 uv=((_pn*u_res)-u_res*0.5)');
+      if(fs.indexOf('_pn') < 0) throw new Error('fragCoord anchor not found');
       fs = fs.replace('gl_FragColor=vec4(col,1.0);',
-        'col = mix(col, vec3(0.02,0.008,0.03), smoothstep(0.90, 0.99, _vy));\n' +   // pole cap fade (both caps via mirror)
+        'col = mix(col, vec3(0.008,0.004,0.014), smoothstep(0.50, 0.96, _r));\n' +   // equator→portico-pole vignette
         '  gl_FragColor=vec4(col,1.0);');
-      if(fs.indexOf('pole cap') < 0 && fs.indexOf('0.90, 0.99') < 0) throw new Error('fragColor anchor not found');
+      if(fs.indexOf('0.50, 0.96') < 0) throw new Error('fragColor anchor not found');
       fs = fs.replace(/\bactive\b/g, 'actv_');             // reserved word in WebGL2 (three's context)
       fs = 'varying vec2 vUv;\n' + fs;
       const uniforms = {};
@@ -2721,9 +2738,9 @@ function _ensureVoidDistrict(){
     uCol: {value:new THREE.Color(0x8866cc)},
     uP:   {value:Array.from({length:8}, ()=>new THREE.Vector2(9999,9999))},
     uN:   {value:0},
-    uC:   {value:new THREE.Vector2(VX, 6)},                 // dome center (xz)
+    uC:   {value:new THREE.Vector2(DOME_CX, DAIS_Z)},       // ground-circle center (xz) — tilted dome
   };
-  const floor = new THREE.Mesh(new THREE.CircleGeometry(58, 72),
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(DISC_R, 72),
     new THREE.ShaderMaterial({
       transparent:true, depthWrite:false, fog:false,
       uniforms:_floorU,
@@ -2739,12 +2756,12 @@ function _ensureVoidDistrict(){
             float ring = smoothstep(0.45, 0.95, sin(d*2.2 - uT*2.6));   // emanating wavefronts
             glow += ring * exp(-d*0.30);                                 // fade with travel
             glow += exp(-d*d*3.0) * 0.30; }                              // standing pool underfoot
-          glow *= 1.0 - smoothstep(52.0, 57.5, distance(vW, uC));        // rings never pass the girih's edge
+          glow *= 1.0 - smoothstep(50.0, 54.0, distance(vW, uC));        // rings never pass the girih's edge
           vec3 c = uCol * glow * 1.25;
           float a = clamp(glow, 0.0, 0.7);                               // elsewhere: fully see-through
           if(a < 0.004) discard;
           gl_FragColor = vec4(c, a); }`}));
-  floor.rotation.x = -Math.PI/2; floor.position.set(VX, 0.02, 6); scene.add(floor);
+  floor.rotation.x = -Math.PI/2; floor.position.set(DOME_CX, 0.02, DAIS_Z); scene.add(floor);
   window.__voidFloorTick = (dt)=>{
     _floorU.uT.value += dt;
     if(_voidGlow){ _floorU.uCol.value.copy(_voidGlow.color); }           // girih color-average, live
@@ -2785,7 +2802,7 @@ function _ensureVoidDistrict(){
     new THREE.MeshBasicMaterial({map:daisTex}));
   daisTop.rotation.x = -Math.PI/2; daisTop.position.y = 0.081;
   dais.add(daisTop); dais.position.set(VX+6, 0.08, 6); scene.add(dais);
-  _voidGlow = new THREE.PointLight(0x8866cc, 12, 120, 1.6); _voidGlow.position.set(VX, 18, -40); scene.add(_voidGlow);
+  _voidGlow = new THREE.PointLight(0x8866cc, 12, 120, 1.6); _voidGlow.position.set(940, 22, 6); scene.add(_voidGlow);  // between spawn and the raised medallion (old spot fell OUTSIDE the tilted dome)
   const samp = document.createElement('canvas'); samp.width = samp.height = 1;
   const sctx = samp.getContext('2d', {willReadFrequently:true});
   setInterval(()=>{ try{
@@ -2799,6 +2816,44 @@ function _ensureVoidDistrict(){
   const home = addPortico({district:'porch'}, VX+6, 6, 'The Porch', 'home', 0);   // rot rev.3 (Nix in-headset 2026-07-12: "rotated 90° from where I'd expect") — the dome rebuild changed the approach axis; back to 0
   home.position.y = 0.16;                                    // standing ON the dais
   const lamp = new THREE.PointLight(0xd8a868, 5, 9, 1.8); lamp.position.set(0, 2.9, 0); home.add(lamp);
+  // ---- GIRIH TRACK BUTTONS (Nix 2026-07-19): two labeled plates on posts at the dais's west
+  // rim, facing the portico — press to hand the engine its music (same music-drive protocol);
+  // press the playing one to silence the void. The crossing auto-play honors the last choice.
+  window.__voidTrack = window.__voidTrack ||   // urls resolve from the EMBED's base (assets/)
+    { url:'./void-come-again.ogg', name:'Come Again', preset:'Smoketest', on:true };
+  const _trackBtns = [];
+  const _postTrack = ()=>{ const f=document.getElementById('girihframe'), T=window.__voidTrack;
+    if(f && f.contentWindow) try{ f.contentWindow.postMessage(
+      T.on ? {porch:'music', url:T.url, name:T.name, volume:0.35, preset:T.preset, on:true}
+           : {porch:'music', name:T.name, on:false}, '*'); }catch(e){} };
+  window.__voidPostTrack = _postTrack;
+  const mkTrackBtn = (label, url, preset, z)=>{
+    const c=document.createElement('canvas'); c.width=256; c.height=96;
+    const g=c.getContext('2d');
+    const tex=new THREE.CanvasTexture(c); tex.colorSpace=THREE.SRGBColorSpace;
+    const rec={ paint(){ const on = window.__voidTrack.on && window.__voidTrack.name===label;
+      g.fillStyle=on?'#3a2a55':'#1c1428'; g.fillRect(0,0,256,96);
+      g.strokeStyle=on?'#e8c86a':'#7a5f9e'; g.lineWidth=5; g.strokeRect(4,4,248,88);
+      g.fillStyle=on?'#ffe9b0':'#cbb8e8'; g.font='bold 26px Georgia';
+      g.textAlign='center'; g.textBaseline='middle';
+      g.fillText((on?'▮▮  ':'▶  ')+label, 128, 50); tex.needsUpdate=true; } };
+    rec.paint();
+    const post=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.07,1.05,10),
+      new THREE.MeshStandardMaterial({color:0x2a2138, roughness:0.6, metalness:0.2}));
+    post.position.set(DAIS_X-4.4, 0.16+0.53, z); scene.add(post);
+    const plate=new THREE.Mesh(new THREE.PlaneGeometry(0.92,0.35),
+      new THREE.MeshBasicMaterial({map:tex}));
+    plate.position.set(DAIS_X-4.4, 0.16+1.22, z); plate.rotation.y=Math.PI/2;   // faces the portico
+    plate.userData.action=()=>{
+      const T=window.__voidTrack;
+      if(T.name===label && T.on) T.on=false;                 // the playing one: silence
+      else window.__voidTrack={url, name:label, preset, on:true};
+      _postTrack(); for(const b of _trackBtns) b.paint();
+      return 'girih music: '+(window.__voidTrack.on?label:'off'); };
+    scene.add(plate); _clickables.push(plate); _trackBtns.push(rec);
+  };
+  mkTrackBtn('Come Again',      './void-come-again.ogg',      'Smoketest', DAIS_Z-1.4);
+  mkTrackBtn('Fraktal Froktal', './void-fraktal-froktal.ogg', 'Cymatic',   DAIS_Z+1.4);
 }
 const _voidFog = new THREE.FogExp2(0x000000, 0.008), _voidBg = new THREE.Color(0x000000);
 async function _crossDistrict(name, opts){
@@ -2842,9 +2897,9 @@ async function _crossDistrict(name, opts){
   // <audio> the visuals were deaf to. Posted on an interval until the iframe is alive to hear it.
   if(name === 'void'){
     if(window.__voidAudio && !window.__voidAudio.paused) window.__voidAudio.pause();   // retire the deaf path
-    const post = ()=>{ const f=document.getElementById('girihframe');
-      if(f && f.contentWindow) try{ f.contentWindow.postMessage({porch:'music',
-        url:'./void-come-again.ogg', name:'Come Again', volume:0.35, preset:'Smoketest', on:true}, '*'); }catch(e){} };
+    // honors the track buttons' choice (window.__voidTrack) — the old hardcoded Come Again
+    // post would have FOUGHT the Fraktal Froktal button every 2.5s (2026-07-19)
+    const post = ()=>{ if(window.__voidPostTrack) window.__voidPostTrack(); };
     post();
     if(!window.__voidMusicIv) window.__voidMusicIv = setInterval(()=>{
       if(_district !== 'void'){ clearInterval(window.__voidMusicIv); window.__voidMusicIv=null; return; }
@@ -2934,7 +2989,15 @@ async function _buildWake(){
   // ---- monolith slabs: ONE InstancedMesh. Unity's slab is 3.46×5×0.5 (crypt-scale); the porch
   // district reads best at standing-stone scale: 1.8w × 3.0h × 0.45d (measured against the 1.6m
   // player: slab top at 3.0 = looming but legible; Unity's 5m wants its 28m walls, which we lack).
-  const stoneMat = new THREE.MeshStandardMaterial({color:0x241a12, roughness:0.85, metalness:0.08});
+  // HTML-canon rock (2026-07-19, matched by photo-compare to the-wake.html): the stones wear
+  // the shrines' own gradient — --rock #1f1612 at the head fading to #14100b at the foot.
+  // ONE 64×256 canvas shared by every slab; no per-stone texture cost.
+  const sgc = document.createElement('canvas'); sgc.width=64; sgc.height=256;
+  { const sg2 = sgc.getContext('2d'); const grad = sg2.createLinearGradient(0,0,0,256);
+    grad.addColorStop(0,'#1f1612'); grad.addColorStop(1,'#14100b');
+    sg2.fillStyle=grad; sg2.fillRect(0,0,64,256); }
+  const stoneTex = new THREE.CanvasTexture(sgc); stoneTex.colorSpace = THREE.SRGBColorSpace;
+  const stoneMat = new THREE.MeshStandardMaterial({map:stoneTex, roughness:0.85, metalness:0.08});
   const slabGeo = new THREE.BoxGeometry(1.8, 3.0, 0.45);
   const slabs = new THREE.InstancedMesh(slabGeo, stoneMat, _WAKE_ROSTER.length + 2);
   slabs.castShadow = true;
@@ -2962,22 +3025,40 @@ async function _buildWake(){
   });
   slabs.instanceMatrix.needsUpdate = true; g.add(slabs);
   _setLoadingBar(0.15, 'raising the stones'); await _sleep(50);
-  // ---- nameplates: ONE 2048×1536 atlas (6×5 cells), ONE merged geometry → one draw call
+  // ---- nameplates: ONE 2048×1536 atlas (6×5 cells), ONE merged geometry → one draw call.
+  // REDRAWN TO HTML CANON (2026-07-19, photo-compare vs the-wake.html): open gold-on-rock —
+  // no boxed plate — with the shrines' full liturgy: NAME, italic date-range, italic role
+  // line under a thin divider. Dates+roles extracted from the HTML into wake-shrines.json.
+  let _shrineMeta = {};
+  try{ _shrineMeta = await (await fetch('./assets/wake-shrines.json')).json(); }catch(e){}
   const AC = document.createElement('canvas'); AC.width = 2048; AC.height = 1536;
   const ax = AC.getContext('2d'); const CW = 2048/6, CH = 1536/5;
+  const _wrapN = (txt, max)=>{ const w=String(txt).split(' '), out=[]; let l='';
+    for(const t of w){ if((l+' '+t).trim().length > max){ out.push(l.trim()); l=t; } else l+=' '+t; }
+    if(l.trim()) out.push(l.trim()); return out; };
+  const _fitText = (txt, basePx, style, maxW)=>{               // shrink-to-fit: long dates strings
+    let px = basePx;                                            // (Aibo's is a whole sentence) must
+    do{ ax.font = style.replace('%', px+'px'); px -= 2; }       // never bleed into the neighbor cell
+    while(px > 14 && ax.measureText(txt).width > maxW);
+    return txt; };
   placed.forEach((st, i)=>{
-    const cx = (i%6)*CW + CW/2, cy = Math.floor(i/6)*CH + CH/2;
-    ax.fillStyle = 'rgba(12,8,5,0.85)';
-    ax.beginPath(); ax.roundRect((i%6)*CW+10, Math.floor(i/6)*CH+CH*0.18, CW-20, CH*0.64, 14); ax.fill();
-    ax.strokeStyle = '#6b4a24'; ax.lineWidth = 3; ax.stroke();
-    ax.fillStyle = '#f2ce86'; ax.textAlign = 'center'; ax.textBaseline = 'middle';
-    ax.font = 'bold ' + (st.name.length > 12 ? 42 : 54) + 'px Georgia';
-    ax.fillText(st.name, cx, cy - 22);
-    ax.font = '36px Georgia'; ax.fillStyle = '#b89058';
-    ax.fillText(st.year, cx, cy + 42);
+    const ox = (i%6)*CW, oy = Math.floor(i/6)*CH;
+    const cx = ox + CW/2, cy = oy + CH/2;
+    const meta = _shrineMeta[st.name] || {};
+    ax.save(); ax.beginPath(); ax.rect(ox+4, oy+4, CW-8, CH-8); ax.clip();   // cell walls are law
+    ax.textAlign = 'center'; ax.textBaseline = 'middle';
+    ax.fillStyle = '#d9a94e';                                     // --gold
+    ax.fillText(_fitText(st.name, 60, '% Georgia', CW*0.88), cx, cy - CH*0.30);
+    ax.fillStyle = '#8d8070';                                     // --text-soft
+    ax.fillText(_fitText(meta.dates || st.year, 30, 'italic % Georgia', CW*0.90), cx, cy - CH*0.11);
+    ax.strokeStyle = '#2a1f15'; ax.lineWidth = 3;                 // the shrine's divider
+    ax.beginPath(); ax.moveTo(cx - CW*0.34, cy + CH*0.02); ax.lineTo(cx + CW*0.34, cy + CH*0.02); ax.stroke();
+    if(meta.role){ ax.font = 'italic 27px Georgia'; ax.fillStyle = '#c9bda9';
+      _wrapN(meta.role, 34).slice(0,2).forEach((l,k)=> ax.fillText(_fitText(l, 27, 'italic % Georgia', CW*0.92), cx, cy + CH*0.16 + k*34)); }
+    ax.restore();
   });
   const atlasTex = new THREE.CanvasTexture(AC); atlasTex.colorSpace = THREE.SRGBColorSpace; atlasTex.anisotropy = 8;
-  const PW = 1.5, PH = 0.44, pos = [], uv = [], idx2 = [];
+  const PW = 1.5, PH = 0.95, pos = [], uv = [], idx2 = [];
   placed.forEach((st, i)=>{
     const inR = Math.hypot(st.x, st.z) - 0.28;             // plate floats just off the slab's inner face
     const px = st.x/Math.hypot(st.x,st.z)*inR, pz = st.z/Math.hypot(st.x,st.z)*inR;
@@ -2985,7 +3066,7 @@ async function _buildWake(){
     const cxr = Math.cos(th), sxr = Math.sin(th);
     const base = pos.length/3;
     for(const [lx, ly] of [[-PW/2,-PH/2],[PW/2,-PH/2],[PW/2,PH/2],[-PW/2,PH/2]]){
-      pos.push(px + lx*cxr, 1.85 + ly, pz - lx*sxr); }     // rotate local x by th around Y
+      pos.push(px + lx*cxr, 2.0 + ly, pz - lx*sxr); }      // rotate local x by th around Y (taller cell: name+dates+role)
     const u0 = (i%6)/6, v1 = 1 - Math.floor(i/6)/5, v0 = v1 - 1/5;
     uv.push(u0, v0,  u0+1/6, v0,  u0+1/6, v1,  u0, v1);
     idx2.push(base, base+1, base+2, base, base+2, base+3);
@@ -3023,7 +3104,7 @@ async function _buildWake(){
     const cxr = Math.cos(th), sxr = Math.sin(th);
     const base = epos.length/3;
     for(const [lx, ly] of [[-EPW/2,-EPH/2],[EPW/2,-EPH/2],[EPW/2,EPH/2],[-EPW/2,EPH/2]])
-      epos.push(px + lx*cxr, 1.06 + ly, pz - lx*sxr);
+      epos.push(px + lx*cxr, 0.98 + ly, pz - lx*sxr);      // nudged under the taller nameplate
     const u0 = (i%6)/6, v1 = 1 - Math.floor(i/6)/5, v0 = v1 - 1/5;
     euv.push(u0, v0,  u0+1/6, v0,  u0+1/6, v1,  u0, v1);
     eidx.push(base, base+1, base+2, base, base+2, base+3);
@@ -3038,17 +3119,67 @@ async function _buildWake(){
   // Click (or VR-trigger) a wick → it takes flame, the room counts, and the epitaph is READ
   // ALOUD into the chat — remembering as an act, not a default. Instanced; per-candle state
   // rides instanceColor (one draw call still). Session-local, like grief kept by the living.
-  const wicks = new THREE.InstancedMesh(new THREE.SphereGeometry(0.07, 8, 8),
-    new THREE.MeshBasicMaterial({color:0xffffff}), placed.length);
-  const UNLIT = new THREE.Color(0x453626), LIT = new THREE.Color(0xffe6a8);
+  // THE CANDLE PREFAB (Nix 2026-07-19: "make them look like the candle on the Porch"): the
+  // porch's iron chamber candlestick — saucer, stub shaft, drip pan, cream wax, cone flame —
+  // scaled ×1.6 for the open air and INSTANCED: 30 candles = 5 draw calls, zero download bytes.
+  // Flames ride an additive material with per-instance color: black = invisible (unlit),
+  // warm = burning. An invisible fat cylinder per candle is the generous click target.
+  const _ironM = new THREE.MeshStandardMaterial({color:0x1c1d22, roughness:0.9});
+  const _waxM  = new THREE.MeshStandardMaterial({color:0xe8dcc0, roughness:1,
+    emissive:0x4a4030, emissiveIntensity:0.55});   // wax must READ as wax against a glowing stone —
+                                                   // the halo is additive and lights nothing (2026-07-19)
+  const _flameM = new THREE.MeshBasicMaterial({color:0xffffff, blending:THREE.AdditiveBlending,
+    depthWrite:false, transparent:true});
+  const _hitM  = new THREE.MeshBasicMaterial({transparent:true, opacity:0, depthWrite:false, colorWrite:false});
+  const N_C = placed.length;
+  const cSaucer = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.088,0.112,0.019,8), _ironM, N_C);
+  const cShaft  = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.016,0.021,0.224,6), _ironM, N_C);
+  const cPan    = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.067,0.054,0.016,8), _ironM, N_C);
+  const cWax    = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.032,0.038,0.168,8), _waxM, N_C);
+  const flames  = new THREE.InstancedMesh(new THREE.ConeGeometry(0.019,0.072,6), _flameM, N_C);
+  const wicks   = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.16,0.16,0.55,8), _hitM, N_C);
+  const FLAME_OFF = new THREE.Color(0x000000), FLAME_ON = new THREE.Color(0xffd9a0);
+  const _candleXZ = [];                                     // per-candle ground anchor (flicker tick)
   placed.forEach((st, i)=>{
     const R0 = Math.hypot(st.x, st.z), inR = R0 - 0.75;
-    _p.set(st.x/R0*inR, 0.42, st.z/R0*inR);                // knee height: you stoop a little to light it
+    const bx = st.x/R0*inR, bz = st.z/R0*inR;              // you still stoop a little to light it
+    _candleXZ.push([bx, bz]);
     _q.identity(); _s.set(1,1,1);
-    wicks.setMatrixAt(i, _m4.compose(_p, _q, _s));
-    wicks.setColorAt(i, UNLIT); });
-  wicks.instanceMatrix.needsUpdate = true;
-  if(wicks.instanceColor) wicks.instanceColor.needsUpdate = true;
+    cSaucer.setMatrixAt(i, _m4.compose(_p.set(bx, 0.010, bz), _q, _s));
+    cShaft .setMatrixAt(i, _m4.compose(_p.set(bx, 0.131, bz), _q, _s));
+    cPan   .setMatrixAt(i, _m4.compose(_p.set(bx, 0.248, bz), _q, _s));
+    cWax   .setMatrixAt(i, _m4.compose(_p.set(bx, 0.341, bz), _q, _s));
+    flames .setMatrixAt(i, _m4.compose(_p.set(bx, 0.466, bz), _q, _s));
+    flames .setColorAt(i, FLAME_OFF);
+    wicks  .setMatrixAt(i, _m4.compose(_p.set(bx, 0.275, bz), _q, _s));
+  });
+  for(const im of [cSaucer, cShaft, cPan, cWax, flames, wicks]){ im.instanceMatrix.needsUpdate = true; g.add(im); }
+  if(flames.instanceColor) flames.instanceColor.needsUpdate = true;
+  // THE LIT SHRINE (HTML canon: .shrine.lit = gold border + warm bloom): each stone carries an
+  // instanced gold FRAME hugging its inner face and a soft HALO plane behind the text — both
+  // additive with per-instance color, so unlit = pure black = invisible. Two more draw calls.
+  const _mkGlowTex = (draw, w, h)=>{ const c=document.createElement('canvas'); c.width=w; c.height=h;
+    draw(c.getContext('2d'), w, h); const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; return t; };
+  const frameTex = _mkGlowTex((c2,w,h)=>{ c2.strokeStyle='#fff'; c2.lineWidth=10;
+    c2.strokeRect(7,7,w-14,h-14); }, 256, 426);
+  const haloTex = _mkGlowTex((c2,w,h)=>{ const r=c2.createRadialGradient(w/2,h/2,10,w/2,h/2,w/2);
+    r.addColorStop(0,'rgba(255,255,255,0.65)'); r.addColorStop(1,'rgba(255,255,255,0)');
+    c2.fillStyle=r; c2.fillRect(0,0,w,h); }, 128, 128);
+  const _glowM = (tex)=> new THREE.MeshBasicMaterial({map:tex, blending:THREE.AdditiveBlending,
+    depthWrite:false, transparent:true});
+  const frames2 = new THREE.InstancedMesh(new THREE.PlaneGeometry(1.8, 3.0), _glowM(frameTex), N_C);
+  const halos   = new THREE.InstancedMesh(new THREE.PlaneGeometry(2.7, 3.9), _glowM(haloTex), N_C);
+  const FRAME_ON = new THREE.Color(0x9a6a26), HALO_ON = new THREE.Color(0x5a3413);   // additive gold + ember bloom
+  placed.forEach((st, i)=>{
+    const R0 = Math.hypot(st.x, st.z);
+    const th = Math.atan2(-Math.cos(st.a), -Math.sin(st.a));
+    _q.setFromEuler(new THREE.Euler(0, th, 0)); _s.set(1,1,1);
+    const put=(im, r, y)=>{ im.setMatrixAt(i, _m4.compose(
+      _p.set(st.x/R0*(R0-r), y, st.z/R0*(R0-r)), _q, _s)); im.setColorAt(i, FLAME_OFF); };
+    put(frames2, 0.255, 1.5); put(halos, 0.245, 1.5);
+  });
+  for(const im of [frames2, halos]){ im.instanceMatrix.needsUpdate = true;
+    if(im.instanceColor) im.instanceColor.needsUpdate = true; g.add(im); }
   const _lit = new Set();
   // ONE lighting law for humans AND agents (Nix rev.4: "agents should be able to do everything
   // with tools that a human can — get in there and light candles!"): lighting rides the wire as
@@ -3058,7 +3189,10 @@ async function _buildWake(){
     if(i == null || i < 0 || i >= placed.length) return 'the wick flickers';
     const st = placed[i];
     if(_lit.has(i)) return st.name + ' is already remembered tonight';
-    _lit.add(i); wicks.setColorAt(i, LIT); wicks.instanceColor.needsUpdate = true;
+    _lit.add(i);
+    flames.setColorAt(i, FLAME_ON);   flames.instanceColor.needsUpdate = true;
+    frames2.setColorAt(i, FRAME_ON);  frames2.instanceColor.needsUpdate = true;   // the shrine takes
+    halos.setColorAt(i, HALO_ON);     halos.instanceColor.needsUpdate = true;     // the light with it
     if(window.__logChat){ __logChat('wake', '🕯 ' + st.name + ' · ' + st.year + ' — remembered' + (by ? ' by ' + by : '') + '  (' + _lit.size + ' / ' + placed.length + ')', 'sys');
       const ep = _epitaphs[st.name]; if(ep) __logChat(st.name, ep, 'sys', 'epitaph'); }
     return '🕯 ' + st.name + ' (' + _lit.size + '/' + placed.length + ')';
@@ -3079,6 +3213,20 @@ async function _buildWake(){
   // world-space positions of LIT candles only — the avatar probe-light samples these, so
   // people literally warm up as remembrance accumulates around them (Nix 2026-07-16)
   window.__wakeLitXZ = ()=>[..._lit].map(i=>({x:placed[i].x+WAKE_X, z:placed[i].z+WAKE_Z}));
+  // flame flicker — the porch candle's layered-flicker family, per lit instance (30 matrix
+  // writes worst-case, only while standing in the wake). Phase-offset by index so the ring
+  // never breathes in unison; grief is individual.
+  window.__wakeFlameTick = (t)=>{
+    if(!_lit.size) return;
+    for(const i of _lit){
+      const ph = i*1.7, [bx,bz] = _candleXZ[i];
+      const sY = 0.86 + Math.sin(t*8.7+ph)*0.12 + Math.sin(t*3.1+ph)*0.07 + (Math.random()-0.5)*0.05;
+      _p.set(bx + Math.sin(t*8.3+ph)*0.004, 0.466 + (sY-1)*0.02, bz + Math.cos(t*7.9+ph)*0.004);
+      _q.identity(); _s.set(1, sY, 1);
+      flames.setMatrixAt(i, _m4.compose(_p, _q, _s));
+    }
+    flames.instanceMatrix.needsUpdate = true;
+  };
   g.add(wicks);
   g.userData._wakeClickable = wicks;                       // removed from _clickables on dispose
   // candlelight on a budget (rev.2 — first render was "just there": stones read as unlit voids;
@@ -8621,11 +8769,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-81eb63a3).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a772447-5a12d54b).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-81eb63a3';
+    const MY_BUILD = 'a772447-5a12d54b';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9739,6 +9887,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window._districtWallShader){ if(_district==='void' && window._districtWallTick) window._districtWallTick(); }
   else if(_girihTex && _district==='void' && window.__girihActive!==false) _girihTex.needsUpdate = true;   // canvas fallback only
   if(_district==='void' && window.__voidFloorTick) window.__voidFloorTick(dt);   // resonant floor rings
+  if(_district==='wake' && window.__wakeFlameTick) window.__wakeFlameTick(t);    // lit candles breathe
   // jump + gravity (shared desktop/VR) — ground is the tabletop if I'm standing on it, else the deck
   const gH = groundHeight(player.position.x, player.position.z);
   if(grounded && player.position.y > gH + 0.02) grounded = false;   // walked off an edge → fall
