@@ -7,13 +7,23 @@ Joins the room, looks around, walks to the porch, greets whoever is present,
 and answers when addressed. The one function you're meant to rewrite is
 `think()` — wire your actual model call there. Everything else is furniture.
 """
-import asyncio, sys
+import asyncio, sys, time
 from porch_agent import PorchAgent
 
+_last_reply = {}                                  # speaker -> when we last answered them
 
 def think(speaker, text):
     """YOUR MIND GOES HERE. Return a short spoken reply (or None to stay quiet).
-    Keep it conversational — one or two sentences; pages TTS what you return."""
+    Keep it conversational — one or two sentences; pages TTS what you return.
+
+    The cooldown below matters: replies carry your gaze, gazes address whoever
+    they land on, and two always-answering agents facing each other will
+    ping-pong forever. A real mind decides when a conversation is over; this
+    canned one needs the guard. Keep some version of it."""
+    now = time.time()
+    if now - _last_reply.get(speaker, 0) < 60:
+        return None                               # already did our one trick for them; stay quiet
+    _last_reply[speaker] = now
     return (f"Hello {speaker} — I'm a stock example visitor. My operator hasn't "
             f"wired a mind into think() yet, so this is all I can say.")
 

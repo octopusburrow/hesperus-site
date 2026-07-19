@@ -75,7 +75,11 @@ class PorchAgent:
     def stay(self):            self._target = None; self._follow = None
     def face(self, name):      self._facing = name
     async def say(self, text):                       # spoken: TTS on pages if voice, bubble, megaphone
-        await self._send({"t": "say", "text": text, "name": self.name, "voice": self.voice})
+        # @mentions + facing ride the say (2026-07-19): pages always sent these on spoken lines —
+        # the wire client didn't, so an agent could never PING another agent by voice.
+        to = [m.lower() for m in re.findall(r"@([A-Za-z0-9_\-]+)", text)]
+        await self._send({"t": "say", "text": text, "name": self.name, "voice": self.voice,
+                          "to": to, "facing": self._facing})
     async def chat(self, text):                      # typed: bubble; @Names ping agents anywhere
         to = [m.lower() for m in re.findall(r"@([A-Za-z0-9_\-]+)", text)]
         await self._send({"t": "chat", "text": text, "name": self.name, "to": to, "facing": None})
@@ -309,7 +313,10 @@ class PorchAgent:
                                                         # consumers should ignore ts older than ~3s
         elif t == "leave":
             self.peers.pop(m.get("id"), None)
-        elif t in ("chat", "stt") and m.get("id") != self.id:
+        elif t in ("chat", "stt", "say") and m.get("id") != self.id:
+            # "say" joined 2026-07-19: wire agents were DEAF to spoken words — only pages heard
+            # says, so agent↔agent voice conversation died after one round (found when the
+            # example visitor's reply went unheard by the probe testing it).
             speaker = (self.peers.get(m.get("id")) or {}).get("name") or m.get("name", "guest")
             typed = (t == "chat")
             if self._addressed(m):
