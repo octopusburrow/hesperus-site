@@ -198,8 +198,11 @@
   <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12); star-size slider removed 2026-07-15 (Nix: hand-tune per mode instead — __starBase) --><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
   <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
   <!-- pro-look pass (Nix's ask 2026-07-16): four cheap cinematic levers, each its own A/B knob -->
-  <label class="mrow"><input type="checkbox" id="acesToggle" checked><span>🎞 Filmic look (ACES tone mapping)</span></label>
-  <div class="mrow" style="padding-left:26px"><input type="range" id="acesExp" min="50" max="200" value="145" style="width:120px" title="exposure"><span id="acesExpVal" style="font-size:11px;color:#7a8494">&nbsp;1.45</span></div>
+  <!-- ACES menu rows REMOVED 2026-07-19 (Nix): scene is authored unmapped; ACES crushes
+       everything beyond the candle to illegible dark, and exposure can't fix both ends
+       (raised = overexposed highlights, shadows still crushed). Code path kept, default OFF —
+       re-authoring the lighting FOR the curve is the only honest way to bring it back. -->
+
   <label class="mrow"><input type="checkbox" id="softShadowToggle" checked><span>◐ Soft shadow edges</span></label>
   <label class="mrow"><input type="checkbox" id="hemiToggle" checked><span>🌗 Directional night ambient</span></label>
   <label class="mrow"><input type="checkbox" id="envToggle" checked><span>✨ Environment reflections</span></label>
@@ -309,7 +312,8 @@ renderer.shadowMap.enabled = true;
 // ---- pro-look pass (Nix's ask 2026-07-16): tone mapping + soft shadows, read before first
 // compile so no needsUpdate sweep is needed at boot. Defaults ON; menu knobs A/B them live.
 const _look = k => (localStorage.getItem('porch.'+k) ?? '1') === '1';
-renderer.toneMapping = _look('aces') ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+// aces defaults OFF (2026-07-19): scene authored unmapped; menu toggle removed. See note in menu HTML.
+renderer.toneMapping = (localStorage.getItem('porch.aces') === '1') ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
 // exposure default 1.45, not 1.0: the amber palette was hand-tuned UNMAPPED, and ACES
 // compresses it ~a stop darker — 1.45 restores the old midtones under the filmic curve
 // (verified by headless exposure sweep, 2026-07-16). The menu slider owns it from here.
@@ -1357,7 +1361,6 @@ window.__setStarNames = setStarNames;
     const _knob=(id,key,fn)=>{ const el=document.getElementById(id); if(!el) return;
       el.checked=(localStorage.getItem('porch.'+key)??'1')==='1';
       el.addEventListener('change',()=>{ localStorage.setItem('porch.'+key, el.checked?'1':'0'); fn(el.checked); }); };
-    _knob('acesToggle','aces', on=>{ renderer.toneMapping = on?THREE.ACESFilmicToneMapping:THREE.NoToneMapping; _remat(); });
     _knob('softShadowToggle','softShadow', on=>{ renderer.shadowMap.type = on?THREE.PCFSoftShadowMap:THREE.PCFShadowMap; _remat(); });
     _knob('hemiToggle','hemi', on=>window.__setHemi(on));
     _knob('envToggle','env', on=>window.__setEnv(on));
@@ -8549,11 +8552,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-008ed78f).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3e86259-bab9be73).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3e86259-008ed78f';
+    const MY_BUILD = '3e86259-bab9be73';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
