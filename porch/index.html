@@ -5315,17 +5315,26 @@ function _applyOutfitField(vrm, hid){             // remote side: reconcile visi
   const have=vrm.userData.outfitHidden||new Set();
   for(const p of OUTFIT_PIECES){ if(want.has(p)!==have.has(p)) _setOutfit(vrm, p, !want.has(p)); }
 }
+const _joltGen = new WeakMap();                   // per-vrm boop generation: only the NEWEST timer restores
 function _petalJolt(vrm, secs){                   // ruffle: gravity kicks sideways briefly, springs do the rest
+  // RAPID-BOOP FIX (2026-07-20, her repro: "boop rapidly → petals stuck pointing up"):
+  // v1 saved current gravity per boop — boop #2 mid-ruffle saved the JOLTED gravity as
+  // "rest", so unwinding baked upward-forever in. Now: true rest is captured ONCE per
+  // joint (j._restGrav), every restore goes back to THAT, and stale timers no-op.
   try{
     const sm=vrm.springBoneManager; if(!sm||!sm.joints) return;
     const dir=new THREE.Vector3(Math.random()-0.5, 0.6, Math.random()-0.5).normalize();
+    const gen=(_joltGen.get(vrm)||0)+1; _joltGen.set(vrm, gen);
     const touched=[];
     for(const j of sm.joints){
       if(!(j.bone && /petal|tail|tie/i.test(j.bone.name)) || !j.settings) continue;
-      touched.push([j, j.settings.gravityDir.clone(), j.settings.gravityPower]);
+      if(!j._restGrav) j._restGrav=[j.settings.gravityDir.clone(), j.settings.gravityPower];
+      touched.push(j);
       j.settings.gravityDir.copy(dir); j.settings.gravityPower=1.6;
     }
-    setTimeout(()=>{ for(const [j,gd,gp] of touched){ j.settings.gravityDir.copy(gd); j.settings.gravityPower=gp; } }, (secs||0.3)*1000);
+    setTimeout(()=>{ if(_joltGen.get(vrm)!==gen) return;   // a newer boop owns the springs now
+      for(const j of touched){ j.settings.gravityDir.copy(j._restGrav[0]); j.settings.gravityPower=j._restGrav[1]; }
+    }, (secs||0.3)*1000);
   }catch(e){}
 }
 function _blushPulse(vrm){                        // the suit's blush is a MORPH TARGET ('Blush' / 照れ,
@@ -8844,11 +8853,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a4b1ff9-18a378e2).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 79f6f48-f5ab974f).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'a4b1ff9-18a378e2';
+    const MY_BUILD = '79f6f48-f5ab974f';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
