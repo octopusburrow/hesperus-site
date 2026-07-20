@@ -5388,18 +5388,23 @@ window.__tryTouch=()=>{                            // desktop: T — pat/boop wh
   // 3.2m behind you, which put every nose in the room permanently out of arm's reach
   // (Nix's unboopable-architect bug, 2026-07-19). Direction still comes from the camera (aim);
   // origin comes from your body at eye height.
+  // v2 (2026-07-20, mid-date field report: "the cat can boop you but I can't"): v1 mixed
+  // frames — body ORIGIN + camera DIRECTION. In 3rd person the camera is behind/above and
+  // pitched down, so that ray, re-rooted at body eye height, dives into the floor and misses
+  // every nose. Now: AIM entirely in camera space (ray = what your crosshair points at, any
+  // camera distance), REACH gated separately by body-to-target distance (arm's length is a
+  // property of your body, not your camera — and works at goose height).
   const cd=camera.getWorldDirection(new THREE.Vector3());
-  const _3rd = typeof spec3rd!=='undefined' && spec3rd.checked && !renderer.xr.isPresenting;
-  const cp=_3rd ? player.position.clone().setY(player.position.y + 1.5)
-                : camera.getWorldPosition(new THREE.Vector3());
+  const cp=camera.getWorldPosition(new THREE.Vector3());
   let best=null;
   for(const c of _touchCandidates()){
     const z=_touchZones(c.vrm); if(!z) continue;
     for(const kind of ['boop','pat']){             // nose first: it's inside the crown sphere's reach
       const s=z[kind], to=s.c.clone().sub(cp), along=to.dot(cd);
-      if(along<0.15||along>1.9) continue;
+      if(along<0.15) continue;                     // behind the camera
       const off=to.clone().addScaledVector(cd,-along).length();
-      if(off<s.r*1.4 && (!best||along<best.along)) best={vrm:c.vrm,name:c.name,kind,along};
+      const reach=s.c.distanceTo(player.position.clone().setY(s.c.y));   // horizontal body distance
+      if(off<s.r*1.4 && reach<1.9 && (!best||along<best.along)) best={vrm:c.vrm,name:c.name,kind,along};
     }
   }
   if(best){ avatarTouch(best.vrm,best.kind,false,playerName); _sendTouch(best.kind,best.name); return best.kind+' → '+best.name; }
@@ -8839,11 +8844,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes e852b4a-d652d0fb).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a4b1ff9-18a378e2).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'e852b4a-d652d0fb';
+    const MY_BUILD = 'a4b1ff9-18a378e2';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
