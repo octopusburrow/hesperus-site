@@ -1870,8 +1870,14 @@ function grabToggleDesktop(){                         // E: drop what I hold, el
     dropProp(g); return 'dropped '+p; }
   const g=grabNearest(_reachPoint(),0.85); if(!g) return 'nothing in reach'; heldProp=grabProp(g); return 'grabbing '+g.pid; }
 const _laserGrabRC = new THREE.Raycaster(); _laserGrabRC.far = 6;   // #17 laser-grab reach
-function tryGripGrab(hand, pressed){                  // VR grip edge → grab nearest to that controller / release
-  if(pressed && !_gripDown[hand]){ try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
+const _trigDown = {left:false, right:false};
+function tryGripGrab(hand, pressed, trig){            // HLA CHORD (her spec, in-headset 2026-07-20):
+  // grip alone = POINTER (ray visible, hover/highlight); grip+trigger together = GRAB;
+  // release BOTH to drop — so you can keep grip, let go of trigger, and point at the
+  // next object while still holding this one.
+  trig = !!trig;
+  const chord = pressed && trig, hadChord = _gripDown[hand] && _trigDown[hand];
+  if(chord && !hadChord && !_heldHand[hand]){ try{ const grip=renderer.xr.getControllerGrip(hand==='left'?0:1);
     const gp=new THREE.Vector3().setFromMatrixPosition(grip.matrixWorld); let g=grabNearest(gp,0.2);
     if(!g){                                           // gravity glove (rev.2 of #17): grip takes the AIMED prop —
       const idx = hand==='left' ? 0 : 1;              // the one already glowing under this hand's ray (≤3.5m,
@@ -1880,7 +1886,12 @@ function tryGripGrab(hand, pressed){                  // VR grip edge → grab n
       // first, THEN grab it (Nix 2026-07-14: top/mid-shelf books weren't grabbable in VR).
       if(!g && _gloveShelf[idx] && typeof _materializeShelfBook==='function'){
         g = _materializeShelfBook(_gloveShelf[idx]); _gloveShelf[idx]=null; }
-      if(g){ g._fly = true; g._flyT = 0.55; g._flyHand = hand; g.spin = null;   // constant flight time (Alyx: players learn the rhythm)
+      if(g){ g._fly = true; g._flyHand = hand; g.spin = null;
+        // CONSISTENT ARC-ANGLE (her spec 2026-07-20: "too arc-y for close objects — consistent
+        // arc-angle, not consistent off-axis translation"): apex height scales WITH distance when
+        // flight time ∝ √distance (apex/d stays constant). Close objects hop; far ones lob.
+        const fdist = g.mesh.position.distanceTo(gp);
+        g._flyT = THREE.MathUtils.clamp(0.55*Math.sqrt(fdist/3.5), 0.18, 0.55);
         _haptic(hand, 0.3, 60);                                                 // lock+pull acknowledged
         if(typeof dbg==='function') dbg('grab', `glove-pull ${g.pid} (0.55s lob)`, 'k'); } }
     if(g){
@@ -1893,9 +1904,11 @@ function tryGripGrab(hand, pressed){                  // VR grip edge → grab n
       g.offset = g._fly ? null : g.mesh.position.clone().sub(hp).applyQuaternion(hq.clone().invert());
       _heldHand[hand]=grabProp(g);
       // rotation ride-along: capture ikHand⁻¹×mesh at grab, re-compose each frame → keeps attitude in-hand
-      g.rotOffset=hq.clone().invert().multiply(g.mesh.quaternion); } }catch(e){} }
-  else if(!pressed && _gripDown[hand]){ if(_heldHand[hand]) dropProp(_heldHand[hand]); _heldHand[hand]=null; }
-  _gripDown[hand]=pressed; }
+      g.rotOffset=hq.clone().invert().multiply(g.mesh.quaternion);
+      if(!g._fly) _haptic(hand, 0.35, 50); } }catch(e){} }        // in-hand grab thump (fly path thumps on catch)
+  else if(!pressed && !trig && _heldHand[hand]){                  // release BOTH → drop
+    dropProp(_heldHand[hand]); _heldHand[hand]=null; }
+  _gripDown[hand]=pressed; _trigDown[hand]=trig; }
 function _reachPoint(){ const f=new THREE.Vector3(-Math.sin(player.rotation.y),0,-Math.cos(player.rotation.y));
   const r=player.position.clone().addScaledVector(f,0.85); r.y=Math.max(0.55, player.position.y+0.9); return r; }
 let _hoverG=null;                                     // hover-glow the prop I could grab right now (desktop)
@@ -7120,7 +7133,9 @@ function xrUIRaycast(){
       const gv = _gloveHover[i];
       let ng = null, nd = 0;
       let ngClick = null;   // a clickable (music box, video) the ray hits — separate from grabbables
-      if(typeof grabbables !== 'undefined' && !(_heldHand && (_heldHand.left||_heldHand.right) && i===_gloveHeldIdx())){
+      // (2026-07-20: the held-hand hover exclusion is GONE — her spec: keep grip, release
+      // trigger, and the same hand can point at / highlight the next object while holding.)
+      if(typeof grabbables !== 'undefined'){
         const origin=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
         const q=new THREE.Quaternion().setFromRotationMatrix(c.matrixWorld);
         const rdir=new THREE.Vector3(0,0,-1).applyQuaternion(q);
@@ -7153,9 +7168,33 @@ function xrUIRaycast(){
       if(ng){ _gloveKeep[i] = performance.now(); }
       else if(gv && !(gv._cool>0) && !gv.carrying && performance.now()-_gloveKeep[i] < 250){ ng = gv; }
       if(gv !== ng){ if(gv && gv.mat && gv.mat.emissive) gv.mat.emissive.setHex(0x000000);
-        if(ng && ng.mat && ng.mat.emissive) ng.mat.emissive.setHex(0x3a2f18); _gloveHover[i]=ng; }
+        if(ng && ng.mat && ng.mat.emissive) ng.mat.emissive.setHex(0x3a2f18); _gloveHover[i]=ng;
+        if(ng) _haptic(i===0?'left':'right', 0.08, 12); }   // barely-there tick on landing the ray (her spec 2026-07-20)
       const anyTarget = ng || _gloveShelf[i] || ngClick;
-      if(line){ line.visible = !!anyTarget; if(anyTarget){ line.scale.z = nd || 1.8; line.material.color.setHex(0xd6b46a); } }
+      const gripHeld = typeof _gripDown!=='undefined' && _gripDown[i===0?'left':'right'];
+      // POINTER ON GRIP (HLA chord): grip alone shows the ray — targeting mode, no grab until trigger joins.
+      if(line){ line.visible = !!anyTarget || gripHeld;
+        if(line.visible){ line.scale.z = nd || 1.8; line.material.color.setHex(anyTarget ? 0xd6b46a : 0x8fb0d6); } }
+      // SNAP RETICLE (her spec 2026-07-20, "little reticle snapped onto whatever you point at,
+      // grabbable or not"): a small dot that sits ON the surface — target hit point if any,
+      // else the analytic ground along the ray. Lazy-built, world-parented.
+      if(gripHeld || anyTarget){
+        if(!xrUI._dot) xrUI._dot=[null,null];
+        if(!xrUI._dot[i]){ const d=new THREE.Sprite(new THREE.SpriteMaterial({color:0xd6b46a,
+          transparent:true, opacity:0.85, depthTest:false})); d.scale.set(0.035,0.035,1); scene.add(d); xrUI._dot[i]=d; }
+        const dot=xrUI._dot[i]; let dd = anyTarget ? (nd||1.8) : 0;
+        if(!anyTarget){                               // no object under the ray → march to the ground surface
+          const o=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+          const rd=new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromRotationMatrix(c.matrixWorld));
+          for(let s=0.3; s<=6; s+=0.15){ if(o.y+rd.y*s <= groundHeight(o.x+rd.x*s, o.z+rd.z*s)+0.01){ dd=s; break; } }
+          if(dd){ dot.position.set(o.x+rd.x*dd, groundHeight(o.x+rd.x*dd, o.z+rd.z*dd)+0.015, o.z+rd.z*dd); }
+          dot.visible = !!dd; dot.material.color.setHex(0x8fb0d6);
+        } else {
+          const o=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
+          const rd=new THREE.Vector3(0,0,-1).applyQuaternion(new THREE.Quaternion().setFromRotationMatrix(c.matrixWorld));
+          dot.position.copy(o).addScaledVector(rd, dd); dot.visible=true; dot.material.color.setHex(0xd6b46a);
+        }
+      } else if(xrUI._dot && xrUI._dot[i]) xrUI._dot[i].visible=false;
       continue;
     }
     if(line) line.material.color.setHex(0x8fb0d6);   // UI mode: back to the cool ray
@@ -8853,11 +8892,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 79f6f48-f5ab974f).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 79f6f48-df6c205c).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '79f6f48-f5ab974f';
+    const MY_BUILD = '79f6f48-df6c205c';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9311,7 +9350,8 @@ function xrLocomotion(dt){
     if(b[5] && b[5].pressed) micBtn = true;                           // B / Y = mic toggle
     if(src.handedness === 'left' && b[3]) kbBtn = kbBtn || b[3].pressed;  // left thumbstick press = text keyboard
     if(src.handedness === 'right' && b[3]) emoteBtn = emoteBtn || b[3].pressed;  // right thumbstick press = emote panel
-    if(window.__grab) window.__grab.tryGripGrab(src.handedness, !!(b[1] && b[1].pressed));  // grip = grab/release a prop
+    if(window.__grab) window.__grab.tryGripGrab(src.handedness,   // HLA chord: grip=point, +trigger=grab
+      !!(b[1] && b[1].pressed), !!(b[0] && b[0].pressed));
   }
   if(kbBtn && !prevKbBtn) vkbToggleText();                            // edge: toggle the VR keyboard
   prevKbBtn = kbBtn; kbBtn = false;
