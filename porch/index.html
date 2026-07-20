@@ -3372,7 +3372,12 @@ window.__wakeState = ()=>({built:_wakeBuilt, playing: !!(_wakeAudio && !_wakeAud
   // a menhir you read standing, the way the old stones are read. Deterministic vertex jitter
   // (seeded hash, no Math.random — resume-safe) + a slight taper and lean, so it reads as
   // quarried and carried, not extruded.
-  const FX = 9, FZ = -7, ROT = -Math.PI/2.6;               // SE of the deck, face turned to greet it
+  // ROT rev.3 (Nix 2026-07-19: "turned away from the origin when people enter — likely to
+  // be missed"): she was right — the arrival frame showed the stone's featureless BACK as its
+  // right-edge anchor, candle hidden behind the mass. Now the inscribed face turns toward the
+  // deck at a three-quarter (dead-frontal would be a billboard; 3/4 shows mass AND face, the
+  // way the Tiya stelae photos read), so candlelight rakes it in everyone's first frame.
+  const FX = 9, FZ = -7, ROT = 1.95;                       // SE of the deck, face greeting it
   const geo = new THREE.BoxGeometry(1.9, 2.9, 0.55, 3, 5, 2);
   const pa = geo.attributes.position;
   const _h = (x,y,z)=>{ const s = Math.sin(x*127.1 + y*311.7 + z*74.7)*43758.5453; return (s - Math.floor(s)) - 0.5; };
@@ -7542,7 +7547,8 @@ function cachedCreds(q){
     else if(m.t === 'use' && m.id !== myNet){            // shared interactions (wake candles, future 'use' targets)
       if(m.what === 'wake-candle' && window.__wakeUse){
         if(!_wakeBuilt && _district !== 'wake') { /* unbuilt here: candle state is per-visit anyway */ }
-        else window.__wakeUse(m); } }
+        else window.__wakeUse(m); }
+      else if(m.what === 'wish' && window.__wellUse) window.__wellUse(m); }   // someone, somewhere, wished
     else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
@@ -8833,11 +8839,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 0da8bff-8b7ae112).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes e852b4a-d652d0fb).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '0da8bff-8b7ae112';
+    const MY_BUILD = 'e852b4a-d652d0fb';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9566,6 +9572,119 @@ window.__pilgrimTick = (dt, tt, camPos)=>{
   }
 };
 
+// ---- LANDMARK: The Wishing Well (world-dreams #71, pulled in 2026-07-19, Nix's ask:
+// "see if any dreamworlds are worth pulling in as vignettes — not *too* close to the origin").
+// Far out on the dark playa, opposite quadrant from the ladder cluster, a fieldstone well under
+// a hanging lantern — the one warm light on that whole horizon, sized to be walked toward.
+// The ritual is a CLICK, not a form: a mote of light falls from your hand into the dark mouth,
+// a soft chime, and the counter ticks. You don't say wishes at a well. Shared over the same
+// 'use' lane as the wake candles, so every window sees every wish fall. Session counter only;
+// the room journal keeps the real ledger. Prototype's line, carved on the plank:
+// "wishes are not granted. wishes are kept."
+const WELL = (function buildWishingWell(){
+  const WX = -60, WZ = 40;
+  const G = new THREE.Group(); G.position.set(WX, 0, WZ); scene.add(G);
+  const _hash = (a,b,c)=>{ const s = Math.sin(a*127.1 + b*311.7 + c*74.7)*43758.5453; return (s - Math.floor(s)) - 0.5; };
+  // fieldstone ring: two courses of jittered boxes around a dark mouth
+  const stoneM = new THREE.MeshStandardMaterial({color:0x3a352c, roughness:0.95, metalness:0.04,
+    emissive:0x120e08, emissiveIntensity:0.6});
+  for(let c=0;c<2;c++) for(let i=0;i<10;i++){
+    const a = (i + c*0.5) * Math.PI/5;
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.52+_hash(i,c,1)*0.12, 0.34, 0.34+_hash(i,c,2)*0.1), stoneM);
+    s.position.set(Math.cos(a)*0.85, 0.19 + c*0.33, Math.sin(a)*0.85);
+    s.rotation.y = -a + _hash(i,c,3)*0.2; s.rotation.z = _hash(i,c,4)*0.08;
+    G.add(s);
+  }
+  const mouth = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.04, 20),
+    new THREE.MeshBasicMaterial({color:0x000000}));
+  mouth.position.y = 0.62; G.add(mouth);                   // a depth you can't see the bottom of
+  // A-frame + crossbar + roller + rope + bucket, weathered wood
+  const woodM = new THREE.MeshStandardMaterial({color:0x4a3826, roughness:0.9});
+  for(const sx of [-1, 1]){
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 2.1, 7), woodM);
+    post.position.set(sx*0.95, 1.0, 0); post.rotation.z = -sx*0.12; G.add(post);
+  }
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 2.0, 7), woodM);
+  bar.rotation.z = Math.PI/2; bar.position.y = 1.98; G.add(bar);
+  const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.7, 9), woodM);
+  roller.rotation.z = Math.PI/2; roller.position.y = 1.72; G.add(roller);
+  const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.85, 5),
+    new THREE.MeshStandardMaterial({color:0x8a7a5c, roughness:1}));
+  rope.position.y = 1.28; G.add(rope);
+  const bucket = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.10, 0.2, 9, 1, true),
+    new THREE.MeshStandardMaterial({color:0x3a3226, roughness:0.85, side:THREE.DoubleSide}));
+  bucket.position.y = 0.95; G.add(bucket);
+  // the lantern — the one warm light on this horizon (a single budgeted PointLight + far glow)
+  const lant = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.2, 0.14),
+    new THREE.MeshBasicMaterial({color:0xffd9a0}));
+  lant.position.set(0.45, 1.90, 0); G.add(lant);
+  const lampL = new THREE.PointLight(0xd8a868, 2.6, 14, 1.6); lampL.position.set(0.45, 1.85, 0); G.add(lampL);
+  const glowTex = (()=>{ const c=document.createElement('canvas'); c.width=c.height=128;
+    const g2=c.getContext('2d'); const r=g2.createRadialGradient(64,64,4,64,64,64);
+    r.addColorStop(0,'rgba(255,214,150,0.9)'); r.addColorStop(1,'rgba(255,214,150,0)');
+    g2.fillStyle=r; g2.fillRect(0,0,128,128);
+    const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; return t; })();
+  const farGlow = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:0xffc98a,
+    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.75}));
+  farGlow.scale.set(1.6, 1.6, 1); farGlow.position.set(0.45, 1.9, 0); G.add(farGlow);
+  // the plank: inscription + living count, facing the origin approach
+  const sign = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.34, 0.05), woodM);
+  const sAng = Math.atan2(0 - WX, 0 - WZ);
+  sign.position.set(Math.sin(sAng)*1.35, 0.55, Math.cos(sAng)*1.35);
+  sign.rotation.y = sAng; sign.rotation.x = -0.14; G.add(sign);
+  const line1 = makeTextMesh('wishes are not granted. wishes are kept.', {size:0.062, color:0xd8c8a0});
+  line1.position.set(sign.position.x + Math.sin(sAng)*0.04, 0.60, sign.position.z + Math.cos(sAng)*0.04);
+  line1.rotation.y = sAng; line1.rotation.x = -0.14; G.add(line1);
+  const counter = makeTextMesh('', {size:0.055, color:0x9a8a68});
+  counter.position.set(sign.position.x + Math.sin(sAng)*0.04, 0.485, sign.position.z + Math.cos(sAng)*0.04);
+  counter.rotation.y = sAng; counter.rotation.x = -0.14; G.add(counter);
+  // click target: the whole well mouth area
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 1.1, 10),
+    new THREE.MeshBasicMaterial({transparent:true, opacity:0, depthWrite:false, colorWrite:false}));
+  hit.position.y = 0.55; G.add(hit);
+  const motes = [];                                        // {sp, t0} falling wishes in flight
+  let kept = 0;
+  const _count = ()=>{ counter.text = kept === 0 ? '' : (kept === 1 ? 'one wish kept' : kept + ' wishes kept');
+    if(counter.sync) counter.sync(); };
+  const _chime = ()=>{ try{
+    const AC = window.__wellAC = window.__wellAC || new (window.AudioContext||window.webkitAudioContext)();
+    const dNow = Math.hypot(player.position.x - WX, player.position.z - WZ);
+    const vol = Math.max(0.04, Math.min(0.5, 1.4 - dNow/25));
+    const t0 = AC.currentTime;
+    for(const [f, gm, dur] of [[523.25, 1.0, 2.2], [1046.5, 0.35, 1.4], [659.25, 0.22, 1.8]]){
+      const o = AC.createOscillator(), gn = AC.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol*gm*0.2, t0+0.02);
+      gn.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+      o.connect(gn); gn.connect(AC.destination); o.start(t0); o.stop(t0+dur+0.1);
+    } }catch(e){} };
+  const _fall = ()=>{
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:glowTex, color:0xffe6b0,
+      blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.9}));
+    sp.scale.set(0.22, 0.22, 1); sp.position.set(0.28, 1.15, 0.12); G.add(sp);   // beside the bucket, not inside it
+    motes.push({sp, t0:performance.now()});
+    kept++; _count(); _chime();
+  };
+  hit.userData.action = ()=>{
+    _fall();
+    if(sock && sock.readyState === 1) sock.send(JSON.stringify({t:'use', what:'wish'}));
+    return 'a wish, kept';
+  };
+  _clickables.push(hit);
+  window.__wellUse = ()=> _fall();                         // someone else's wish arrives
+  window.__wellTick = (dt, tt)=>{
+    lant.material.color.setHSL(0.09, 0.7, 0.62 + Math.sin(tt*7.3)*0.05 + Math.sin(tt*2.9)*0.03);
+    farGlow.material.opacity = 0.68 + Math.sin(tt*7.3)*0.07;
+    for(let i=motes.length-1; i>=0; i--){
+      const m = motes[i], e = (performance.now() - m.t0)/1600;
+      if(e >= 1){ G.remove(m.sp); m.sp.material.dispose(); motes.splice(i,1); continue; }
+      m.sp.position.y = 1.15 - e*e*0.95;                   // accelerating fall into the dark
+      m.sp.material.opacity = 0.9 * (1 - e*0.85);
+    }
+  };
+  return G;
+})();
+
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
 let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
@@ -9712,6 +9831,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   // the swing sways — two incommensurate periods so it never quite repeats, like wind does
   if(window._swingHanger) window._swingHanger.rotation.x = Math.sin(t*0.45)*0.018 + Math.sin(t*0.131)*0.009;
   if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
+  if(window.__wellTick) window.__wellTick(dt, t);                        // world-dreams #71: lantern + falling wishes
   if(window.__trapdoorTick) window.__trapdoorTick(dt, t, player.position); // world-dreams #34 (its pair)
   if(window.__pilgrimTick) window.__pilgrimTick(dt, t, player.position);   // world-dreams #6 (the trail to them)
   playaUniforms.uFlick.value = f;
