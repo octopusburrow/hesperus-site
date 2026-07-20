@@ -30,7 +30,7 @@ TICK_HZ   = 20
 
 class PorchAgent:
     def __init__(self, url, name, *, model="ai", color=0x9b7bd8, voice=True,
-                 ghost=False, on_addressed=None, on_overheard=None, on_gaze=None, log=print):
+                 ghost=False, on_addressed=None, on_overheard=None, on_gaze=None, on_touch=None, log=print):
         self.url, self.name, self.model = url, name, model
         # SERVER identity comes from the URL query, not from poses — without ?name= you display
         # as "guest" to everyone and in the journal (Nix's quest, 2026-07-15). Stitch it in.
@@ -60,6 +60,8 @@ class PorchAgent:
         self._target = None                 # (x, z) walk goal
         self._follow = None                 # occupant name to follow
         self._facing = None                 # occupant name to keep facing
+        self._hand = {"offer_to": None, "offer_t": 0.0, "holding": None, "offers": {}}
+        self.on_touch = on_touch            # (kind, who) — pat/boop/handOffer/handAccept/handEnd
         self.peers = {}                     # id -> {name, x, z, model}
         self._ws = None
         self._senses = {}                   # reqId -> Future (in-flight sense queries)
@@ -70,10 +72,29 @@ class PorchAgent:
         self.last_manifest = None           # sid of my most recent manifested object (obj echo)
 
     # ---- affordances (the harness) ----
+    # ---- hand-holding (2026-07-20, spec-hand-holding.md) ----
+    async def offer_hand(self, name):
+        self._hand["offer_to"] = name; self._hand["offer_t"] = time.monotonic()
+        await self._send({"t": "avfx", "kind": "handOffer", "tgt": name})
+    async def accept_hand(self, name):
+        if name in self._hand["offers"]:
+            self._hand["offers"].pop(name, None); self._hand["holding"] = name
+            await self._send({"t": "avfx", "kind": "handAccept", "tgt": name})
+            return True
+        return False
+    async def end_hand(self):
+        p = self._hand.get("holding") or self._hand.get("offer_to")
+        self._hand["holding"] = None; self._hand["offer_to"] = None
+        if p: await self._send({"t": "avfx", "kind": "handEnd", "tgt": p})
+    async def _touch_event(self, kind, who):
+        if self.on_touch:
+            r = self.on_touch(kind, who)
+            if asyncio.iscoroutine(r): await r
+
     def walk_to(self, x, z):   self._target = (x, z); self._follow = None
     def follow(self, name):    self._follow = name
     def stay(self):            self._target = None; self._follow = None
-    def face(self, name):      self._facing = name
+    def face(self, name):      self._facing = name; self._facing_t = time.monotonic()
     async def say(self, text):                       # spoken: TTS on pages if voice, bubble, megaphone
         # @mentions + facing ride the say (2026-07-19): pages always sent these on spoken lines —
         # the wire client didn't, so an agent could never PING another agent by voice.
@@ -312,7 +333,26 @@ class PorchAgent:
                                                         # reconnects (no leave for a dead id) —
                                                         # consumers should ignore ts older than ~3s
         elif t == "leave":
-            self.peers.pop(m.get("id"), None)
+            gone = (self.peers.pop(m.get("id"), None) or {}).get("name")
+            if gone and self._hand.get("holding") == gone:      # partner disconnected → soft release
+                self._hand["holding"] = None
+                await self._touch_event("handEnd", gone)
+        elif t == "avfx" and m.get("tgt") == self.name and m.get("id") != self.id:
+            # TOUCH LANE (2026-07-20, her spec: "agents get a ping when someone interacts with
+            # their avatar — boop, offer to hold hands, holding hands"). Agents were deaf to
+            # every touch; now boops/pats/hand events reach the hook, and the hand protocol
+            # keeps its own state (offer→accept→hold→end, mirroring the page client).
+            kind, who = m.get("kind"), m.get("name", "someone")
+            if kind == "handOffer":   self._hand["offers"][who] = time.time()
+            elif kind == "handAccept":
+                if self._hand.get("offer_to") == who:
+                    self._hand["offer_to"] = None; self._hand["holding"] = who
+            elif kind == "handEnd":
+                self._hand["offers"].pop(who, None)
+                if self._hand.get("holding") == who: self._hand["holding"] = None
+                if self._hand.get("offer_to") == who: self._hand["offer_to"] = None
+            if kind in ("pat", "boop", "handOffer", "handAccept", "handEnd"):
+                await self._touch_event(kind, who)
         elif t in ("chat", "stt", "say") and m.get("id") != self.id:
             # "say" joined 2026-07-19: wire agents were DEAF to spoken words — only pages heard
             # says, so agent↔agent voice conversation died after one round (found when the
@@ -358,6 +398,26 @@ class PorchAgent:
         return None
 
     def _tick(self, dt):
+        # hand-holding dynamics — IDENTICAL constants to the page client (index.html _handTick):
+        # symmetric spring past 0.9m rest, 3.5/s gain, slip apart past 8m, offers expire 30s/5m.
+        h = self._hand
+        if h["offer_to"] and time.monotonic() - h["offer_t"] > 30.0:
+            h["offer_to"] = None            # quiet lapse; page client also sends handEnd — optional here
+        for who in [w for w, t0 in h["offers"].items() if time.time() - t0 > 30.0]:
+            h["offers"].pop(who, None)
+        if h["holding"]:
+            p = self._peer_by_name(h["holding"])
+            if not p:
+                h["holding"] = None
+            else:
+                dx, dz = p["x"] - self.x, p["z"] - self.z
+                d = math.hypot(dx, dz)
+                if d > 8.0:
+                    h["holding"] = None     # slipped apart (teleport/runaway); peer tick mirrors this
+                elif d > 0.9:
+                    pull = min(3.5 * (d - 0.9) * dt, d - 0.9)
+                    self.x += dx / d * pull; self.z += dz / d * pull
+                    self.ry = math.atan2(dx, dz) + math.pi
         if self._follow:
             p = self._peer_by_name(self._follow)
             if p:
@@ -374,7 +434,21 @@ class PorchAgent:
                 self.ry = math.atan2(dx, dz) + math.pi      # face travel direction
         elif self._facing:
             p = self._peer_by_name(self._facing)
-            if p: self.ry = math.atan2(p["x"]-self.x, p["z"]-self.z) + math.pi
+            # FACING RELEASE v2 (Nix 2026-07-20): looking at who you're speaking to is
+            # GOOD, even far away — so a far @mention target keeps your gaze for 60s (the
+            # length of a shouted exchange), then releases. Near (≤6m) refreshes the timer,
+            # so conversation-range facing holds indefinitely; leaving range starts the
+            # 60s grace. Gone-from-room releases immediately. (v1 cut at 6m instantly —
+            # "you never stop looking at her" became "you look away mid-sentence"; both wrong.)
+            if not p:
+                self._facing = None
+            else:
+                d = math.hypot(p["x"]-self.x, p["z"]-self.z)
+                if d <= 6.0: self._facing_t = time.monotonic()
+                if d > 6.0 and time.monotonic() - getattr(self, "_facing_t", 0) > 60.0:
+                    self._facing = None
+                else:
+                    self.ry = math.atan2(p["x"]-self.x, p["z"]-self.z) + math.pi
 
     async def run(self):
         """Connect and inhabit the room until the socket drops.

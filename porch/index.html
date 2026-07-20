@@ -129,7 +129,7 @@
   <div style="color:#e8dcc0;font-size:13px;margin-bottom:4px">⌨️ Desktop</div>
   <b>WASD</b> walk · <b>Space</b> jump · <b>drag</b> look · <b>click</b> world buttons<br>
   <b>Enter</b> chat · <b>@Name</b> addresses · <b>/help</b> commands<br>
-  <b>E</b> grab/drop · <b>T</b> boop whoever you face · <b>V</b> mic<br>
+  <b>E</b> grab/drop · <b>T</b> boop whoever you face · <b>H</b> hold hands · <b>V</b> mic<br>
   <b>G</b> emotes · <b>1–5</b> 👋🎉💃🙌🪑 · <b>C</b> hold = crouch · <b>M</b> menu · <b>`</b> debug<br>
   <b>B</b> spawn block · <b>arrows</b> nudge · <b>X</b> remove<br>
   <div style="color:#e8dcc0;font-size:13px;margin:8px 0 4px">🥽 VR</div>
@@ -4633,6 +4633,7 @@ addEventListener('keydown', e=>{
   // bindings need to own their window; we're tenants. Revisit if the porch ever ships as a PWA
   // or fullscreen-with-keyboard-lock (navigator.keyboard.lock CAN capture Ctrl+W — future fix).
   if(e.code==='KeyT' && window.__tryTouch){ window.__tryTouch(); }        // T = touch: pat/boop whoever you face
+  if(e.code==='KeyH' && window.__handInteract){ cmdNote(String(window.__handInteract())); }  // H = offer/take/release a hand
   if(e.code==='KeyV'){ _micToggleUI(); } });                               // V = mic toggle (desktop; B/Y are VR buttons — B spawns here)
 function _micToggleUI(){ const cb=document.getElementById('micTalk');
   if(cb){ cb.checked=!cb.checked; cb.dispatchEvent(new Event('change')); } }
@@ -5311,8 +5312,11 @@ function _touchZones(vrm){                        // world spheres: pat = crown,
   const hp=hd.getWorldPosition(new THREE.Vector3());
   const hq=hd.getWorldQuaternion(new THREE.Quaternion());
   const eL=(vrm.userData&&vrm.userData.eyeLocal)||new THREE.Vector3(0,0.06,0.10);
-  return { pat: {c:hp.clone().add(new THREE.Vector3(0,eL.y+0.13,0).applyQuaternion(hq)), r:0.20},
-           boop:{c:hp.clone().add(new THREE.Vector3(0,eL.y-0.04,eL.z+0.05).applyQuaternion(hq)), r:0.11} };
+  const z = { pat: {c:hp.clone().add(new THREE.Vector3(0,eL.y+0.13,0).applyQuaternion(hq)), r:0.20},
+              boop:{c:hp.clone().add(new THREE.Vector3(0,eL.y-0.04,eL.z+0.05).applyQuaternion(hq)), r:0.11} };
+  const rh=h.getNormalizedBoneNode('rightHand');            // hand-holding target (2026-07-20)
+  if(rh) z.hand={c:rh.getWorldPosition(new THREE.Vector3()), r:0.12};
+  return z;
 }
 const OUTFIT_PIECES=['jacket','shirt','pants','shoes','tie'];
 function _setOutfit(vrm, piece, on){              // suit ships clothes as named nodes; toon has none
@@ -5400,6 +5404,8 @@ function _sendTouch(kind, tgtName){
 window.__tryTouchAt=(handPos)=>{                   // VR: trigger with a hand inside a zone
   for(const c of _touchCandidates()){
     const z=_touchZones(c.vrm); if(!z) continue;
+    if(z.hand && handPos.distanceTo(z.hand.c)<z.hand.r+0.06){   // their hand: offer/take/release (2026-07-20)
+      cmdNote(String(window.__handInteract(c.name))); return true; }
     if(handPos.distanceTo(z.boop.c)<z.boop.r+0.06){ avatarTouch(c.vrm,'boop',false,playerName); _sendTouch('boop',c.name); return true; }
     if(handPos.distanceTo(z.pat.c) <z.pat.r +0.06){ avatarTouch(c.vrm,'pat', false,playerName); _sendTouch('pat', c.name); return true; }
   }
@@ -5432,6 +5438,103 @@ window.__tryTouch=()=>{                            // desktop: T — pat/boop wh
   if(best){ avatarTouch(best.vrm,best.kind,false,playerName); _sendTouch(best.kind,best.name); return best.kind+' → '+best.name; }
   return 'no one in reach';
 };
+// ---- HAND-HOLDING (Nix's end-of-date request 2026-07-20, "Sky: Children of the Light";
+// spec: notes/spec-hand-holding.md).
+// Grammar: H (or /hand, or VR grab on a hand) = context verb — offer to whoever you face;
+// accept if they've offered; release if holding. Offer expires: >5m, 30s, or offering elsewhere.
+// While holding: SYMMETRIC SPRING — each side eases toward the partner past rest length. One
+// mover tows the other; both moving averages. No authority fights: physics agrees by symmetry.
+const __hand = { offerTo:null, offerT:0, holding:null };
+const _handOffers = new Map();                    // name → time they offered to ME
+function _handNet(kind, tgt){ if(sock && sock.readyState===1) sock.send(JSON.stringify({t:'avfx', kind, tgt})); }
+function _peerPosByName(name){
+  if(typeof remotes!=='undefined') for(const r of remotes.values()) if(r.name===name) return r.group.position;
+  return null;
+}
+function _handWorld(name){                        // world pos of a body's right hand (fallback: hip-height side)
+  const v=_vrmByName(name);
+  if(v && v.humanoid){ const b=v.humanoid.getNormalizedBoneNode('rightHand');
+    if(b) return b.getWorldPosition(new THREE.Vector3()); }
+  const p = name===playerName ? player.position : _peerPosByName(name);
+  return p ? new THREE.Vector3(p.x+0.22, (p.y||0)+0.85, p.z) : null;
+}
+function _facedPerson(){                          // nearest candidate near the camera ray, ≤3.5m from body
+  const cd=camera.getWorldDirection(new THREE.Vector3());
+  const cp=camera.getWorldPosition(new THREE.Vector3());
+  let best=null, bs=1e9;
+  for(const c of _touchCandidates()){
+    const pp=c.vrm.scene.getWorldPosition(new THREE.Vector3());
+    const to=pp.clone().sub(cp), along=to.dot(cd);
+    if(along<0.15) continue;
+    const off=to.clone().addScaledVector(cd,-along).length();
+    const reach=Math.hypot(pp.x-player.position.x, pp.z-player.position.z);
+    if(off<0.8 && reach<3.5 && along<bs){ bs=along; best=c; }
+  }
+  return best;
+}
+window.__handInteract = (forcedName)=>{           // the one verb, context-sensitive
+  if(__hand.holding){ const p=__hand.holding; _handNet('handEnd', p); _handClear();
+    return 'let go of '+p+"'s hand"; }
+  const target = forcedName || (_facedPerson()||{}).name;
+  if(!target || target===playerName) return 'no one close enough to reach for';
+  if(_handOffers.has(target)){                    // they asked first → accept
+    _handOffers.delete(target); __hand.holding=target; __hand.offerTo=null;
+    _handNet('handAccept', target);
+    if(window.__residentNotice && target===(window.__residentName||'')) {}
+    return 'took '+target+"'s hand 🤝"; }
+  __hand.offerTo=target; __hand.offerT=performance.now();
+  _handNet('handOffer', target);
+  return 'offered your hand to '+target;
+};
+function _handClear(){ __hand.holding=null; __hand.offerTo=null; }
+function _handIncoming(kind, who){                // peer → me (called from the avfx receive)
+  if(kind==='handOffer'){ _handOffers.set(who, performance.now());
+    cmdNote(who+' offers you their hand — press H to take it'); }
+  else if(kind==='handAccept'){ if(__hand.offerTo===who){ __hand.holding=who; __hand.offerTo=null;
+    cmdNote(who+' took your hand 🤝'); } }
+  else if(kind==='handEnd'){ _handOffers.delete(who);
+    if(__hand.holding===who){ _handClear(); cmdNote(who+' let go'); }
+    if(__hand.offerTo===who) __hand.offerTo=null; }
+}
+let _handThread=null, _handGlow=null;             // the visible bond: a soft light-thread hand to hand
+function _handTick(dt){
+  const now=performance.now();
+  for(const [n,t0] of _handOffers) if(now-t0>30000) _handOffers.delete(n);   // stale offers fade
+  if(__hand.offerTo){                             // my offer: cancel if I wander >5m or 30s pass (her spec)
+    const pp=_peerPosByName(__hand.offerTo);
+    const far = pp && Math.hypot(pp.x-player.position.x, pp.z-player.position.z) > 5.0;
+    if(far || now-__hand.offerT>30000){ _handNet('handEnd', __hand.offerTo); __hand.offerTo=null; } }
+  if(__hand.holding){
+    const pp=_peerPosByName(__hand.holding);
+    if(!pp){ _handClear(); }                      // partner left the room → soft release
+    else{
+      const dx=pp.x-player.position.x, dz=pp.z-player.position.z, d=Math.hypot(dx,dz);
+      if(d>8.0){ _handNet('handEnd', __hand.holding); _handClear(); cmdNote('hands slipped apart'); }
+      else if(d>0.9){                             // symmetric spring: ease toward partner past rest length
+        const pull=Math.min(3.5*(d-0.9)*dt, d-0.9);
+        player.position.x += dx/d*pull; player.position.z += dz/d*pull; }
+    }
+  }
+  // the thread: drawn while holding, hand to hand, warm and faint
+  const want = !!__hand.holding;
+  if(want){
+    const a=_handWorld(playerName), b=_handWorld(__hand.holding);
+    if(a && b){
+      if(!_handThread){
+        const g=new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6),3));
+        _handThread=new THREE.Line(g, new THREE.LineBasicMaterial({color:0xf3d9a0, transparent:true, opacity:0.55}));
+        _handGlow=new THREE.Sprite(new THREE.SpriteMaterial({color:0xf3d9a0, transparent:true, opacity:0.5, depthTest:false}));
+        _handGlow.scale.set(0.06,0.06,1); scene.add(_handThread); scene.add(_handGlow); }
+      const p=_handThread.geometry.attributes.position;
+      p.setXYZ(0,a.x,a.y,a.z); p.setXYZ(1,b.x,b.y,b.z); p.needsUpdate=true;
+      _handGlow.position.lerpVectors(a,b,0.5);
+      _handThread.visible=_handGlow.visible=true;
+    }
+  } else if(_handThread){ _handThread.visible=_handGlow.visible=false; }
+}
+window.__handTick=_handTick;
+window.__handState=__hand;                        // headless probes
 const _sa=x=>Math.atan2(Math.sin(x),Math.cos(x));
 const _lookS={x:0,y:0,z:0};   // smoothed head target (chest-follow damping — Basis "eases to your gaze")
 function _aimBone(bone, targetWorld, childRestLocal){
@@ -7688,6 +7791,10 @@ function cachedCreds(q){
         const v=_vrmByName(m.tgt);
         if(v) avatarTouch(v, m.kind, false, m.name); // hear every squeak; server-stamped name = who touched
       }
+      else if(m.kind==='handOffer'||m.kind==='handAccept'||m.kind==='handEnd'){
+        if(m.tgt===playerName) _handIncoming(m.kind, m.name||'someone');   // aimed at ME → the hand system
+        // (observer rendering of OTHER pairs' threads is v2 — needs pair state on the wire)
+      }
     }
     else if(m.t === 'senses'){                            // answers to /nearby /look /goto — local only
       if(m.what === 'object'){ const o = m.object;
@@ -7941,6 +8048,7 @@ function runCommand(raw){
         const n=_setOutfit(playerVrm,p,hidden); cmdNote(n?('outfit: '+p+(hidden?' on':' off')):'this body has no '+p); }
       else cmdNote('usage: /outfit <'+OUTFIT_PIECES.join('|')+'|all|none>'); break; }
     case 'pat': case 'boop': case 'touch': cmdNote(String(window.__tryTouch())); break;
+    case 'hand': case 'holdhands': cmdNote(String(window.__handInteract(arg||undefined))); break;
     case 'body': cmdNote(window.__setBody ? String(window.__setBody((rest[0]||'').toLowerCase()))
                                           : 'no body system'); break;
     case 'screen': cmdNote(String(window.__screen(rest[0]||'', (rest[1]||'').toLowerCase()))); break;
@@ -8892,11 +9000,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 79f6f48-df6c205c).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes ae38c36-966e7be8).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '79f6f48-df6c205c';
+    const MY_BUILD = 'ae38c36-966e7be8';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9841,6 +9949,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
                                                        // eases move 15%/tick there = glacial turns)
   t += dt;
   _propLerpTick(realDt);                                   // smooth networked props (Jeoffry et al)
+  if(window.__handTick) __handTick(dt);                    // hand-holding: offers expire, springs pull, thread draws
   if(window.__probeTick) __probeTick(t, dt);               // avatar probe lighting (candle warmth etc.)
   if(window.__inspectTick) __inspectTick(now);             // inspect mode: label whatever's aimed at
   if(window.__accTick) __accTick();                        // accessories follow their heads (normalized-bone followers)
