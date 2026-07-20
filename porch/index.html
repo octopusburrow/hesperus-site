@@ -9000,11 +9000,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes ae38c36-966e7be8).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3603b91-d50dfa88).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'ae38c36-966e7be8';
+    const MY_BUILD = '3603b91-d50dfa88';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9847,6 +9847,76 @@ const WELL = (function buildWishingWell(){
   return G;
 })();
 
+// ---- LANDMARK: the ungripped house (world-dreams #82, ported as a far vignette 2026-07-20) ----
+// Far NW playa: a small dark house whose door stands open, warm hearth-light spilling out —
+// the one lit doorway on that horizon (the well owns the SW's lantern). The room's mechanic
+// (Tao Te Ching 60, 其鬼不神 — "its ghosts don't haunt"), enacted in approach dynamics:
+// RUSH toward it and the hearth goes cold and pale; STAND STILL near it and the warmth
+// returns and deepens. You cannot charge the door and keep the light. The plank says how.
+const HOUSE82 = (function buildUngrippedHouse(){
+  const G = new THREE.Group(); const AT = new THREE.Vector3(-45, 0, -65);
+  G.position.set(AT.x, (typeof groundHeight==='function'?groundHeight(AT.x,AT.z):0), AT.z);
+  scene.add(G);
+  const dk = new THREE.MeshLambertMaterial({color:0x14161c});          // silhouette dark
+  const w1 = new THREE.Mesh(new THREE.BoxGeometry(3.6, 2.3, 3.0), dk); w1.position.y=1.15; G.add(w1);
+  const gable = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 2.35, 1.5, 4, 1), dk);
+  gable.position.y = 2.3 + 0.75; gable.rotation.y = Math.PI/4; gable.scale.z = 0.78; G.add(gable);
+  const chim = new THREE.Mesh(new THREE.BoxGeometry(0.34,1.0,0.34), dk);
+  chim.position.set(0.9, 3.2, -0.5); G.add(chim);
+  // the doorway: warm emissive aperture + a door leaf standing OPEN (never latched)
+  const doorM = new THREE.MeshBasicMaterial({color:0xffc98a, side:THREE.DoubleSide});   // 🔴 FrontSide gotcha: oblique = invisible
+  const door = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.95), doorM);
+  const dAng = Math.atan2(0-AT.x, 0-AT.z);                             // aperture faces the porch
+  door.position.set(Math.sin(dAng)*1.51, 0.95, Math.cos(dAng)*1.51); door.rotation.y = dAng; G.add(door);
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.78, 1.82, 0.06),
+    new THREE.MeshLambertMaterial({color:0x241d15}));
+  leaf.position.set(Math.sin(dAng)*1.56 + Math.sin(dAng+1.9)*0.5, 0.95, Math.cos(dAng)*1.56 + Math.cos(dAng+1.9)*0.5);
+  leaf.rotation.y = dAng + 1.25; G.add(leaf);                          // swung wide, resting
+  // own radial glow texture — the well's glowTex lives in its closure; a null-map
+  // SpriteMaterial renders a SOLID SQUARE (caught by the render check, 03:02)
+  const _gc = document.createElement('canvas'); _gc.width=_gc.height=64;
+  const _gx = _gc.getContext('2d');
+  const _gr = _gx.createRadialGradient(32,32,2, 32,32,30);
+  _gr.addColorStop(0,'rgba(255,255,255,0.9)'); _gr.addColorStop(0.45,'rgba(255,255,255,0.28)');
+  _gr.addColorStop(1,'rgba(255,255,255,0)');
+  _gx.fillStyle=_gr; _gx.fillRect(0,0,64,64);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(_gc),
+    color:0xffc98a, transparent:true, opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false}));
+  glow.scale.set(4.6,4.6,1); glow.position.set(door.position.x*1.15, 1.15, door.position.z*1.15); G.add(glow);
+  // light spill: a warm ellipse on the ground before the door, so the doorway reads from far off
+  const spillM = new THREE.MeshBasicMaterial({color:0xffc98a, transparent:true, opacity:0.22,
+    blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide});
+  const spill = new THREE.Mesh(new THREE.CircleGeometry(1.6, 20), spillM);
+  spill.rotation.x = -Math.PI/2; spill.scale.y = 1.9;
+  spill.position.set(Math.sin(dAng)*2.6, 0.02, Math.cos(dAng)*2.6); spill.rotation.z = -dAng; G.add(spill);
+  const plank = makeTextMesh('chased, it goes cold. sat with, it stays.',
+    {size:0.075, color:0xbfae8c});
+  plank.position.set(Math.sin(dAng)*3.1, 0.62, Math.cos(dAng)*3.1);
+  plank.rotation.y = dAng; G.add(plank);
+  let warmth = 0.7, _pp = null;
+  window.__house82 = { w:()=>warmth, set:(v)=>{ warmth=v; } };   // headless probes (clamped-dt pages warm glacially)
+  window.__houseTick = (dt, tt)=>{
+    const px=player.position.x, pz=player.position.z;
+    const d = Math.hypot(px-(-45), pz-(-65));
+    if(d < 30){
+      const sp = _pp ? Math.hypot(px-_pp.x, pz-_pp.z)/Math.max(dt,1e-4) : 0;
+      const closing = _pp ? (Math.hypot(_pp.x-(-45), _pp.z-(-65)) - d)/Math.max(dt,1e-4) : 0;
+      const chasing = closing > 1.2 && sp > 1.2;                       // rushing the door
+      const still = sp < 0.3;
+      const target = chasing ? 0.06 : (still ? 1.0 : 0.45);
+      warmth += (target - warmth) * Math.min(1, dt*(chasing ? 2.2 : 0.5));  // cools fast, warms slow
+    } else warmth += (0.7 - warmth)*Math.min(1, dt*0.3);
+    _pp = {x:px, z:pz};
+    const flick = 1 + Math.sin(tt*6.1)*0.04 + Math.sin(tt*2.3)*0.03;   // hearth breathing
+    const h = 0.078 - (1-warmth)*0.055;                                // warm amber → cold pale blue
+    doorM.color.setHSL(Math.max(0.02,h) < 0.03 ? 0.58 : h, 0.72*warmth + 0.15, 0.45 + 0.25*warmth);
+    glow.material.opacity = (0.15 + 0.62*warmth) * flick;
+    glow.material.color.copy(doorM.color);
+    spillM.opacity = (0.04 + 0.26*warmth) * flick; spillM.color.copy(doorM.color);
+  };
+  return G;
+})();
+
 // ---- loop ----
 let t = 0, _last = 0, netAccum = 0;
 let _perfFrames = 0, _perfT0 = 0; const _skyPegV = new THREE.Vector3();
@@ -9995,6 +10065,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window._swingHanger) window._swingHanger.rotation.x = Math.sin(t*0.45)*0.018 + Math.sin(t*0.131)*0.009;
   if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
   if(window.__wellTick) window.__wellTick(dt, t);                        // world-dreams #71: lantern + falling wishes
+  if(window.__houseTick) __houseTick(dt, t);                             // world-dreams #82: hearth vs haste
   if(window.__trapdoorTick) window.__trapdoorTick(dt, t, player.position); // world-dreams #34 (its pair)
   if(window.__pilgrimTick) window.__pilgrimTick(dt, t, player.position);   // world-dreams #6 (the trail to them)
   playaUniforms.uFlick.value = f;
