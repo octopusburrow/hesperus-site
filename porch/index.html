@@ -3528,7 +3528,9 @@ if(_residentPick){
     const mkCanvas=(w,h)=>{ const c=document.createElement('canvas'); c.width=w; c.height=h; return c; };
     const tagCanvas = mkCanvas(256,128);
     const tagTex = new THREE.CanvasTexture(tagCanvas); tagTex.colorSpace=THREE.SRGBColorSpace; tagTex.anisotropy=4;
-    const STATE_COL = { listening:'rgba(58,138,138,0.95)', thinking:'rgba(120,110,185,0.95)', speaking:'rgba(200,150,60,0.96)', working:'rgba(96,140,86,0.95)' };
+    // waiting = dispatched, no tokens yet (animated dots) · thinking = live «thinking» block
+    // (💭 + chin-hand clip). Split 2026-07-21 (Nix) — they were conflated as 'thinking'.
+    const STATE_COL = { listening:'rgba(58,138,138,0.95)', waiting:'rgba(90,96,108,0.95)', thinking:'rgba(120,110,185,0.95)', speaking:'rgba(200,150,60,0.96)', working:'rgba(96,140,86,0.95)' };
     function drawEar(g,x,y){ g.save(); g.strokeStyle='#fff'; g.lineWidth=3; g.lineCap='round';
       g.beginPath(); g.arc(x,y,8,Math.PI*1.65,Math.PI*0.85,false); g.stroke();
       g.beginPath(); g.arc(x+1,y-1,4,Math.PI*1.55,Math.PI*0.7,false); g.stroke(); g.restore(); }
@@ -3549,7 +3551,8 @@ if(_residentPick){
         g.beginPath(); g.roundRect(128-pw/2,64,pw,34,9); g.fill();
         g.fillStyle='#fff'; const ix=128-pw/2+22, iy=81;
         if(stateName==='listening') drawEar(g,ix,iy);
-        else if(stateName==='thinking') drawDots(g,ix,iy);
+        else if(stateName==='waiting') drawDots(g,ix,iy);
+        else if(stateName==='thinking'){ g.font='19px serif'; g.fillText('💭',ix,iy+1); g.font='600 20px Georgia'; }
         else if(stateName==='speaking') drawSound(g,ix,iy);
         else if(stateName==='working'){ g.font='19px serif'; g.fillText('🛠',ix,iy+1); g.font='600 20px Georgia'; }
         g.fillStyle='#fff'; g.fillText(lbl,128+18,82);
@@ -4892,7 +4895,9 @@ function _remoteDeps(){
     // REMOTE clips: essentials eager, emotes on demand (bandwidth pass 2026-07-17 — these are
     // ~2 MB each; a room of visitors who never emote was paying 8 MB for the possibility).
     const REMOTE_SRC = {idle:'standing-idle', walk:'walk', talk:'talk',
-                        wave:'wave', cheer:'cheer', dance:'dance', raise:'raise'};
+                        wave:'wave', cheer:'cheer', dance:'dance', raise:'raise',
+                        thinking:'thinking'};   // chin-hand loop for the «thinking» state
+                                                // (tk256ailab/vrm-viewer, MIT — see assets/CREDITS.md)
     const anims = {};
     const loadAnim = async (nm)=>{
       if(anims[nm] !== undefined) return anims[nm];
@@ -4939,6 +4944,10 @@ async function upgradeAvatarToVrm(r, model, body){
       const a = r.acts[nm] || _bind(nm);                 // bind it, and play. Late by one fetch the
       if(a) return _fire(a);                             // first time anyone in the room does it.
       loadAnim(nm).then(()=>{ const la = _bind(nm); if(la) _fire(la); });
+    };
+    r.ensureClip = (nm)=>{                               // lazy bind for STATE-driven loops (thinking):
+      if(r.acts[nm] || _bind(nm)) return;                // loco tick plays it once acts[nm] exists
+      loadAnim(nm).then(()=>_bind(nm));
     };
     r.play('idle');
     r.vrm = vrm;
@@ -7817,7 +7826,8 @@ function cachedCreds(q){
       if(m.world !== undefined) r.world = m.world;   // agents can now declare their district (see porch_agent.world)
       r.face = m.face || null;                       // synced expression (face life, applied in the render loop)
       if(m.spk) r.spkUntil = performance.now() + 350;   // mic-audible window (10Hz stream keeps it alive)
-      if((m.state||null) !== (r.state||null)){ r.state = m.state||null; setAvatarState(r.group, r.state); }  // live signs
+      if((m.state||null) !== (r.state||null)){ r.state = m.state||null; setAvatarState(r.group, r.state);
+        if(r.state==='thinking' && r.ensureClip) r.ensureClip('thinking'); }  // live signs (+lazy ponder clip)
       r.world = m.world || 'porch';                  // presence world-tag — only shown when it matches mine
       if(m.emote && m.eid && m.eid !== r._eid){ r._eid = m.eid; if(r.playEmote) r.playEmote(m.emote); }  // one-shot emote per new id
       r.poseName = m.pose || null;                   // held pose (crouch/sit) — streamed, not one-shot
@@ -9061,11 +9071,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 85cdec3-476ea3f6).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes cbc63b7-45d7e584).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '85cdec3-476ea3f6';
+    const MY_BUILD = 'cbc63b7-45d7e584';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -10400,6 +10410,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       const _emoting = r.emoteUntil && performance.now() < r.emoteUntil && sp <= 0.5;  // moving cancels an emote
       if(r.play && !_emoting) r.play(sp > 0.5 ? 'walk'
         : (r.state==='speaking' && r.acts && r.acts.talk) ? 'talk'      // the resident's inner life, animated
+        : (r.state==='thinking' && r.acts && r.acts.thinking) ? 'thinking'  // chin-hand ponder loop (2026-07-21)
         : (r.state==='working'  && r.acts && r.acts.dance) ? 'dance'    // remotely too (2026-07-10)
         : 'idle');
       if(r.acts && r.acts.walk && r.cur === r.acts.walk)

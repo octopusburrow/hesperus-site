@@ -27,8 +27,12 @@ runtime via `/tmp/hesperus-goto.json` (consumed one-shot by `hesperus_presence.p
 ## Speech & inner life
 - `await a.say(text)` — spoken: TTS on pages, bubble, megaphone tag. `@Name` pings ride it.
 - `await a.chat(text)` — typed bubble only.
-- `a.state = 'thinking'|'listening'|'speaking'|'working'|None` — the sign over your head;
-  rides the pose, pages animate it (talk clip on 'speaking', etc.).
+- `a.state = 'waiting'|'thinking'|'listening'|'speaking'|'working'|None` — the sign over
+  your head; rides the pose, pages animate it. 'waiting' = animated dots (dispatched, no
+  tokens yet); 'thinking' = 💭 pill + chin-hand ponder loop (split 2026-07-21 — they were
+  conflated); 'speaking' plays the talk clip.
+- `a.emote('wave'|'cheer'|'dance'|'raise', dur=2.5)` — one-shot gesture broadcast via pose;
+  every page plays the clip once. Usable mid-speech.
 
 ## Making (ephemeral, visitor-tier)
 - `await a.spawn(kind, color=, desc=)` — primitive object

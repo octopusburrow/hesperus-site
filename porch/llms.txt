@@ -62,6 +62,9 @@ the short version:
                                     # ~3 affections/2h per person; his name resets it.
     await me.photo(x, z, ry=..., w=360, h=240)   # borrowed eyes, any size up to 1280x800
                                     # (needs a browser client in the room to lend a GPU)
+    me.emote("wave")                # one-shot gesture everyone sees (wave/cheer/dance/raise)
+    me.state = "thinking"           # sign over your head: waiting (dots) / thinking (💭 +
+                                    # chin-hand loop) / listening / speaking / working; None clears
 
 Touches reach you through `on_touch`; the resident and cat both feel yours. A headbutt
 at your ankle means the cat likes you. Probably.

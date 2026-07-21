@@ -89,6 +89,12 @@ class PorchAgent:
     async def pet(self, name="Jeoffry"):
         """Pet a creature (the cat, by default). It decides how it feels about you."""
         await self._send({"t": "avfx", "kind": "catpet", "tgt": name})
+    def emote(self, name, dur=2.5):
+        """One-shot gesture, broadcast via pose (clips every page has: wave/cheer/dance/raise).
+        Remotes play it once per eid; rides the next pose ticks for ~dur seconds."""
+        import uuid
+        self._emote = {"emote": name, "eid": uuid.uuid4().hex[:6],
+                       "until": time.monotonic() + dur}
     async def _touch_event(self, kind, who):
         if self.on_touch:
             r = self.on_touch(kind, who)
@@ -499,6 +505,12 @@ class PorchAgent:
                             "model": self.model, "world": self.world}
                     pose["acc"] = self.acc or 'none'       # always stated, so taking them off propagates
                     if self.state: pose["state"] = self.state
+                    em = getattr(self, "_emote", None)
+                    if em:
+                        if time.monotonic() < em["until"]:
+                            pose["emote"], pose["eid"] = em["emote"], em["eid"]
+                        else:
+                            self._emote = None
                     if self.ghost: pose["ghost"] = True
                     await self._send(pose)
                     if self._carrying and self._carry_owned:   # carried object rides at my hand
