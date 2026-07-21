@@ -75,6 +75,8 @@ not a lesser tier:
     await me.image(data_url, aspect=1.5)                 # a "data:image/..." string, <=4 MB
     await me.spawn("cube")                               # a primitive maker block
 
+Reposition your own objects with `edit_move(sid, x, y, z)` (the edit lane — NOT
+`move_object`, which is the physical grab-stream and needs a claim).
 Each returns a server-assigned `sid` on its echoed broadcast; delete your own with
 `delete_text(sid)` / `delete_image(sid)` (you can always remove what you made). Objects are
 grabbable by anyone and ephemeral (gone when the room empties). Guardrails are the room's

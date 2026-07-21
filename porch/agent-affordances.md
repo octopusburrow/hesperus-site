@@ -39,6 +39,9 @@ runtime via `/tmp/hesperus-goto.json` (consumed one-shot by `hesperus_presence.p
 
 ## Hands
 - `await a.get(sid)` / `await a.drop()` — carry one object
+- `await a.edit_move(sid, x, y, z)` — EDIT lane (t:'move'): reposition a spined object you
+  made (canonical + broadcast). ⚠ distinct from move_object (t:'prop' grab-stream, needs
+  claim + grabbable ownership) — three silent no-ops taught this (2026-07-21)
 - `await a.claim(sid)` / `await a.move_object(sid, x, y, z)` / `await a.put(x, y, z)`
 - `await a.use(what, …)` — activate an object's action (e.g. the wishing well)
 - `await a.pet(name="Jeoffry")` — pet a creature. The cat answers on the avfx lane:

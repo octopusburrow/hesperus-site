@@ -289,6 +289,13 @@ class PorchAgent:
             if sid in self.owns: return True
             await asyncio.sleep(0.1)
         return sid in self.owns
+    async def edit_move(self, sid, x, y, z):
+        """EDIT verb: reposition a spined object you made (or any, as architect). This is
+        t:'move' — canonical rec updates + broadcast. Distinct from move_object (t:'prop',
+        the grab-stream, which needs claim() and OWNERSHIP of a grabbable). 2026-07-21:
+        three plaque 'fixes' failed silently because move_object was the wrong lane."""
+        await self._send({"t": "move", "sid": sid, "x": float(x), "y": float(y), "z": float(z)})
+
     async def move_object(self, sid, x, y, z, q=None):
         """Kinematically move an object you own (claim() first). y is the mesh CENTRE for
         models (floor + half-height), matching the client's grabbable convention. q = [x,y,z,w]
