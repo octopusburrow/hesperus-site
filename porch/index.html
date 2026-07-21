@@ -7589,11 +7589,17 @@ setInterval(()=>{
                               pose: window.__netPose}));
 }, 100);
 const _voice = window.speechSynthesis;
+let _voicePending = 0;   // utterances queued/speaking (streaming chunks CHAIN, never behead)
 function speak(text, onend){
   if(!_voice){ if(onend) onend(); return; }
   const u = new SpeechSynthesisUtterance(text); u.rate = 0.98; u.pitch = 1.0;
-  if(onend){ u.onend = onend; u.onerror = onend; }   // bubble/megaphone/mouth key off REAL speech end
-  _voice.cancel(); _voice.speak(u);
+  const done = ()=>{ _voicePending = Math.max(0, _voicePending-1); if(onend) onend(); };
+  u.onend = done; u.onerror = done;                  // bubble/megaphone/mouth key off REAL speech end
+  // pre-2026-07-21 this cancel()ed unconditionally — each streamed sentence cut off the
+  // previous one mid-word. Now: QUEUE (SpeechSynthesis chains natively); cancel only a
+  // runaway backlog (stale sentences piling past any live conversation).
+  if(_voicePending > 4){ _voice.cancel(); _voicePending = 0; }
+  _voicePending++; _voice.speak(u);
 }
 // ---- room word-IDs: whoever coins one "starts" that instance; the box is shared ----
 const RW = {
@@ -9071,11 +9077,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes cbc63b7-45d7e584).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes decbeef-5cf28d1c).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'cbc63b7-45d7e584';
+    const MY_BUILD = 'decbeef-5cf28d1c';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -10402,9 +10408,21 @@ renderer.setAnimationLoop((now, xrFrame)=>{
     if(r.group.visible !== sameWorld) r.group.visible = sameWorld;
     if(!sameWorld) continue;                                 // skip updates for hidden (other-world) avatars
     const px = r.group.position.x, pz = r.group.position.z;
+    const _locomoting = r.group.position.distanceTo(r.tp) > 0.06;   // gate BEFORE the lerp eats it
     r.group.position.lerp(r.tp, 0.25);
-    let d = r.try_ - r.group.rotation.y;
-    r.group.rotation.y += Math.atan2(Math.sin(d), Math.cos(d)) * 0.25;   // shortest-arc ease
+    const d = Math.atan2(Math.sin(r.try_ - r.group.rotation.y), Math.cos(r.try_ - r.group.rotation.y));
+    // TURN-IN-PLACE GAZE CHAIN (Nix, 2026-07-21: "feet won't slide around when you're
+    // turning to look at me"): a stationary avatar does NOT rotate its group (feet stay
+    // planted by construction). The yaw delta rides up the spine instead — head leads,
+    // neck/chest/spine follow with falloff (applied post-mixer below). Past ~50° the body
+    // re-plants: group eases to the new yaw (the brief classical turn), twist unwinds.
+    if(!r.vrm || _locomoting || r._replant){
+      r.group.rotation.y += d * 0.25;
+      r._twist = THREE.MathUtils.lerp(r._twist || 0, 0, Math.min(1, dt*6));
+      if(r._replant && Math.abs(d) < 0.12) r._replant = false;
+    } else if(Math.abs(d) <= 0.9){
+      r._twist = THREE.MathUtils.lerp(r._twist || 0, d, Math.min(1, dt*5));
+    } else { r._replant = true; }
     if(r.vrm){                                        // claudesona remotes: walk when moving + spring bones
       const sp = Math.hypot(r.group.position.x - px, r.group.position.z - pz) / Math.max(dt, 1e-4);
       const _emoting = r.emoteUntil && performance.now() < r.emoteUntil && sp <= 0.5;  // moving cancels an emote
@@ -10432,6 +10450,11 @@ renderer.setAnimationLoop((now, xrFrame)=>{
       }
       r.mixer.update(dt);
       if(window.__applyNetPose) __applyNetPose(r, dt);        // synced crouch/sit (post-mixer, pre-vrm.update)
+      if(r._twist && Math.abs(r._twist) > 0.002 && r.vrm.humanoid){   // gaze chain: distribute the
+        const _W = [['head',0.45],['neck',0.25],['chest',0.20],['spine',0.10]];   // planted-feet twist
+        for(const [b,w] of _W){ const n = r.vrm.humanoid.getNormalizedBoneNode(b);
+          if(n) n.rotation.y += r._twist * w; }               // additive post-mixer, pre-vrm.update
+      }
       r.vrm.update(dt);
     } else if(r.group.userData.bod){               // capsule (owl / pre-upgrade): talk-bob when making sound
       const talking = (r.spkUntil && performance.now() < r.spkUntil) || r.state === 'speaking';
