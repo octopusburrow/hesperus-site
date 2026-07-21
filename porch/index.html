@@ -7750,7 +7750,13 @@ function cachedCreds(q){
       else if(m.what === 'wish' && window.__wellUse) window.__wellUse(m); }   // someone, somewhere, wished
     else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
-    else if(m.t === 'move'){ const o = spawnedObjs.get(m.sid); if(o) o.position.set(m.x, m.y, m.z); }
+    else if(m.t === 'move'){                             // edit verb — works for EVERY spined kind
+      // (2026-07-21: only spawnedObjs was checked, so agent moves of text/image planes were
+      // silently ignored by live pages — found when a two-plaque exhibit refused to un-overlap)
+      const o = spawnedObjs.get(m.sid) || (typeof textObjs!=='undefined' && textObjs.get(m.sid))
+             || (typeof imageObjs!=='undefined' && imageObjs.get(m.sid))
+             || (grabbablesById[m.sid] && grabbablesById[m.sid].mesh);
+      if(o) o.position.set(m.x, m.y, m.z); }
     else if(m.t === 'prop' && m.id !== myNet){       // a grabbable the OWNER is moving — apply as kinematic
       // SMOOTHED (2026-07-19, Nix: Jeoffry "jumps a few inches every tick"): daemons stream props
       // at ~10Hz and a raw position.set snaps between packets. Stash the target; _propLerpTick
@@ -9055,11 +9061,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes bf7b12f-941517a4).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes a3ca6cd-476ea3f6).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'bf7b12f-941517a4';
+    const MY_BUILD = 'a3ca6cd-476ea3f6';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
