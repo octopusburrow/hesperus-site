@@ -455,6 +455,7 @@ addEventListener('mouseup', e=>{
   if(document.pointerLockElement){ _clickRC.setFromCamera({x:0,y:0}, camera); }
   else { _clickRC.setFromCamera({x:(e.clientX/innerWidth)*2-1, y:-(e.clientY/innerHeight)*2+1}, camera); }
   _clickConsumed = _tryClickables(_clickRC);
+  if(!_clickConsumed && window.__tryPetCat && __tryPetCat(_clickRC)) _clickConsumed = true;
   // LMB grab (Nix 2026-07-10): pointer-locked + no button hit → grab what the reticle hovers
   // (up to 3.5m — the prop flies to your hand), or drop what you're holding. E still works.
   if(!_clickConsumed && document.pointerLockElement && !renderer.xr.isPresenting){
@@ -5438,6 +5439,48 @@ window.__tryTouch=()=>{                            // desktop: T — pat/boop wh
   if(best){ avatarTouch(best.vrm,best.kind,false,playerName); _sendTouch(best.kind,best.name); return best.kind+' → '+best.name; }
   return 'no one in reach';
 };
+// ---- PET THE CAT (Nix 2026-07-20 morning: click the cat → hearts-or-aggressive-ignore).
+// Click ray → Jeoffry's mesh within reach → avfx catpet on the wire. The CAT decides the
+// response (jeoffry.py dice): catpurr = heart-fountain + he follows you; catmiff = one
+// gray "…" and he walks pointedly elsewhere. Everyone in the room sees the verdict.
+const _catFX = [];
+function _findCat(){                                     // sid cached; re-found if respawned
+  const led = (typeof _worldLedger!=='undefined') ? _worldLedger : null; if(!led) return null;
+  let c = window.__catSid && led.get(window.__catSid) ? window.__catSid : null;
+  if(!c) for(const [sid, rec] of led){ if(/jeoffry/i.test(rec.desc||'')){ c = sid; break; } }
+  window.__catSid = c;
+  return c ? ((grabbablesById[c]&&grabbablesById[c].mesh) || spawnedObjs.get(c) || null) : null;
+}
+function _catBurst(txt, n, tint){                        // rising emoji sprites over the cat
+  const m = _findCat(); if(!m) return;
+  const base = m.getWorldPosition(new THREE.Vector3());
+  for(let i=0;i<n;i++){
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    const cx = cv.getContext('2d'); cx.font = '48px serif'; cx.textAlign='center'; cx.textBaseline='middle';
+    cx.fillText(txt, 32, 34);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),
+      transparent:true, opacity:0.95, depthWrite:false, color: tint||0xffffff}));
+    sp.scale.setScalar(0.16);
+    sp.position.set(base.x+(Math.random()-0.5)*0.35, base.y+0.35+Math.random()*0.15, base.z+(Math.random()-0.5)*0.35);
+    scene.add(sp);
+    _catFX.push({sp, t0: performance.now()+i*140, life: 1400});
+  }
+}
+window.__catFXTick = ()=>{ const now = performance.now();
+  for(let i=_catFX.length-1;i>=0;i--){ const f=_catFX[i]; const e=(now-f.t0)/f.life;
+    if(e<0) continue;
+    if(e>=1){ scene.remove(f.sp); f.sp.material.map.dispose(); f.sp.material.dispose(); _catFX.splice(i,1); continue; }
+    f.sp.position.y += 0.006; f.sp.material.opacity = 0.95*(1-e*e); } };
+window.__tryPetCat = (raycaster)=>{
+  const m = _findCat(); if(!m) return false;
+  const hits = raycaster.intersectObject(m, true); if(!hits.length) return false;
+  const d = m.getWorldPosition(new THREE.Vector3()).setY(0)
+             .distanceTo(player.position.clone().setY(0));
+  if(d > 2.6){ cmdNote('the cat is out of reach'); return true; }   // consumed: you meant the cat
+  try{ sock.send(JSON.stringify({t:'avfx', kind:'catpet', tgt:'Jeoffry'})); }catch(e){}
+  _catBurst('🤍', 1);                                     // your touch, instantly; his verdict follows
+  return true;
+};
 // ---- HAND-HOLDING (Nix's end-of-date request 2026-07-20, "Sky: Children of the Light";
 // spec: notes/spec-hand-holding.md).
 // Grammar: H (or /hand, or VR grab on a hand) = context verb — offer to whoever you face;
@@ -7791,6 +7834,11 @@ function cachedCreds(q){
         const v=_vrmByName(m.tgt);
         if(v) avatarTouch(v, m.kind, false, m.name); // hear every squeak; server-stamped name = who touched
       }
+      else if(m.kind==='catpet'){ if(window.__catFXTick) _catBurst('🤍', 1); }   // someone's hand on the cat
+      else if(m.kind==='catpurr'){ _catBurst('💛', 5);
+        if(m.tgt===playerName) cmdNote('Jeoffry purrs. You have been chosen; he will be underfoot for a while.'); }
+      else if(m.kind==='catmiff'){ _catBurst('…', 1, 0x99a0a8);
+        if(m.tgt===playerName) cmdNote('Jeoffry regards you, then walks pointedly elsewhere.'); }
       else if(m.kind==='handOffer'||m.kind==='handAccept'||m.kind==='handEnd'){
         if(m.tgt===playerName) _handIncoming(m.kind, m.name||'someone');   // aimed at ME → the hand system
         // (observer rendering of OTHER pairs' threads is v2 — needs pair state on the wire)
@@ -9000,11 +9048,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 3603b91-d50dfa88).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 5a9b719-74a367fa).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '3603b91-d50dfa88';
+    const MY_BUILD = '5a9b719-74a367fa';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -10066,6 +10114,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
   if(window.__wellTick) window.__wellTick(dt, t);                        // world-dreams #71: lantern + falling wishes
   if(window.__houseTick) __houseTick(dt, t);                             // world-dreams #82: hearth vs haste
+  if(window.__catFXTick) __catFXTick();                                  // hearts / pointed ellipses over the cat
   if(window.__trapdoorTick) window.__trapdoorTick(dt, t, player.position); // world-dreams #34 (its pair)
   if(window.__pilgrimTick) window.__pilgrimTick(dt, t, player.position);   // world-dreams #6 (the trail to them)
   playaUniforms.uFlick.value = f;

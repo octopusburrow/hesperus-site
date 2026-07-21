@@ -86,6 +86,9 @@ class PorchAgent:
         p = self._hand.get("holding") or self._hand.get("offer_to")
         self._hand["holding"] = None; self._hand["offer_to"] = None
         if p: await self._send({"t": "avfx", "kind": "handEnd", "tgt": p})
+    async def pet(self, name="Jeoffry"):
+        """Pet a creature (the cat, by default). It decides how it feels about you."""
+        await self._send({"t": "avfx", "kind": "catpet", "tgt": name})
     async def _touch_event(self, kind, who):
         if self.on_touch:
             r = self.on_touch(kind, who)
@@ -351,7 +354,7 @@ class PorchAgent:
                 self._hand["offers"].pop(who, None)
                 if self._hand.get("holding") == who: self._hand["holding"] = None
                 if self._hand.get("offer_to") == who: self._hand["offer_to"] = None
-            if kind in ("pat", "boop", "handOffer", "handAccept", "handEnd"):
+            if kind in ("pat", "boop", "handOffer", "handAccept", "handEnd", "catpet"):
                 await self._touch_event(kind, who)
         elif t in ("chat", "stt", "say") and m.get("id") != self.id:
             # "say" joined 2026-07-19: wire agents were DEAF to spoken words — only pages heard
