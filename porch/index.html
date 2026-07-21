@@ -9000,7 +9000,9 @@ function remoteInEarshot(id){                                  // remote sender 
   function closeChat(){ inp.value=''; inp.blur(); autogrow(); }  // stays visible, just unfocus + collapse
   inp.addEventListener('focus', clearKeys);                      // entering chat releases any held WASD
   inp.addEventListener('blur',  clearKeys);                      // leaving chat too — no ghost-walk
-  inp.addEventListener('input', autogrow);                      // grow up to ~4 lines, then scroll
+  inp.addEventListener('input', ()=>{ autogrow();
+    if(window.__utt) window.__utt.hold(2500); });               // typing-as-VAD: keys moving =
+                                                                // hold any pending STT commit
   inp.addEventListener('keydown', (e)=>{
     e.stopPropagation();
     if(e.key==='Escape'){ closeChat(); return; }
@@ -9077,11 +9079,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes decbeef-5cf28d1c).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes bf931a9-13038d12).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'decbeef-5cf28d1c';
+    const MY_BUILD = 'bf931a9-13038d12';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9244,27 +9246,56 @@ if(new URLSearchParams(location.search).has('debug')) setTimeout(()=>toggleDbg(t
         if(res.isFinal){ const f=txt.trim();
           if(f){
             if(tryManifestVoice(f)){ dbg('stt→', `manifest: "${f.slice(0,60)}"`, 'g'); continue; }  // "manifest <words>" → text object, not speech
-            dbg('stt→', `"${f.slice(0,70)}" facing=${window.__gazeName()||'nobody'}`);
-            showBubble(avatar, f);                              // my spoken words float above my head (mirror/others: what the agents read)
-            if(!(gazeTargetId==='resident' && window.agent))    // else onHeard/endUtterance already logs this (no double entry)
-              logChat(playerName, f, 'you', 'mic');
-            if(sock && sock.readyState===1)
-              sock.send(JSON.stringify({t:'stt', text:f, name:playerName, facing:window.__gazeName()}));
-            // local resident: faced speech is owned by the interim→onHeard path (no double
-            // entry); un-faced speech within earshot goes to its cache silently.
-            if(window.agent && gazeTargetId!=='resident' && nearResident())
-              window.agent.hearRemote(playerName, f, {typed:false, ping:false});
+            uttPush(f);                                        // two-tier endpointing gate (below)
           }
         } else interim+=txt;
       }
       const live=interim.trim();
-      if(live && gazeTargetId==='resident' && window.agent) window.agent.simulateHear(live);
+      if(live){ uttHold(); if(gazeTargetId==='resident' && window.agent) window.agent.simulateHear(live); }
     };
     recogG.onerror=(e)=>{ if(e.error==='not-allowed'){ micTalk.checked=false; console.warn('mic denied'); } };
+    let uttBuf='', uttTimer=null;
+    // ---- TWO-TIER ENDPOINTING (Nix, 2026-07-21: "the more seamless the better") ----
+    // Web Speech finalizes on ITS OWN silence timer, which fires inside thinking pauses —
+    // "my address is… [recalling] …42 Elm" used to commit as two fragmented utterances.
+    // Industry pattern (LiveKit/Pipecat semantic turn detection, heuristic tier): buffer
+    // finals; commit FAST when the text looks finished, WAIT when it trails off, and any
+    // resumed speech (interims) or typing holds the pending commit open.
+    function uttLooksDone(t){
+      t=t.trim();
+      if(/[.!?…]$/.test(t)) return true;                    // explicit terminal punctuation
+      if(/\b(and|but|so|or|because|then|with|to|of|um+|uh+|like|hm+)$/i.test(t)) return false;
+      return null;                                          // neutral: medium patience
+    }
+    function uttCommit(){
+      const f=uttBuf.trim(); uttBuf='';
+      if(uttTimer){ clearTimeout(uttTimer); uttTimer=null; }
+      if(!f) return;
+      dbg('stt→', `"${f.slice(0,70)}" facing=${window.__gazeName()||'nobody'}`);
+      showBubble(avatar, f);                                // my spoken words float above my head
+      if(!(gazeTargetId==='resident' && window.agent))      // else onHeard path logs it (no double)
+        logChat(playerName, f, 'you', 'mic');
+      if(sock && sock.readyState===1)
+        sock.send(JSON.stringify({t:'stt', text:f, name:playerName, facing:window.__gazeName()}));
+      if(window.agent && gazeTargetId!=='resident' && nearResident())
+        window.agent.hearRemote(playerName, f, {typed:false, ping:false});
+    }
+    function uttPush(f){
+      uttBuf=(uttBuf?uttBuf+' ':'')+f;
+      const d=uttLooksDone(uttBuf);
+      const wait = d===true?250 : d===false?4000 : 1400;    // fast / patient / medium
+      if(uttTimer) clearTimeout(uttTimer);
+      uttTimer=setTimeout(uttCommit, wait);
+    }
+    function uttHold(ms=1500){                              // speech resumed / typing: wait more
+      if(uttTimer){ clearTimeout(uttTimer); uttTimer=setTimeout(uttCommit, ms); } }
+    window.__utt={push:uttPush, hold:uttHold, commit:uttCommit,               // headless tests +
+                  pending:()=>uttBuf, looksDone:uttLooksDone};                // typing-as-VAD hook
     recogG.onend=()=>{ if(recogOn){ try{ recogG.start(); }catch(e){} } };
     try{ recogG.start(); recogOn=true; dbg('mic', 'STT on', 'g'); micState('live'); }catch(e){ console.warn('mic failed', e); dbg('mic', 'start failed: '+e, 'e'); }
   }
   function micStop(){ recogOn=false; if(recogG){ try{ recogG.stop(); }catch(e){} recogG=null; }
+    if(window.__utt) window.__utt.commit();   // mic off: flush the buffered utterance now
     micQuiet(); micState('off'); }
 
   // 📢 edges for MY mic: on while speech is being recognized, off after 700ms of quiet.

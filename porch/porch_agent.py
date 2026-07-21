@@ -539,6 +539,102 @@ def _close_code(exc):
         if c: return c
     return getattr(exc, "code", None) or getattr(getattr(exc, "response", None), "status_code", None)
 
+# ---- ctl server (loom v1, 2026-07-21): ONE typed control plane for every affordance ----
+# Any agent can expose its verbs to a local controller (the loom resident's porchctl tool,
+# central-me in the terminal, a test harness) via a file-based request/response channel:
+#   requests : JSON lines appended to <inbox>            {"id","verb","args":{...}}
+#   responses: <resdir>/<id>.json                        {"ok",bool, "result"|"error"}
+# File-based on purpose — same proven pattern as the brain relay and the say-queue; works
+# for chunked/intermittent controllers that connect, act, and die between requests.
+CTL_VERBS = {
+    # verb        method          primary-arg     (primary lets `porchctl goto Nix` work)
+    "say":       ("say",          "text"),
+    "chat":      ("chat",         "text"),
+    "emote":     ("emote",        "name"),
+    "state":     (None,           "value"),        # property, handled inline
+    "goto":      ("goto",         "target"),
+    "follow":    ("follow",       "name"),
+    "stay":      ("stay",         None),
+    "face":      ("face",         "name"),
+    "walk":      ("walk_to",      None),           # x=, z=
+    "jump":      ("jump_to",      None),           # x=, z=
+    "teleport":  ("teleport",     None),           # x=, z=, ry=
+    "spawn":     ("spawn",        "kind"),
+    "image":     ("image",        "data_url"),
+    "text":      ("text",         "body"),
+    "mesh":      ("mesh",         "data_url"),
+    "music":     ("music",        "data_url"),
+    "use":       ("use",          "what"),
+    "delete":    ("delete_object","sid"),
+    "move":      ("move_object",  None),           # sid=, x=, y=, z=
+    "photo":     ("photo",        None),
+    "look":      ("look",         "fov"),
+    "nearby":    ("nearby",       "n"),
+    "object":    ("object",       "sid"),
+    "pet":       ("pet",          "name"),
+    "get":       ("get",          "sid"),
+    "put":       ("put",          None),           # x=, y=, z=
+    "drop":      ("drop",         None),
+    "hand":      (None,           "action"),       # action=offer|accept|end, name=
+}
+
+async def ctl_server(agent, inbox="/tmp/loom-ctl.jsonl", resdir="/tmp/loom-ctl-res"):
+    os.makedirs(resdir, exist_ok=True)
+    pos = 0
+    async def _run_one(req):
+        rid, verb = req.get("id", "?"), req.get("verb", "")
+        args = dict(req.get("args") or {})
+        out = {"ok": True, "result": None}
+        try:
+            if verb not in CTL_VERBS:
+                raise ValueError(f"unknown verb {verb!r} (know: {sorted(CTL_VERBS)})")
+            if verb == "state":
+                v = args.get("value")
+                agent.state = None if v in (None, "none", "null", "") else str(v)
+            elif verb == "hand":
+                action = args.pop("action", "")
+                m = {"offer": agent.offer_hand, "accept": agent.accept_hand,
+                     "end": agent.end_hand}.get(action)
+                if not m:
+                    raise ValueError("hand action must be offer|accept|end")
+                out["result"] = await (m(args["name"]) if action != "end" else m())
+            else:
+                method = getattr(agent, CTL_VERBS[verb][0])
+                r = method(**args)
+                if asyncio.iscoroutine(r):
+                    r = await r
+                if verb == "photo" and isinstance(r, str) and r.startswith("data:image"):
+                    import base64 as _b64
+                    head, b64 = r.split(",", 1)
+                    ext = "jpg" if "jpe" in head else "png"
+                    p = os.path.join(resdir, f"{rid}.{ext}")
+                    with open(p, "wb") as f:
+                        f.write(_b64.b64decode(b64))
+                    r = p                             # controllers get a PATH, not megabytes
+                out["result"] = r
+        except Exception as e:
+            out = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        tmp = os.path.join(resdir, f"{rid}.tmp")
+        with open(tmp, "w") as f:
+            json.dump(out, f, default=str)
+        os.replace(tmp, os.path.join(resdir, f"{rid}.json"))
+    while True:
+        await asyncio.sleep(0.15)
+        try:
+            with open(inbox) as f:
+                f.seek(pos)
+                for line in f:
+                    pos += len(line.encode())
+                    try:
+                        req = json.loads(line)
+                    except ValueError:
+                        continue
+                    # each request runs as its own task: a 20 s walk or photo must not
+                    # block the next command (the controller decides its own ordering)
+                    asyncio.get_running_loop().create_task(_run_one(req))
+        except FileNotFoundError:
+            pos = 0
+
 # ---- demo: echo agent that follows whoever addresses it ----
 if __name__ == "__main__":
     url  = sys.argv[1] if len(sys.argv) > 1 else "ws://localhost:8970"
