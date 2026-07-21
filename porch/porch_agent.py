@@ -354,7 +354,7 @@ class PorchAgent:
                 self._hand["offers"].pop(who, None)
                 if self._hand.get("holding") == who: self._hand["holding"] = None
                 if self._hand.get("offer_to") == who: self._hand["offer_to"] = None
-            if kind in ("pat", "boop", "handOffer", "handAccept", "handEnd", "catpet"):
+            if kind in ("pat", "boop", "headbutt", "handOffer", "handAccept", "handEnd", "catpet"):
                 await self._touch_event(kind, who)
         elif t in ("chat", "stt", "say") and m.get("id") != self.id:
             # "say" joined 2026-07-19: wire agents were DEAF to spoken words — only pages heard

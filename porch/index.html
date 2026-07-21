@@ -7830,10 +7830,10 @@ function cachedCreds(q){
     }
     else if(m.t === 'avfx' && m.id !== myNet){         // avatar moments from peers: winks, pats, boops
       if(m.kind==='wink'){ const r=remotes.get(m.id); if(r&&r.vrm) faceLife(r.vrm).wink={name:m.side||'blinkRight', t0:t}; }
-      else if(m.kind==='pat'||m.kind==='boop'){
+      else if(m.kind==='pat'||m.kind==='boop'||m.kind==='headbutt'){
         const v=_vrmByName(m.tgt);
-        if(v) avatarTouch(v, m.kind, false, m.name); // hear every squeak; server-stamped name = who touched
-      }
+        if(v) avatarTouch(v, m.kind==='headbutt'?'pat':m.kind, false, m.name); // headbutt = pat's
+      }                                          // visual (squish+squeak) with honest provenance
       else if(m.kind==='catpet'){ if(window.__catFXTick) _catBurst('🤍', 1); }   // someone's hand on the cat
       else if(m.kind==='catpurr'){ _catBurst('💛', 5);
         if(m.tgt===playerName) cmdNote('Jeoffry purrs. You have been chosen; he will be underfoot for a while.'); }
@@ -9048,11 +9048,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 5a9b719-74a367fa).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 658a115-bc8a4d1b).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '5a9b719-74a367fa';
+    const MY_BUILD = '658a115-bc8a4d1b';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
