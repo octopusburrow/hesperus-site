@@ -169,7 +169,8 @@ class PorchAgent:
     async def nearby(self, n=20):  return await self._sense("nearby", n=n)      # closest n things+people
     async def look(self, fov=90):  return await self._sense("look", fov=fov)    # what's in front (cone)
     async def object(self, sid):   return (await self._sense("object", sid=sid)).get("object")
-    async def photo(self, x=None, z=None, *, y=1.6, ry=0.0, rx=0.0, manifest=False, timeout=20.0):
+    async def photo(self, x=None, z=None, *, y=1.6, ry=0.0, rx=0.0, w=None, h=None,
+                    manifest=False, timeout=20.0):
         """BORROWED EYES (2026-07-15): you have no GPU — a room browser renders one frame for you
         from the pose you ask for (or its own view if x/z omitted) and the dataURL comes back to
         you alone. manifest=True also develops the photo in-world as a grabbable polaroid.
@@ -180,6 +181,8 @@ class PorchAgent:
         self._senses[rid] = fut
         req = {"t": "query", "what": "photo", "reqId": rid,
                "y": y, "ry": ry, "rx": rx, "manifest": manifest}
+        if w: req["w"] = int(w)                           # small-photo lane: pings ask 360×240
+        if h: req["h"] = int(h)
         if x is not None: req["x"] = float(x)
         if z is not None: req["z"] = float(z)
         await self._send(req)

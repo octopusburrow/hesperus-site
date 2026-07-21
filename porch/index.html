@@ -8689,12 +8689,18 @@ function _districtOfPoint(x, z){
 }
 async function __photoAt(opts){
   opts = opts || {};
-  if(!_phRT){ _phRT = new THREE.WebGLRenderTarget(_PHOTO_W, _PHOTO_H, {depthBuffer:true});
-    _phCam = new THREE.PerspectiveCamera(58, _PHOTO_W/_PHOTO_H, 0.05, 300);
-    _ph2d = document.createElement('canvas'); _ph2d.width=_PHOTO_W; _ph2d.height=_PHOTO_H;
-    _phLUT = new Uint8ClampedArray(256);
-    for(let i=0;i<256;i++){ const c=i/255;
-      _phLUT[i] = Math.round(255*(c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055)); } }
+  // per-request size (Nix 2026-07-20: generic pings want a quick 360×240, not the full
+  // 1280×800 — 17× the pixels also made SwiftShader probes block long enough to get dropped).
+  const W = Math.min(Math.max(64, opts.w|0 || _PHOTO_W), _PHOTO_W);
+  const H = Math.min(Math.max(48, opts.h|0 || _PHOTO_H), _PHOTO_H);
+  if(_phRT && (_phRT._w !== W || _phRT._h !== H)){ _phRT.dispose(); _phRT = null; }
+  if(!_phRT){ _phRT = new THREE.WebGLRenderTarget(W, H, {depthBuffer:true});
+    _phRT._w = W; _phRT._h = H;
+    _phCam = new THREE.PerspectiveCamera(58, W/H, 0.05, 300);
+    _ph2d = document.createElement('canvas'); _ph2d.width=W; _ph2d.height=H;
+    if(!_phLUT){ _phLUT = new Uint8ClampedArray(256);
+      for(let i=0;i<256;i++){ const c=i/255;
+        _phLUT[i] = Math.round(255*(c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055)); } } }
   // pose: explicit, else this player's current view
   const hasPose = (opts.x!=null && opts.z!=null);
   if(hasPose){
@@ -8744,11 +8750,12 @@ async function __photoAt(opts){
     if(swap && saved){ scene.fog=saved.fog; scene.background=saved.bg;
       if(typeof sky!=='undefined') sky.visible=saved.sky; if(window.__stars) __stars.visible=!!saved.stars; }
   }
-  const buf = new Uint8Array(_PHOTO_W*_PHOTO_H*4);
-  renderer.readRenderTargetPixels(_phRT, 0, 0, _PHOTO_W, _PHOTO_H, buf);
-  const ctx = _ph2d.getContext('2d'), img = ctx.createImageData(_PHOTO_W, _PHOTO_H);
-  for(let y=0;y<_PHOTO_H;y++){ const sy=_PHOTO_H-1-y;
-    for(let x=0;x<_PHOTO_W;x++){ const s=(sy*_PHOTO_W+x)*4, d=(y*_PHOTO_W+x)*4;
+  // W/H from the top of this function — the size this shot rendered at
+  const buf = new Uint8Array(W*H*4);
+  renderer.readRenderTargetPixels(_phRT, 0, 0, W, H, buf);
+  const ctx = _ph2d.getContext('2d'), img = ctx.createImageData(W, H);
+  for(let y=0;y<H;y++){ const sy=H-1-y;
+    for(let x=0;x<W;x++){ const s=(sy*W+x)*4, d=(y*W+x)*4;
       img.data[d]=_phLUT[buf[s]]; img.data[d+1]=_phLUT[buf[s+1]]; img.data[d+2]=_phLUT[buf[s+2]]; img.data[d+3]=255; } }
   ctx.putImageData(img, 0, 0);
   return _ph2d.toDataURL('image/jpeg', 0.85);
@@ -8865,7 +8872,7 @@ window.__frameRoster = _frameRoster; window.__pickAt = _pickAt;
 async function _handlePhotoReq(m){
   let dataURL = null, error = null, roster = null;
   await new Promise(r=>setTimeout(r, 600));   // settle beat: an agent's teleport-then-photo races its own pose (journal: photoreq beat the pose by 0.7s)
-  try{ dataURL = await __photoAt(m); }
+  try{ dataURL = await __photoAt(m); }                   // m carries w/h through untouched
   catch(e){ error = 'render failed: '+e.message; console.warn('photoreq failed', e); }
   try{ if(!error && _phCam){                              // annotate the frame we just shot
     roster = _frameRoster(_phCam, m.cap || 12);
@@ -9048,11 +9055,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 658a115-bc8a4d1b).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 160016a-941517a4).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '658a115-bc8a4d1b';
+    const MY_BUILD = '160016a-941517a4';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
