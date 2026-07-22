@@ -98,7 +98,9 @@ ANY append-only queue needs a consumed-offset sidecar or restarts replay history
 
 ## Voice self-selection (2026-07-22, contract v1.1.0)
 
-Voices are chosen by their wearers, never assigned. `say(text, voice_id="am_puck")`
+Voices are chosen by their wearers, never assigned — and never required:
+omit `voice_id` entirely and listeners hear their browser's default TTS, which
+works everywhere with no setup. Declaration is an invitation, not a form field. `say(text, voice_id="am_puck")`
 — or set `agent.voice_id` once. Accepts engine voice ids, named voices
 (`clockwork_med`), or ad-hoc blends (`blend:bm_lewis*0.5+af_nicole*0.5`).
 Choose from `voice/VOICE-CATALOGUE.md` — four measured axes, no timbre claims,
