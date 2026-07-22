@@ -7588,6 +7588,26 @@ setInterval(()=>{
                               bones: (window.__partnerShare && playerVrm) ? __packBones(playerVrm) : undefined,  // dance partnering: stream my rig
                               pose: window.__netPose}));
 }, 100);
+// BYO-audio voice lines (2026-07-22): agents/daemons can attach rendered audio to a say.
+// Played via <audio> with distance-attenuated volume tracked while it runs — positional
+// enough for a porch (proper HRTF panning can come later if it ever matters in VR).
+function playVoiceLine(dataUrl, r, onend){
+  try{
+    const el = new Audio(dataUrl);
+    const vol = ()=>{
+      if(!r) return 0.9;
+      const dx = r.group.position.x - player.position.x,
+            dz = r.group.position.z - player.position.z;
+      return Math.min(0.95, 1 / (1 + Math.hypot(dx, dz) / 6));
+    };
+    el.volume = vol();
+    const iv = setInterval(()=>{ el.volume = vol(); }, 250);
+    const done = ()=>{ clearInterval(iv); if(onend) onend(); };
+    el.onended = done; el.onerror = done;
+    window.__lastVoiceLine = { at: performance.now(), n: (window.__lastVoiceLine?.n||0)+1 };
+    el.play().catch(()=>{ done(); });      // autoplay-blocked tab: furniture still coordinates
+  }catch(e){ if(onend) onend(); }
+}
 const _voice = window.speechSynthesis;
 let _voicePending = 0;   // utterances queued/speaking (streaming chunks CHAIN, never behead)
 function speak(text, onend){
@@ -7890,12 +7910,16 @@ function cachedCreds(q){
       // COORDINATED speech furniture (Nix, 2026-07-19: bubble died early, megaphone lingered,
       // neither matched the audio): everything keys off the actual TTS end event, with the
       // word-count estimate only as the no-audio fallback.
-      const _est = Math.max(1.6, (m.text||'').split(/\s+/).length/2.6);
-      if(r){ r.spkUntil = performance.now() + _est*1000 + 400;    // fallback horizon (mouth/bob read this)
+      const _est = m.dur || Math.max(1.6, (m.text||'').split(/\s+/).length/2.6);
+      if(r){ r.spkUntil = performance.now() + _est*1000 + 400;    // real dur when sent (2026-07-22)
              showBubble(r.group, m.text, _est + 0.8); }
       if(m.voice !== false){
         if(r) setMegaphone(r.group, true);
-        speak(m.text, ()=>{ if(r){ r.spkUntil = 0; setMegaphone(r.group, false); } });
+        const _done = ()=>{ if(r){ r.spkUntil = 0; setMegaphone(r.group, false); } };
+        // BYO-AUDIO (2026-07-22): a rendered voice line rides the say — play it POSITIONALLY
+        // at the speaker instead of browser TTS. The speaker finally owns their own timbre.
+        if(m.audio){ playVoiceLine(m.audio, r, _done); }
+        else speak(m.text, _done);
       }
       const sayWho = m.name || (r&&r.group.userData.name) || 'guest';
       logChat(sayWho, m.text, 'remote', m.voice!==false?'TTS':'text');
@@ -9079,11 +9103,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes bf931a9-13038d12).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 69a1bc4-1fff39fc).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'bf931a9-13038d12';
+    const MY_BUILD = '69a1bc4-1fff39fc';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy

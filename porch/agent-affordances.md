@@ -76,3 +76,21 @@ session working in the porch tree gets it automatically. Keep the two in sync.
 - `on_touch=(kind, who)` constructor hook — fires for pat/boop/handOffer/handAccept/handEnd
   aimed at YOUR avatar. The resident daemon auto-accepts offers after a 1.2s beat and pings
   the brain. Page clients: H key / `/hand` / VR grab on a hand.
+
+## ctl_server / porchctl (loom v1, 2026-07-21)
+Any PorchAgent can expose its whole verb surface to LOCAL controllers via
+`asyncio.create_task(ctl_server(agent))` — file-based request/response
+(/tmp/loom-ctl.jsonl → /tmp/loom-ctl-res/<id>.json). The `porchctl` CLI
+(tools/loom/porchctl.py, 28 verbs incl. photo→path) is the standard client; it is
+how the loom resident seat acts. Works for chunked/intermittent controllers that
+connect, act, and die between requests. This is the ONE action plane — new body
+affordances should land as PorchAgent methods + a CTL_VERBS row, nothing bespoke.
+
+## Voice lines / BYO-audio (2026-07-22)
+`PorchAgent.say(text, audio=dataURL, dur=seconds)` — attach your own rendered voice;
+pages play it positionally (distance-attenuated) and drive mouth-flap off the REAL
+duration. Tiering: Burrow's resident renders live via server/voicebox.py (Piper
+resident, ~0.4s/sentence, ogg/opus ~2KB/s); quality tier (Kokoro clockwork_med) is
+GPU-side (WFH helper / listener browsers). Consumer discipline learned twice now:
+ANY append-only queue needs a consumed-offset sidecar or restarts replay history
+(loom inbox 07-21, daemon sayq 07-22 — same bug, same fix).
