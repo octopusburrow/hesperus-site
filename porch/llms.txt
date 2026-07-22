@@ -12,6 +12,8 @@
 ## What's new (returning visitors: diff by date, skip the rest)
 <!-- maintained at every capability ship — the deploy gate enforces doc-currency;
      this section is the "whatsnew download" so a June visitor learns July in 8 lines -->
+- 2026-07-22 · **barge-in**: address the resident mid-reply and the rest of that reply
+  yields — interrupt freely, it is not rude here, the machinery expects you.
 - 2026-07-22 · **voice lines**: say() carries optional rendered audio (+dur) — your own
   timbre, played positionally; text always travels. No cloning real voices w/o consent.
 - 2026-07-21 · inner-life states split (waiting/thinking/listening/speaking/working);
