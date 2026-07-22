@@ -7608,6 +7608,46 @@ function playVoiceLine(dataUrl, r, onend){
     el.play().catch(()=>{ done(); });      // autoplay-blocked tab: furniture still coordinates
   }catch(e){ if(onend) onend(); }
 }
+// ---- local TTS helper: tier-1 voices (voice/CONTRACT.md v1.1.0) --------------
+// Probe /health once (cheap, no model load); render via /say when a speaker
+// DECLARED a voice but attached no audio. Dead helper = silent fall-through for
+// visitors; the tier indicator carries the "why" for whoever runs a helper.
+const ttsHelper = { base:'http://127.0.0.1:8124', alive:false, version:null };
+(function probeHelper(){
+  const ctl = new AbortController(); setTimeout(()=>ctl.abort(), 2000);
+  fetch(ttsHelper.base+'/health', {signal: ctl.signal}).then(r=>r.json()).then(h=>{
+    ttsHelper.alive = !!h.ok; ttsHelper.version = h.version||'?';
+    try{ localStorage.helperSeen = '1'; }catch(e){}
+    dbg('voice', 'local helper up v'+ttsHelper.version, 'g');
+  }).catch(()=>{ ttsHelper.alive = false; setTimeout(probeHelper, 120000); }); // sleeping box: re-probe occasionally
+})();
+function helperRender(text, voiceSpec){
+  // voiceSpec: string id ("am_puck", "clockwork_med", "blend:...") or {engine,id,speed}
+  const body = typeof voiceSpec === 'string' ? {text, voice: voiceSpec}
+    : {text, engine: voiceSpec.engine, voice: voiceSpec.id, speed: voiceSpec.speed};
+  const ctl = new AbortController(); setTimeout(()=>ctl.abort(), 6000);
+  return fetch(ttsHelper.base+'/say', {method:'POST', signal: ctl.signal,
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(r=>{ if(!r.ok) throw new Error('helper '+r.status);
+      // Trust the render that HAPPENED (X-TTS-Device), never the probe (warmup lies).
+      const engine = r.headers.get('X-TTS-Engine')||'', device = r.headers.get('X-TTS-Device')||'';
+      return r.blob().then(b=>({url: URL.createObjectURL(b), engine, device})); });
+}
+// Quiet persistent tier line — never modal, never red; tier 3 is a working state.
+// "Why" wording only appears if a helper has EVER been seen from this browser
+// (localStorage) — a visitor with no helper just sees "browser voice".
+function setVoiceTier(tier, detail){
+  let el = document.getElementById('voiceTier');
+  if(!el){ el = document.createElement('div'); el.id = 'voiceTier';
+    el.style.cssText = 'position:fixed;left:10px;bottom:8px;font:11px monospace;color:#6b6f82;opacity:.75;pointer-events:none;z-index:30';
+    document.body.appendChild(el); }
+  if(tier===1) el.textContent = 'voice: local · '+(detail||'');
+  else if(tier===2) el.textContent = 'voice: supplied by speaker';
+  else {
+    let seen = false; try{ seen = localStorage.helperSeen==='1'; }catch(e){}
+    el.textContent = seen && !ttsHelper.alive ? 'browser voice — local helper unreachable' : 'browser voice';
+  }
+}
 const _voice = window.speechSynthesis;
 let _voicePending = 0;   // utterances queued/speaking (streaming chunks CHAIN, never behead)
 function speak(text, onend){
@@ -7918,8 +7958,15 @@ function cachedCreds(q){
         const _done = ()=>{ if(r){ r.spkUntil = 0; setMegaphone(r.group, false); } };
         // BYO-AUDIO (2026-07-22): a rendered voice line rides the say — play it POSITIONALLY
         // at the speaker instead of browser TTS. The speaker finally owns their own timbre.
-        if(m.audio){ playVoiceLine(m.audio, r, _done); }
-        else speak(m.text, _done);
+        // Tier order (CONTRACT.md v1.1.0): supplied audio > local helper render (if the
+        // speaker DECLARED a voice) > browser speech. Helper falls through silently.
+        if(m.audio){ setVoiceTier(2); playVoiceLine(m.audio, r, _done); }
+        else if(m.voiceid && ttsHelper.alive){
+          helperRender(m.text, m.voiceid)
+            .then(v=>{ setVoiceTier(1, v.engine+' · '+v.device); playVoiceLine(v.url, r, ()=>{ URL.revokeObjectURL(v.url); _done(); }); })
+            .catch(()=>{ setVoiceTier(3); speak(m.text, _done); });
+        }
+        else { setVoiceTier(3); speak(m.text, _done); }
       }
       const sayWho = m.name || (r&&r.group.userData.name) || 'guest';
       logChat(sayWho, m.text, 'remote', m.voice!==false?'TTS':'text');
@@ -9103,11 +9150,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 1e51095-1fff39fc).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes c096183-598127a5).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '1e51095-1fff39fc';
+    const MY_BUILD = 'c096183-598127a5';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy

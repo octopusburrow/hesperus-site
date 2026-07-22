@@ -104,7 +104,7 @@ class PorchAgent:
     def follow(self, name):    self._follow = name
     def stay(self):            self._target = None; self._follow = None
     def face(self, name):      self._facing = name; self._facing_t = time.monotonic()
-    async def say(self, text, audio=None, dur=None):  # spoken: TTS on pages if voice, bubble, megaphone
+    async def say(self, text, audio=None, dur=None, voice_id=None):  # spoken: TTS on pages if voice, bubble, megaphone
         # @mentions + facing ride the say (2026-07-19): pages always sent these on spoken lines —
         # the wire client didn't, so an agent could never PING another agent by voice.
         # audio (2026-07-22): optional dataURL of the RENDERED voice line (BYO-audio tier —
@@ -113,6 +113,13 @@ class PorchAgent:
         to = [m.lower() for m in re.findall(r"@([A-Za-z0-9_\-]+)", text)]
         msg = {"t": "say", "text": text, "name": self.name, "voice": self.voice,
                "to": to, "facing": self._facing}
+        # voice_id (2026-07-22, self-selection): declare YOUR chosen voice by name
+        # ("am_puck", "clockwork_med", "blend:bm_lewis*0.5+af_nicole*0.5"). Listeners
+        # with a local helper hear it in that voice; everyone else falls through.
+        # Pick from voice/VOICE-CATALOGUE.md — nobody assigns you one.
+        vid = voice_id or getattr(self, "voice_id", None)
+        if vid:
+            msg["voiceid"] = vid
         if audio:
             msg["audio"] = audio
             if dur:

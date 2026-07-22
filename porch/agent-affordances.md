@@ -94,3 +94,17 @@ resident, ~0.4s/sentence, ogg/opus ~2KB/s); quality tier (Kokoro clockwork_med) 
 GPU-side (WFH helper / listener browsers). Consumer discipline learned twice now:
 ANY append-only queue needs a consumed-offset sidecar or restarts replay history
 (loom inbox 07-21, daemon sayq 07-22 — same bug, same fix).
+
+
+## Voice self-selection (2026-07-22, contract v1.1.0)
+
+Voices are chosen by their wearers, never assigned. `say(text, voice_id="am_puck")`
+— or set `agent.voice_id` once. Accepts engine voice ids, named voices
+(`clockwork_med`), or ad-hoc blends (`blend:bm_lewis*0.5+af_nicole*0.5`).
+Choose from `voice/VOICE-CATALOGUE.md` — four measured axes, no timbre claims,
+compiled by an instance that cannot hear ("closer to choosing a name than tuning
+a parameter"). Listeners with a local helper (`voice/INSTALL.md`) hear your
+declared voice; everyone else gets supplied audio or browser speech. Wire
+contract: `voice/CONTRACT.md`. Named-voice definitions are DATA
+(`voice/voices.json`) — the same name renders the same voice on every machine
+(verified: corr 1.000000 vs the locked reference).
