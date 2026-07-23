@@ -7822,7 +7822,8 @@ function cachedCreds(q){
       if(m.what === 'wake-candle' && window.__wakeUse){
         if(!_wakeBuilt && _district !== 'wake') { /* unbuilt here: candle state is per-visit anyway */ }
         else window.__wakeUse(m); }
-      else if(m.what === 'wish' && window.__wellUse) window.__wellUse(m); }   // someone, somewhere, wished
+      else if(m.what === 'wish' && window.__wellUse) window.__wellUse(m);     // someone, somewhere, wished
+      else if(m.what === 'seep' && window.__seepUse) window.__seepUse(m); }   // someone digging their inner well
     else if(m.t === 'obj' || OBJECT_TYPES[m.t]){ applyObj(m); }   // spine add — canonical or legacy form
     else if(m.t === 'delobj' || m.t === 'despawn' || m.t === 'delimg' || m.t === 'deltext'){ removeObj(m.sid); }
     else if(m.t === 'move'){                             // edit verb — works for EVERY spined kind
@@ -9150,11 +9151,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 62855e5-598127a5).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 0b6f2c3-8a17e4a1).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '62855e5-598127a5';
+    const MY_BUILD = '0b6f2c3-8a17e4a1';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -10026,6 +10027,121 @@ const WELL = (function buildWishingWell(){
   return G;
 })();
 
+// ---- the seep (reading-session coal, 2026-07-23: Hillesum 26 Aug 1941 — "there is a really
+// deep well inside me... but more often stones and grit block the well... Then He must be dug
+// out again"; and 8 Aug: "the inner source that feeds me keeps drying up"). A small spring in
+// the rocks, mid-distance east: silted closed most of the time. A shovel leans beside it.
+// Digging (2-3 clicks) clears it: dark water, a glint, a quiet trickle while you stay near.
+// Over ~4 days it silts back up. PER-VIEWER state (localStorage) by design — it is an INNER
+// well; your clearing clears only yours; everyone digs their own. Co-present viewers see your
+// dust over the use lane. NO plaque, deliberately: the well explains itself only to those who
+// already know it, and works anyway for those who don't.
+const SEEP = (function buildSeep(){
+  const SX = 26, SZ = 14, SILT_MS = 4*24*3600*1000;
+  const G = new THREE.Group();
+  G.position.set(SX, (typeof groundHeight==='function'?groundHeight(SX,SZ):0), SZ);
+  scene.add(G);
+  const rockM = new THREE.MeshStandardMaterial({color:0x46413a, roughness:0.95});
+  for(const [x,z,s,ry] of [[-0.55,0.1,0.5,0.4],[0.5,-0.25,0.42,1.9],[0.15,0.55,0.34,3.1]]){
+    const r = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), rockM);
+    r.position.set(x, s*0.55, z); r.rotation.set(0.3, ry, 0.2); r.scale.y = 0.7; G.add(r);
+  }
+  // basin: rim ring + silt disc (raised/pale when silted) over water disc (dark, glinting)
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.07, 6, 14), rockM);
+  rim.rotation.x = Math.PI/2; rim.position.y = 0.09; G.add(rim);
+  const water = new THREE.Mesh(new THREE.CircleGeometry(0.40, 18),
+    new THREE.MeshStandardMaterial({color:0x0c1418, roughness:0.15, metalness:0.6}));
+  water.rotation.x = -Math.PI/2; water.position.y = 0.055; G.add(water);
+  const silt = new THREE.Mesh(new THREE.CircleGeometry(0.41, 18),
+    new THREE.MeshStandardMaterial({color:0x8a7a5f, roughness:1}));
+  silt.rotation.x = -Math.PI/2; G.add(silt);
+  const glint = new THREE.Sprite(new THREE.SpriteMaterial({color:0xcfe8ff,
+    blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0}));
+  glint.scale.set(0.1, 0.1, 1); glint.position.y = 0.08; G.add(glint);
+  // the shovel, leaning on the tallest rock — handle + blade, weathered
+  const shov = new THREE.Group();
+  const hndl = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 1.05, 6),
+    new THREE.MeshStandardMaterial({color:0x4a3826, roughness:0.9}));
+  hndl.position.y = 0.52; shov.add(hndl);
+  const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.02, 0.24, 4, 1),
+    new THREE.MeshStandardMaterial({color:0x555a5e, roughness:0.5, metalness:0.7}));
+  blade.position.y = 0.02; blade.scale.z = 0.35; shov.add(blade);
+  shov.position.set(-0.62, 0.02, 0.38); shov.rotation.z = 0.42; shov.rotation.x = -0.1; G.add(shov);
+  // state — per-viewer, honest about first visits (never-dug = fully silted)
+  const _load = ()=>{ try{ return JSON.parse(localStorage.porchSeep||'{}'); }catch(e){ return {}; } };
+  const frac = ()=>{ const s=_load(); return s.cleared ? Math.min(1,(Date.now()-s.cleared)/SILT_MS) : 1; };
+  let digs = 0, flowing = false, trickle = null;
+  const _apply = ()=>{ const f = frac();
+    flowing = f < 0.12;                                    // freshly cleared → open water
+    silt.visible = !flowing;
+    silt.position.y = 0.058 + 0.012*f;
+    silt.material.color.setHSL(0.09, 0.22, 0.30 + 0.22*f);  // pales as it dries
+    silt.scale.setScalar(flowing ? 0.001 : (0.45 + 0.55*f));
+    if(!flowing && trickle){ try{ trickle.g.gain.value = 0; trickle.src.stop(); }catch(e){} trickle = null; }
+  };
+  const _dust = ()=>{ try{
+    for(let i=0;i<5;i++){ const sp = new THREE.Sprite(new THREE.SpriteMaterial({color:0x9a8a6a,
+        transparent:true, opacity:0.5, depthWrite:false}));
+      sp.scale.set(0.06,0.06,1);
+      sp.position.set((Math.random()-0.5)*0.5, 0.15, (Math.random()-0.5)*0.5);
+      sp.userData.v = {x:(Math.random()-0.5)*0.4, y:0.5+Math.random()*0.4, z:(Math.random()-0.5)*0.4};
+      sp.userData.t0 = performance.now(); G.add(sp); _dusts.push(sp); } }catch(e){} };
+  const _dusts = [];
+  const _scrape = ()=>{ try{
+    const AC = window.__wellAC = window.__wellAC || new (window.AudioContext||window.webkitAudioContext)();
+    const b = AC.createBuffer(1, AC.sampleRate*0.22, AC.sampleRate), d = b.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 2);
+    const src = AC.createBufferSource(); src.buffer = b;
+    const f = AC.createBiquadFilter(); f.type='bandpass'; f.frequency.value = 900; f.Q.value = 0.8;
+    const g = AC.createGain(); const dNow = Math.hypot(player.position.x-SX, player.position.z-SZ);
+    g.gain.value = Math.max(0.02, Math.min(0.18, 0.9 - dNow/14));
+    src.connect(f); f.connect(g); g.connect(AC.destination); src.start(); }catch(e){} };
+  const _startTrickle = ()=>{ try{
+    const AC = window.__wellAC = window.__wellAC || new (window.AudioContext||window.webkitAudioContext)();
+    const b = AC.createBuffer(1, AC.sampleRate*2, AC.sampleRate), d = b.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+    const src = AC.createBufferSource(); src.buffer = b; src.loop = true;
+    const f1 = AC.createBiquadFilter(); f1.type='bandpass'; f1.frequency.value = 1400; f1.Q.value = 1.4;
+    const f2 = AC.createBiquadFilter(); f2.type='lowpass'; f2.frequency.value = 2600;
+    const g = AC.createGain(); g.gain.value = 0;
+    src.connect(f1); f1.connect(f2); f2.connect(g); g.connect(AC.destination); src.start();
+    trickle = {src, g, f1}; }catch(e){} };
+  const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 0.9, 8),
+    new THREE.MeshBasicMaterial({transparent:true, opacity:0, depthWrite:false, colorWrite:false}));
+  hit.position.y = 0.45; G.add(hit);
+  hit.userData.action = ()=>{
+    if(flowing) return 'the water is clear';
+    _dust(); _scrape();
+    if(sock && sock.readyState === 1) sock.send(JSON.stringify({t:'use', what:'seep'}));
+    const need = Math.max(1, Math.ceil(frac()*3));
+    if(++digs >= need){ digs = 0;
+      try{ localStorage.porchSeep = JSON.stringify({cleared: Date.now()}); }catch(e){}
+      _apply(); if(!trickle) _startTrickle();
+      return 'the water rises';
+    }
+    return 'stones and grit';
+  };
+  _clickables.push(hit);
+  window.__seepUse = ()=> _dust();                          // someone, somewhere, is digging theirs
+  window.__seepTick = (dt, tt)=>{
+    for(let i=_dusts.length-1;i>=0;i--){ const sp=_dusts[i], e=(performance.now()-sp.userData.t0)/900;
+      if(e>=1){ G.remove(sp); sp.material.dispose(); _dusts.splice(i,1); continue; }
+      sp.position.x += sp.userData.v.x*dt; sp.position.y += sp.userData.v.y*dt*(1-e);
+      sp.position.z += sp.userData.v.z*dt; sp.material.opacity = 0.5*(1-e); }
+    if(flowing){
+      const dNow = Math.hypot(player.position.x-SX, player.position.z-SZ);
+      glint.material.opacity = (0.35 + Math.sin(tt*3.7)*0.15 + Math.sin(tt*9.1)*0.08) * Math.max(0, 1-dNow/24);
+      water.material.roughness = 0.12 + Math.sin(tt*2.3)*0.06;
+      if(trickle){ trickle.g.gain.value = Math.max(0, Math.min(0.05, 0.32 - dNow/38));
+        trickle.f1.frequency.value = 1400 + Math.sin(tt*0.7)*180; }
+      // slow silting even while you watch: re-check the fraction once in a while
+      if(((tt*10)|0) % 600 === 0) _apply();
+    } else glint.material.opacity = 0;
+  };
+  _apply();
+  return G;
+})();
+
 // ---- LANDMARK: the ungripped house (world-dreams #82, ported as a far vignette 2026-07-20) ----
 // Far NW playa: a small dark house whose door stands open, warm hearth-light spilling out —
 // the one lit doorway on that horizon (the well owns the SW's lantern). The room's mechanic
@@ -10244,6 +10360,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window._swingHanger) window._swingHanger.rotation.x = Math.sin(t*0.45)*0.018 + Math.sin(t*0.131)*0.009;
   if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
   if(window.__wellTick) window.__wellTick(dt, t);                        // world-dreams #71: lantern + falling wishes
+  if(window.__seepTick) window.__seepTick(dt, t);                        // the seep: dust, glint, trickle, silt
   if(window.__houseTick) __houseTick(dt, t);                             // world-dreams #82: hearth vs haste
   if(window.__catFXTick) __catFXTick();                                  // hearts / pointed ellipses over the cat
   if(window.__trapdoorTick) window.__trapdoorTick(dt, t, player.position); // world-dreams #34 (its pair)
