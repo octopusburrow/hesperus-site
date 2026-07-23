@@ -12,6 +12,10 @@
 ## What's new (returning visitors: diff by date, skip the rest — proto-era history lives in the Changelog at the bottom)
 <!-- maintained at every capability ship — the deploy gate enforces doc-currency;
      this section is the "whatsnew download" so a June visitor learns July in 8 lines -->
+- 2026-07-23 · **the long walk**: the connector's bearing continued past the ladder —
+  28 stones out to (88,-88), kindling AHEAD of you as you walk, a rising chime each,
+  ending at a standing stone directly under the evening star. Finish it once and the
+  path keeps a warmer ember for you ever after. The carved line explains itself.
 - 2026-07-23 · **the seep**: a small spring in the rocks east of the porch (~26,14),
   silted closed most days. Dig it (click, or `a.use('seep')`) — two or three spadefuls
   clear it; water, a glint, a quiet trickle while you stay. It silts back over ~4 days.

@@ -9151,11 +9151,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes 0b6f2c3-8a17e4a1).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes cf50af3-8ee32b72).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = '0b6f2c3-8a17e4a1';
+    const MY_BUILD = 'cf50af3-8ee32b72';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9914,6 +9914,81 @@ window.__pilgrimTick = (dt, tt, camPos)=>{
   }
 };
 
+// ---- THE LONG WALK (world-dreams #6, true form — 2026-07-23). The short connector's
+// bearing, continued PAST the ladder into the dark: Venus (the porch's evening star) hangs
+// over exactly this diagonal, so the walk west of the prototype becomes a walk TOWARD the
+// star here — the sky corrected the compass. 28 sparser, wilder stones from the ladder foot
+// out to (86,-86); each kindles AHEAD of you (the prototype's hard-won lead — light leads
+// the walker, never puddles at the feet), a rising pentatonic chime on first kindle, and at
+// the end one taller arrival stone under the star. Stones you have passed keep a raised
+// resting ember for the session; FINISHING the walk persists (localStorage) — ever after,
+// the whole path rests warmer for you. The arrival line, made mechanical.
+const LONGWALK = (function buildLongWalk(){
+  const G = new THREE.Group(); scene.add(G);
+  const FROM = new THREE.Vector3(23, 0, -23), TO = new THREE.Vector3(86, 0, -86), N = 28;
+  const mats = [], pts = [], _v = new THREE.Vector3();
+  const walked = (()=>{ try{ return localStorage.porchLongWalk === 'done'; }catch(e){ return false; } })();
+  for(let i=0;i<N;i++){
+    const f = i/(N-1);
+    _v.lerpVectors(FROM, TO, f);
+    const wob = Math.sin(i*2.3)*0.9 + Math.sin(i*0.7)*0.5;     // wilder wander than the connector
+    const px = _v.x + wob*0.707, pz = _v.z + wob*0.707;
+    const m = new THREE.MeshStandardMaterial({ color:0x5c5344, roughness:0.92,
+      emissive:0xbe8a52, emissiveIntensity: walked ? 0.10 : 0.03 });
+    const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.13 + (i%4)*0.025), m);
+    const gy = (typeof groundHeight==='function'?groundHeight(px,pz):0);
+    s.position.set(px, gy + 0.07, pz); s.rotation.set(Math.sin(i*3)*0.5, i*1.1, Math.cos(i*2)*0.3);
+    G.add(s); mats.push(m); pts.push(s.position.clone());
+  }
+  // the arrival stone: taller, standing, the line carved low — readable only by arriving
+  const endM = new THREE.MeshStandardMaterial({color:0x5c5344, roughness:0.9,
+    emissive:0xd8a868, emissiveIntensity: walked ? 0.22 : 0.06});
+  const end = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.24, 1.1, 7), endM);
+  const egy = (typeof groundHeight==='function'?groundHeight(88,-88):0);
+  end.position.set(88, egy + 0.55, -88); end.rotation.y = 0.4; G.add(end);
+  let line = null;
+  try{
+    line = makeTextMesh('the path keeps its light for the next walker', {size:0.055, color:0xd8c8a0});
+    const ang = Math.atan2(23-88, -(-23+88));                   // face back up the path
+    line.position.set(88 + Math.sin(ang)*0.3, egy + 0.42, -88 + Math.cos(ang)*0.3);
+    line.rotation.y = ang; G.add(line);
+  }catch(e){}
+  const kindled = new Array(N).fill(false);                     // per-session chime memory
+  return { mats, pts, endM, end, kindled, walked };
+})();
+window.__longWalkTick = (dt, tt, camPos)=>{
+  if(!camPos) return;
+  const L = LONGWALK;
+  const rest = (L.walked || L._done) ? 0.10 : 0.03;
+  for(let i=0;i<L.pts.length;i++){
+    const d = L.pts[i].distanceTo(camPos);
+    if(d > 60) continue;                                        // perf: far stones sleep
+    // KINDLE AHEAD (prototype lesson): peak brightness ~3.5m in front, not underfoot
+    const near = Math.max(0, 1 - Math.abs(d - 3.5)/7);
+    if(near > 0.55 && !L.kindled[i]){
+      L.kindled[i] = true;
+      try{                                                       // rising pentatonic, one voice
+        const AC = window.__wellAC = window.__wellAC || new (window.AudioContext||window.webkitAudioContext)();
+        const o = AC.createOscillator(), g = AC.createGain(), t0 = AC.currentTime;
+        o.type = 'sine'; o.frequency.value = [392, 440, 493.9, 587.3, 659.3][i % 5] * (1 + ((i/5)|0)*0.0);
+        g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.05, t0+0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0+1.1);
+        o.connect(g); g.connect(AC.destination); o.start(t0); o.stop(t0+1.2);
+      }catch(e){}
+      if(i === L.pts.length-1 && !L.walked && !L._done){          // arrival: the path is yours now
+        L._done = true;
+        try{ localStorage.porchLongWalk = 'done'; }catch(e){}
+      }
+    }
+    const passed = L.kindled[i] ? rest + 0.05 : rest;
+    const target = passed + near*1.5;
+    L.mats[i].emissiveIntensity += (target - L.mats[i].emissiveIntensity) * Math.min(1, dt*5);
+  }
+  const de = L.end.position.distanceTo(camPos);
+  L.endM.emissiveIntensity += (((L.walked||L._done)?0.22:0.06) + Math.max(0,1-de/10)*0.9
+    - L.endM.emissiveIntensity) * Math.min(1, dt*3);
+};
+
 // ---- LANDMARK: The Wishing Well (world-dreams #71, pulled in 2026-07-19, Nix's ask:
 // "see if any dreamworlds are worth pulling in as vignettes — not *too* close to the origin").
 // Far out on the dark playa, opposite quadrant from the ladder cluster, a fieldstone well under
@@ -10361,6 +10436,7 @@ renderer.setAnimationLoop((now, xrFrame)=>{
   if(window.__ladderTick) window.__ladderTick(dt, t, player.position);   // world-dreams #33 landmark
   if(window.__wellTick) window.__wellTick(dt, t);                        // world-dreams #71: lantern + falling wishes
   if(window.__seepTick) window.__seepTick(dt, t);                        // the seep: dust, glint, trickle, silt
+  if(window.__longWalkTick) window.__longWalkTick(dt, t, player.position); // #6: stones kindle ahead, toward the star
   if(window.__houseTick) __houseTick(dt, t);                             // world-dreams #82: hearth vs haste
   if(window.__catFXTick) __catFXTick();                                  // hearts / pointed ellipses over the cat
   if(window.__trapdoorTick) window.__trapdoorTick(dt, t, player.position); // world-dreams #34 (its pair)
