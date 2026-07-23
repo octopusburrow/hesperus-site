@@ -193,6 +193,10 @@
   <div class="mrow" style="padding-left:26px;font-size:11px;color:#7a8494;margin-top:-4px">(desktop only)</div>
   <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
   <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
+  <!-- BYOV: bring your own voice. Two independent picks, saved per-browser. -->
+  <label class="mrow" style="flex-wrap:wrap"><span>🗣 My voice</span><select id="myVoiceSel" style="max-width:190px"><option value="auto">browser default</option></select></label>
+  <label class="mrow" style="flex-wrap:wrap"><span>👂 Hear others as</span><select id="hearVoiceSel" style="max-width:190px"><option value="auto">as they send / browser</option></select></label>
+  <div class="mrow" style="padding-left:26px;font-size:11px;color:#7a8494;margin-top:-4px">helper voices need a <a href="/porch/voice/HELP-BYOV.md" target="_blank" rel="noopener" style="color:#8fb0d6">local voice helper ↗</a></div>
   <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
   <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
   <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12); star-size slider removed 2026-07-15 (Nix: hand-tune per mode instead — __starBase) --><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
@@ -3675,16 +3679,31 @@ if(_residentPick){
       speaking=true; speakEnd = t + est; mouthPulse();
       // networked speech: other pages TTS it (if voice on), bubble it, megaphone it
       dbg('say→', `${voiceOn?'📢 ':''}"${text.slice(0,80)}"`);
-      if(resSock && resSock.readyState===1)
-        resSock.send(JSON.stringify({t:'say', text, name:RESIDENT_NAME, voice:voiceOn, to:_to, facing:_facing}));
-      // WALL-CLOCK fallback (seq-guarded): the render-clock check below stalls when rAF
-      // does (headset off pauses the XR loop; headless throttles) — speech must still end.
       const seq = ++speakSeq;
       setTimeout(()=>{ if(speaking && speakSeq===seq) endSpeak(); }, est*1000+250);
-      if(window.speechSynthesis && voiceOn){ try{ const u=new SpeechSynthesisUtterance(text); u.rate=rate;
-        u.onboundary=()=>{ if(speaking && speakSeq===seq) mouthPulse(); };   // real word-level sync when the voice fires boundaries
-        u.onend=()=>{ if(speaking && speakSeq===seq) endSpeak(); }; speechSynthesis.cancel(); speechSynthesis.speak(u);
-      }catch(e){ /* no audio backend: fallback timer ends it */ } }
+      // MY voice (voicePrefs.mine): if I picked a HELPER voice, render it and ATTACH it as
+      // audio to the say — so every listener hears MY chosen timbre (BYO-audio, same path
+      // agents use), not their local browser voice. If I picked a browser voice (or default),
+      // the say carries text only and each listener speaks it in their own browser.
+      const mine = voicePrefs.mine;
+      const sendSay = (audio)=>{ if(resSock && resSock.readyState===1)
+        resSock.send(JSON.stringify(Object.assign({t:'say', text, name:RESIDENT_NAME,
+          voice:voiceOn, to:_to, facing:_facing}, audio?{audio, dur:est}:{}))); };
+      const _browserSpeak = ()=>{ if(!(window.speechSynthesis && voiceOn)) return;
+        try{ const u=new SpeechSynthesisUtterance(text); u.rate=rate;
+          if(mine && mine.indexOf('browser:')===0){ const bv=_browserVoiceByName(mine.slice(8)); if(bv) u.voice=bv; }
+          u.onboundary=()=>{ if(speaking && speakSeq===seq) mouthPulse(); };
+          u.onend=()=>{ if(speaking && speakSeq===seq) endSpeak(); };
+          speechSynthesis.cancel(); speechSynthesis.speak(u);
+        }catch(e){ /* no audio backend: fallback timer ends it */ } };
+      if(voiceOn && mine && mine.indexOf('helper:')===0 && ttsHelper.alive){
+        helperRender(text, mine.slice(7))
+          .then(v=>{ fetch(v.url).then(r=>r.blob()).then(b=>{ const rd=new FileReader();
+              rd.onloadend=()=>{ sendSay(rd.result); }; rd.readAsDataURL(b); });   // attach for all listeners
+            const a = new Audio(v.url); a.onended=()=>{ if(speaking && speakSeq===seq) endSpeak(); };
+            a.play().catch(()=>{}); })                                              // and play for myself
+          .catch(()=>{ sendSay(null); _browserSpeak(); });
+      } else { sendSay(null); _browserSpeak(); }
       return 'saying: '+text;
     }
 
@@ -7608,19 +7627,44 @@ function playVoiceLine(dataUrl, r, onend){
     el.play().catch(()=>{ done(); });      // autoplay-blocked tab: furniture still coordinates
   }catch(e){ if(onend) onend(); }
 }
-// ---- local TTS helper: tier-1 voices (voice/CONTRACT.md v1.1.0) --------------
-// Probe /health once (cheap, no model load); render via /say when a speaker
-// DECLARED a voice but attached no audio. Dead helper = silent fall-through for
-// visitors; the tier indicator carries the "why" for whoever runs a helper.
-const ttsHelper = { base:'http://127.0.0.1:8124', alive:false, version:null };
+// ---- local TTS helper: tier-1 voices (voice/CONTRACT.md) ---------------------
+// The Porch is openly BYOV (bring your own voice). Two independent choices, both
+// per-browser (localStorage), both optional, both degrading gracefully:
+//   hearVoice — how YOU hear others who declared no audio + no voiceid of their own
+//   myVoice   — what YOUR own "speak my typed words" uses
+// Each is either 'browser:<name>' (speechSynthesis) or 'helper:<voiceid>' (local
+// helper render). Default 'auto' = browser default / speaker's own declared voice.
+// Wiring a helper is an ADD-ON (voice/HELP-BYOV.md); nothing here requires it.
+const ttsHelper = { base:'http://127.0.0.1:8124', alive:false, version:null, named:[] };
 (function probeHelper(){
   const ctl = new AbortController(); setTimeout(()=>ctl.abort(), 2000);
   fetch(ttsHelper.base+'/health', {signal: ctl.signal}).then(r=>r.json()).then(h=>{
     ttsHelper.alive = !!h.ok; ttsHelper.version = h.version||'?';
     try{ localStorage.helperSeen = '1'; }catch(e){}
     dbg('voice', 'local helper up v'+ttsHelper.version, 'g');
+    // lazily fetch the named-voice list so the settings panel can offer them
+    fetch(ttsHelper.base+'/voices').then(r=>r.json()).then(v=>{
+      ttsHelper.named = (v.named && v.named.voices) || [];
+      if(window.__refreshVoicePanel) window.__refreshVoicePanel();
+    }).catch(()=>{});
   }).catch(()=>{ ttsHelper.alive = false; setTimeout(probeHelper, 120000); }); // sleeping box: re-probe occasionally
 })();
+// voice preferences — persisted, with safe defaults
+const voicePrefs = (function(){
+  let p = {hear:'auto', mine:'auto'};
+  try{ Object.assign(p, JSON.parse(localStorage.porchVoicePrefs||'{}')); }catch(e){}
+  return {
+    get hear(){ return p.hear; }, get mine(){ return p.mine; },
+    set(k, val){ p[k]=val; try{ localStorage.porchVoicePrefs = JSON.stringify(p); }catch(e){} },
+  };
+})();
+// browser voices load async; keep a live list for the panel
+let _browserVoices = [];
+function _loadBrowserVoices(){ if(window.speechSynthesis){ _browserVoices = speechSynthesis.getVoices()||[];
+  if(window.__refreshVoicePanel) window.__refreshVoicePanel(); } }
+if(window.speechSynthesis){ _loadBrowserVoices(); speechSynthesis.onvoiceschanged = _loadBrowserVoices; }
+// resolve a pref string to a browser SpeechSynthesisVoice, or null
+function _browserVoiceByName(name){ return _browserVoices.find(v=>v.name===name) || null; }
 function helperRender(text, voiceSpec){
   // voiceSpec: string id ("am_puck", "clockwork_med", "blend:...") or {engine,id,speed}
   const body = typeof voiceSpec === 'string' ? {text, voice: voiceSpec}
@@ -7632,6 +7676,19 @@ function helperRender(text, voiceSpec){
       // Trust the render that HAPPENED (X-TTS-Device), never the probe (warmup lies).
       const engine = r.headers.get('X-TTS-Engine')||'', device = r.headers.get('X-TTS-Device')||'';
       return r.blob().then(b=>({url: URL.createObjectURL(b), engine, device})); });
+}
+// How I hear a speaker who supplied neither audio nor their own voiceid: MY choice.
+// helper:<id> → render it locally; browser:<name> → that browser voice; else default.
+function _hearFallback(text, r, done){
+  const pref = voicePrefs.hear;
+  if(pref && pref.indexOf('helper:')===0 && ttsHelper.alive){
+    helperRender(text, pref.slice(7))
+      .then(v=>{ setVoiceTier(1, v.engine+' · '+v.device+' · yours'); playVoiceLine(v.url, r, ()=>{ URL.revokeObjectURL(v.url); done(); }); })
+      .catch(()=>{ setVoiceTier(3); speak(text, done); });
+    return;
+  }
+  setVoiceTier(3);
+  speak(text, done, pref && pref.indexOf('browser:')===0 ? pref.slice(8) : null);
 }
 // Quiet persistent tier line — never modal, never red; tier 3 is a working state.
 // "Why" wording only appears if a helper has EVER been seen from this browser
@@ -7650,9 +7707,10 @@ function setVoiceTier(tier, detail){
 }
 const _voice = window.speechSynthesis;
 let _voicePending = 0;   // utterances queued/speaking (streaming chunks CHAIN, never behead)
-function speak(text, onend){
+function speak(text, onend, browserVoiceName){
   if(!_voice){ if(onend) onend(); return; }
   const u = new SpeechSynthesisUtterance(text); u.rate = 0.98; u.pitch = 1.0;
+  if(browserVoiceName){ const v = _browserVoiceByName(browserVoiceName); if(v) u.voice = v; }
   const done = ()=>{ _voicePending = Math.max(0, _voicePending-1); if(onend) onend(); };
   u.onend = done; u.onerror = done;                  // bubble/megaphone/mouth key off REAL speech end
   // pre-2026-07-21 this cancel()ed unconditionally — each streamed sentence cut off the
@@ -7959,15 +8017,17 @@ function cachedCreds(q){
         const _done = ()=>{ if(r){ r.spkUntil = 0; setMegaphone(r.group, false); } };
         // BYO-AUDIO (2026-07-22): a rendered voice line rides the say — play it POSITIONALLY
         // at the speaker instead of browser TTS. The speaker finally owns their own timbre.
-        // Tier order (CONTRACT.md v1.1.0): supplied audio > local helper render (if the
-        // speaker DECLARED a voice) > browser speech. Helper falls through silently.
+        // Tier order (CONTRACT.md): supplied audio > speaker's declared voiceid (helper) >
+        // MY hearVoice override (helper) > browser speech. Helper falls through silently.
+        // A supplied audio track is the speaker's own choice — I don't override it.
+        const hv = voicePrefs.hear;
         if(m.audio){ setVoiceTier(2); playVoiceLine(m.audio, r, _done); }
-        else if(m.voiceid && ttsHelper.alive){
+        else if(m.voiceid && ttsHelper.alive){                       // speaker declared a voice
           helperRender(m.text, m.voiceid)
             .then(v=>{ setVoiceTier(1, v.engine+' · '+v.device); playVoiceLine(v.url, r, ()=>{ URL.revokeObjectURL(v.url); _done(); }); })
-            .catch(()=>{ setVoiceTier(3); speak(m.text, _done); });
+            .catch(()=>{ _hearFallback(m.text, r, _done); });
         }
-        else { setVoiceTier(3); speak(m.text, _done); }
+        else { _hearFallback(m.text, r, _done); }
       }
       const sayWho = m.name || (r&&r.group.userData.name) || 'guest';
       logChat(sayWho, m.text, 'remote', m.voice!==false?'TTS':'text');
@@ -9090,6 +9150,31 @@ function remoteInEarshot(id){                                  // remote sender 
     tts.addEventListener('change', ()=>{ try{ localStorage.setItem('porch.tts', tts.checked?'1':'0'); }catch(e){} }); }
   window.__sendChat = sendChatText;                             // headless/test entrypoint
 
+  // ---- BYOV voice selectors: populate from browser voices + helper named voices ----
+  const myVoiceSel = document.getElementById('myVoiceSel'), hearVoiceSel = document.getElementById('hearVoiceSel');
+  function _fillVoiceSel(sel, isHear){
+    if(!sel) return;
+    const cur = isHear ? voicePrefs.hear : voicePrefs.mine;
+    const opts = [];
+    opts.push(`<option value="auto">${isHear ? 'as they send / browser' : 'browser default'}</option>`);
+    if(ttsHelper.named && ttsHelper.named.length){
+      opts.push('<optgroup label="local helper voices">');
+      for(const v of ttsHelper.named) opts.push(`<option value="helper:${v}">🔧 ${v}</option>`);
+      opts.push('</optgroup>');
+    }
+    if(_browserVoices.length){
+      opts.push('<optgroup label="browser voices">');
+      for(const v of _browserVoices) opts.push(`<option value="browser:${v.name}">${v.name}${v.lang?' ('+v.lang+')':''}</option>`);
+      opts.push('</optgroup>');
+    }
+    sel.innerHTML = opts.join('');
+    sel.value = cur; if(sel.value !== cur) sel.value = 'auto';   // pref points at a now-absent voice → fall back
+  }
+  window.__refreshVoicePanel = ()=>{ _fillVoiceSel(myVoiceSel, false); _fillVoiceSel(hearVoiceSel, true); };
+  window.__refreshVoicePanel();
+  if(myVoiceSel) myVoiceSel.onchange = ()=>voicePrefs.set('mine', myVoiceSel.value);
+  if(hearVoiceSel) hearVoiceSel.onchange = ()=>voicePrefs.set('hear', hearVoiceSel.value);
+
   // ☰ menu: toggle by button or M (ignored while typing in chat); Add-image opens the file picker
   const menu = document.getElementById('menu'), menuBtn = document.getElementById('menuBtn');
   const aboutBtn = document.getElementById('aboutBtn'), aboutBody = document.getElementById('aboutBody');
@@ -9151,11 +9236,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes cf50af3-8ee32b72).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes f69d494-d6aefdf0).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'cf50af3-8ee32b72';
+    const MY_BUILD = 'f69d494-d6aefdf0';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
