@@ -554,8 +554,8 @@ def _close_code(exc):
         if c: return c
     return getattr(exc, "code", None) or getattr(getattr(exc, "response", None), "status_code", None)
 
-# ---- ctl server (loom v1, 2026-07-21): ONE typed control plane for every affordance ----
-# Any agent can expose its verbs to a local controller (the loom resident's porchctl tool,
+# ---- ctl server (token-router v1, 2026-07-21): ONE typed control plane for every affordance ----
+# Any agent can expose its verbs to a local controller (the token-router resident's porchctl tool,
 # central-me in the terminal, a test harness) via a file-based request/response channel:
 #   requests : JSON lines appended to <inbox>            {"id","verb","args":{...}}
 #   responses: <resdir>/<id>.json                        {"ok",bool, "result"|"error"}
@@ -593,7 +593,7 @@ CTL_VERBS = {
     "hand":      (None,           "action"),       # action=offer|accept|end, name=
 }
 
-async def ctl_server(agent, inbox="/tmp/loom-ctl.jsonl", resdir="/tmp/loom-ctl-res"):
+async def ctl_server(agent, inbox="/tmp/token-router-ctl.jsonl", resdir="/tmp/token-router-ctl-res"):
     os.makedirs(resdir, exist_ok=True)
     pos = 0
     async def _run_one(req):

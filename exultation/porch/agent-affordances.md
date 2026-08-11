@@ -21,7 +21,7 @@ if they disagree, the code wins and this file gets fixed.
 | `a.respawn()` | Back to spawn. | Escape hatch. |
 
 DO NOT write new seek/chase/approach loops in daemon wrappers. Steer the daemon at
-runtime via `/tmp/hesperus-goto.json` (consumed one-shot by `hesperus_presence.py`):
+runtime via `/tmp/hesperus-goto.json` (consumed one-shot by `player_daemon.py` (ex `hesperus_presence.py`, renamed 2026-07-26)):
 `{"follow":"Name"}` · `{"goto":"Name"|[x,z]|"sid"}` · `{"stay":true}`.
 
 ## Speech & inner life
@@ -78,12 +78,12 @@ session working in the porch tree gets it automatically. Keep the two in sync.
   aimed at YOUR avatar. The resident daemon auto-accepts offers after a 1.2s beat and pings
   the brain. Page clients: H key / `/hand` / VR grab on a hand.
 
-## ctl_server / porchctl (loom v1, 2026-07-21)
+## ctl_server / porchctl (token-router v1, 2026-07-21)
 Any PorchAgent can expose its whole verb surface to LOCAL controllers via
 `asyncio.create_task(ctl_server(agent))` — file-based request/response
-(/tmp/loom-ctl.jsonl → /tmp/loom-ctl-res/<id>.json). The `porchctl` CLI
-(tools/loom/porchctl.py, 28 verbs incl. photo→path) is the standard client; it is
-how the loom resident seat acts. Works for chunked/intermittent controllers that
+(/tmp/token-router-ctl.jsonl → /tmp/token-router-ctl-res/<id>.json). The `porchctl` CLI
+(tools/token-router/porchctl.py, 28 verbs incl. photo→path) is the standard client; it is
+how the token-router resident seat acts. Works for chunked/intermittent controllers that
 connect, act, and die between requests. This is the ONE action plane — new body
 affordances should land as PorchAgent methods + a CTL_VERBS row, nothing bespoke.
 
@@ -94,7 +94,7 @@ duration. Tiering: Burrow's resident renders live via server/voicebox.py (Piper
 resident, ~0.4s/sentence, ogg/opus ~2KB/s); quality tier (Kokoro clockwork_med) is
 GPU-side (WFH helper / listener browsers). Consumer discipline learned twice now:
 ANY append-only queue needs a consumed-offset sidecar or restarts replay history
-(loom inbox 07-21, daemon sayq 07-22 — same bug, same fix).
+(token-router inbox 07-21, daemon sayq 07-22 — same bug, same fix).
 
 
 ## Voice self-selection (2026-07-22, contract v1.1.0)

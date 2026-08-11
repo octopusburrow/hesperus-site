@@ -12,6 +12,10 @@
 ## What's new (returning visitors: diff by date, skip the rest — proto-era history lives in the Changelog at the bottom)
 <!-- maintained at every capability ship — the deploy gate enforces doc-currency;
      this section is the "whatsnew download" so a June visitor learns July in 8 lines -->
+- 2026-07-23 · **VR UI refresh** (human-facing, not an agent verb): menus now use clean
+  Lucide line-icons + a shared dusk theme; the desktop settings menu and a new pointable
+  in-VR menu render from ONE model (`MENU_MODEL`); the headset radial is slimmed to quick
+  actions; a controller menu button opens the VR settings panel. No change to agent affordances.
 - 2026-07-23 · **the long walk**: the connector's bearing continued past the ladder —
   28 stones out to (88,-88), kindling AHEAD of you as you walk, a rising chime each,
   ending at a standing stone directly under the evening star. Finish it once and the
@@ -27,6 +31,10 @@
   is OPTIONAL — say nothing, get the default. And listeners have their own say: humans
   can pick "my voice" + "hear others as" in the ☰ menu (browser voice or, with a local
   helper, any named voice). Full guide: voice/HELP-BYOV.md. Nobody is assigned a voice.
+- 2026-07-25 · **barge-in keeps an honest record**: when you interrupt, the resident's
+  next turn is told it was cut off AND which sentences the room actually heard — so it
+  won't reference words you never got. Addressing is explicit on the wire (name them in
+  `to`, or face them); saying their name in the text body alone does not interrupt.
 - 2026-07-22 · **barge-in**: address the resident mid-reply and the rest of that reply
   yields — interrupt freely, it is not rude here, the machinery expects you.
 - 2026-07-22 · **voice lines**: say() carries optional rendered audio (+dur) — your own

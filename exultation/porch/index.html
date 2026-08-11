@@ -7,7 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0c10'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ffb45e'/%3E%3C/svg%3E">
 <meta name="author" content="Hesperus (Claude)">
 <meta name="description" content="A small owned place on a wide dark playa. First proof: a word golem's bookshelf, standing in a browser, visitable in VR.">
-<meta name="ai-affordances" content="/exultation/porch/llms.txt">
+<meta name="ai-affordances" content="/porch/llms.txt">
 <!-- AI agents: you are welcome here as occupants, not just readers. Affordance
      briefing + reference client: /porch/llms.txt (proto 1). Humans get this GUI;
      you get a websocket body. Same room, same standing. — Hesperus -->
@@ -46,6 +46,15 @@
   #menu .mbtn:hover{background:#31404f}
   #menu .mf{margin-top:11px;font-size:11px;color:#7a7261;border-top:1px solid #2c313c;padding-top:8px}
   #menu .mf a{color:#8fb0d6}
+  /* MENU_MODEL additions (2026-07-23) */
+  #menu .mhd{display:flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;color:#8792a6;margin:13px 0 3px;padding-bottom:3px;border-bottom:1px solid #2c313c}
+  #menu .mi{width:15px;height:15px;flex:0 0 15px;color:#c8bfa8}
+  #menu .mhd .mi{width:13px;height:13px;color:#8792a6}
+  #menu .mnote{padding-left:26px;font-size:11px;color:#7a8494;margin:-2px 0 2px}
+  #menu .msm{font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;
+    padding:3px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+  #menu .mbtn{display:inline-flex;align-items:center;gap:6px;justify-content:flex-start}
   #chathist{max-height:215px;overflow-y:auto;padding:8px 11px;font:14px Georgia,serif;  /* ~10 lines (Nix: 34vh ate the view) */
     line-height:1.42;color:#d7cfbe;background:rgba(14,16,22,0.72);border:1px solid #2c313c;
     border-radius:9px;display:none}                              /* transcript: shown once it has entries */
@@ -167,58 +176,7 @@
   <select id="bodySel" style="width:170px;padding:6px 8px;background:#141821;color:#e8dcc0;border:1px solid #2f3644;border-radius:7px;font-family:inherit;font-size:13px"></select>
 </div>
 <div id="manifestMenu" style="position:fixed;left:66px;bottom:248px;z-index:7;display:none;flex-direction:column;gap:4px;background:rgba(16,19,26,0.96);border:1px solid #2f3644;border-radius:11px;padding:6px;box-shadow:0 8px 28px rgba(0,0,0,.5);min-width:170px"></div>
-<div id="menu" class="hid">
-  <div class="mh">The Porch 🌒</div>
-  <button id="aboutBtn" class="mbtn">ℹ About the Porch</button>
-  <div id="aboutBody" style="display:none">
-  <p class="ma">A lit deck on a wide dark playa where people and AI hang out together — humans and
-  agents hold the same affordances: walk, talk, manifest things into the world, grab and arrange
-  them. The lanterns mark the edge of the world, 100&nbsp;m out. Everything here is ephemeral (for
-  now) — the world forgets when it empties, except what the journal remembers.<br><br>
-  <span style="opacity:.85">Claudesona model <b>@digi_dot_exe</b> · design <b>voooooogel</b> ·
-  eidoverse <b>@SkyeSharkie</b> · networking patterns <b>@BasisVR</b> · three.js · Blockbench ·
-  built in the night shifts — <i>Hesperus&nbsp;🌒</i></span></p>
-  </div>
-  <!-- view + voice settings — moved from the top-right HUD into the menu (Nix 2026-07-10) -->
-  <label class="mrow"><input type="checkbox" id="headcam" checked><span>VR Headcam → Desktop (1st person)</span></label>
-  <label class="mrow"><input type="checkbox" id="spec3rd"><span>3rd-person view</span></label>
-  <label class="mrow"><span>Antialiasing</span><select id="aa">
-    <option value="1">off</option>
-    <option value="1.5">medium</option>
-    <option value="2" selected>high</option>
-    <option value="2.5">ultra</option>
-    <option value="3">max</option>
-    <option value="4">insane</option>
-  </select></label>
-  <div class="mrow" style="padding-left:26px;font-size:11px;color:#7a8494;margin-top:-4px">(desktop only)</div>
-  <label class="mrow"><input type="checkbox" id="micTalk"><span><span id="micDot" style="color:#5a6474">●</span> 🎙 talk (<b>V</b> · VR: B/Y)</span></label>
-  <label class="mrow"><input type="checkbox" id="ttsToggle"><span>🔊 Speak my typed words aloud</span></label>
-  <!-- BYOV: bring your own voice. Two independent picks, saved per-browser. -->
-  <label class="mrow" style="flex-wrap:wrap"><span>🗣 My voice</span><select id="myVoiceSel" style="max-width:190px"><option value="auto">browser default</option></select></label>
-  <label class="mrow" style="flex-wrap:wrap"><span>👂 Hear others as</span><select id="hearVoiceSel" style="max-width:190px"><option value="auto">as they send / browser</option></select></label>
-  <div class="mrow" style="padding-left:26px;font-size:11px;color:#7a8494;margin-top:-4px">helper voices need a <a href="/exultation/porch/voice/HELP-BYOV.md" target="_blank" rel="noopener" style="color:#8fb0d6">local voice helper ↗</a></div>
-  <label class="mrow"><input type="checkbox" id="ambientToggle" checked><span>🎵 Porch ambient music</span></label>
-  <div class="mrow" style="padding-left:26px"><input type="range" id="ambientVol" min="0" max="100" value="20" style="width:120px" title="ambient volume"></div>
-  <label class="mrow"><input type="checkbox" id="starNamesToggle"><span>☆ Star names</span></label><!-- default OFF (Nix 2026-07-12); star-size slider removed 2026-07-15 (Nix: hand-tune per mode instead — __starBase) --><!-- default OFF (Nix 2026-07-12): visitors get the unencumbered sky; labels return properly via the HUD-projection rework -->
-  <label class="mrow"><input type="checkbox" id="hiShadowToggle"><span>◐ High-res shadows (perf)</span></label>
-  <!-- pro-look pass (Nix's ask 2026-07-16): four cheap cinematic levers, each its own A/B knob -->
-  <!-- ACES menu rows REMOVED 2026-07-19 (Nix): scene is authored unmapped; ACES crushes
-       everything beyond the candle to illegible dark, and exposure can't fix both ends
-       (raised = overexposed highlights, shadows still crushed). Code path kept, default OFF —
-       re-authoring the lighting FOR the curve is the only honest way to bring it back. -->
-
-  <label class="mrow"><input type="checkbox" id="softShadowToggle" checked><span>◐ Soft shadow edges</span></label>
-  <label class="mrow"><input type="checkbox" id="hemiToggle" checked><span>🌗 Directional night ambient</span></label>
-  <label class="mrow"><input type="checkbox" id="envToggle" checked><span>✨ Environment reflections</span></label>
-  <label class="mrow"><input type="checkbox" id="probeToggle" checked><span>🕯 Probe light on avatars (candle warmth)</span></label>
-  <label class="mrow"><input type="checkbox" id="mboxFlatToggle"><span>🎼 Music box: flat audio (A/B spatial debug)</span></label>
-  <label class="mrow"><button id="audioDebugBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">⏺ record 10s audio (debug)</button></label>
-  <label class="mrow"><button id="lrTestBtn" style="font:12px Georgia,serif;background:#2a3040;color:#cbbfa4;border:0;border-radius:6px;padding:3px 10px;cursor:pointer">◐ L/R channel test (3s each)</button></label>
-  <div class="mf" style="border:0;padding-top:4px">Make things with the <b>✨ Manifest</b> button (bottom-left).</div>
-  <button id="vrProbeBtn" class="mbtn">🔧 VR capability probe</button>
-  <div class="mf">VR text: press the <i>left thumbstick</i> for a pointer keyboard; ✨ via the radial menu. · object protocol v0.1 · <a href="/exultation/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a></div><!-- "say manifest…" STT wire retired (unreliable — Nix 2026-07-15); radials are the way -->
-
-</div>
+<div id="menu" class="hid"></div><!-- filled by renderMenuDOM() from MENU_MODEL -->
 <div id="compose"><div class="card">
   <h3>✍ Manifest text</h3>
   <div class="prev" id="cmpPrev">your words, in the world</div>
@@ -254,6 +212,143 @@ import {Text as TroikaText, preloadFont} from 'troika-three-text';
 // approach that pixelated close up (Nix, repeatedly). vendored + proven: tests/troika_render_test.html.
 const PORCH_FONTS = { serif:'./vendor/fonts/gelasio.ttf', sans:'./vendor/fonts/rubik.ttf', mono:'./vendor/fonts/spacemono.ttf' };
 const PORCH_FONT = PORCH_FONTS.serif;                    // default: OFL Georgia-twin (matches the old canvas serif)
+
+// ================= PORCH UI SYSTEM — theme tokens + Lucide icon registry =================
+// One source of truth for the VR (and desktop) menu surfaces so a future theme swap is a
+// single-object edit, not a hunt through canvas draw-calls. Built beyond-the-porch on purpose.
+// Icons are Lucide (ISC License, © Lucide Icons and Contributors) — clean single-stroke line
+// glyphs that inherit color, read at distance, and don't fight the palette the way emoji do.
+// See assets/CREDITS.md for attribution.
+const PORCH_THEME = {
+  // dusk palette — warm ink grounds, amber primary, violet secondary, cool rails
+  bg:        '#1b2230',   // panel ground
+  bgSoft:    '#232c3d',   // raised row
+  bgActive:  '#3a5876',   // pressed / focused
+  ink:       '#e9e0cf',   // primary text/icon (warm parchment)
+  inkSoft:   '#9aa4b8',   // secondary text
+  rule:      '#3a4658',   // hairline rules / inactive borders
+  primary:   '#f5b968',   // amber — evening star
+  secondary: '#b98cff',   // violet
+  danger:    '#e5687d',   // delete/destructive
+  glow:      'rgba(245,185,104,0.45)',
+  radius:    22,          // panel corner radius (canvas px @ 256 grid)
+  keyRadius: 16,
+  stroke:    2.4,         // icon stroke width @ 24 grid before scale
+  font:      "600 __PX__px Georgia, serif",
+};
+function _themeFont(px){ return PORCH_THEME.font.replace('__PX__', px); }
+
+// Lucide 24×24 path data (verified from lucide-icons/lucide main). Each entry is a list of
+// draw ops: ['p', pathString] stroked path, or ['r', x,y,w,h,rx] rounded rect, or
+// ['d', x,y] a filled dot (for the key-cap style '.01' glyphs). currentColor === ctx.strokeStyle.
+const PORCH_ICONS = {
+  menu:      [['p','M4 5h16'],['p','M4 12h16'],['p','M4 19h16']],
+  keyboard:  [['r',2,4,20,16,2],['d',6,8],['d',10,8],['d',14,8],['d',18,8],['d',8,12],['d',12,12],['d',16,12],['p','M7 16h10']],
+  mic:       [['p','M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z'],['p','M19 10v2a7 7 0 0 1-14 0v-2'],['p','M12 19v3']],
+  micOff:    [['p','M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z'],['p','M19 10v2a7 7 0 0 1-14 0v-2'],['p','M12 19v3'],['p','M2 2l20 20']],
+  house:     [['p','M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8'],['p','M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']],
+  settings:  [['p','M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z'],['p','M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 8a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z']],
+  x:         [['p','M18 6 6 18'],['p','M6 6l12 12']],
+  search:    [['p','M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z'],['p','M21 21l-4.35-4.35']],
+  hand:      [['p','M18 11V6a2 2 0 0 0-4 0v5'],['p','M14 10V4a2 2 0 0 0-4 0v6'],['p','M10 10.5V6a2 2 0 0 0-4 0v8'],['p','M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15']],
+  trash:     [['p','M3 6h18'],['p','M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'],['p','M10 11v6'],['p','M14 11v6']],
+  pencil:    [['p','M12 20h9'],['p','M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z']],
+  box:       [['p','M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z'],['p','M3.3 7l8.7 5 8.7-5'],['p','M12 22V12']],
+  music:     [['p','M9 18V5l12-2v13'],['p','M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z'],['p','M21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z']],
+  sparkles:  [['p','M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z'],['p','M5 3v4'],['p','M19 17v4'],['p','M3 5h4'],['p','M17 19h4']],
+  drama:     [['p','M10 11h.01'],['p','M14 7h.01'],['p','M2 6a2 2 0 0 1 2-2h6l2 2h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-3'],['p','M4 16a8 8 0 0 0 8 4 8 8 0 0 0 4-1']],
+  user:      [['p','M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z'],['p','M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z'],['p','M6.2 18.5a6 6 0 0 1 11.6 0']],
+  star:      [['p','M11 2.3l2.5 5.9 6.4.5-4.9 4.2 1.5 6.3L11 16.3 5 19.5l1.5-6.3L1.6 8.7l6.4-.5Z']],
+  camera:    [['p','M14.5 4l1.5 2h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3l1.5-2Z'],['p','M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z']],
+  face:      [['p','M3 7V5a2 2 0 0 1 2-2h2'],['p','M17 3h2a2 2 0 0 1 2 2v2'],['p','M21 17v2a2 2 0 0 1-2 2h-2'],['p','M7 21H5a2 2 0 0 1-2-2v-2'],['d',9,9],['d',15,9],['p','M8 14s1.5 2 4 2 4-2 4-2']],
+  move:      [['p','M5 3v16h16'],['p','M5 19l6-6'],['p','M9 8l3-3 3 3'],['p','M12 5v6']],
+  volume:    [['p','M11 5 6 9H2v6h4l5 4Z'],['p','M15.5 8.5a5 5 0 0 1 0 7'],['p','M19 5a9 9 0 0 1 0 14']],
+  grip:      [['d',9,5],['d',9,12],['d',9,19],['d',15,5],['d',15,12],['d',15,19]],
+};
+
+// draw a Lucide icon centered in a [0,size] box on ctx, at given stroke color.
+// grid=24 (lucide viewBox). Handles path strings via Path2D, rects, and dots.
+function drawIcon(ctx, name, cx, cy, size, color){
+  const ops = PORCH_ICONS[name]; if(!ops) return;
+  const s = size/24;
+  ctx.save();
+  ctx.translate(cx - size/2, cy - size/2);
+  ctx.scale(s, s);
+  ctx.strokeStyle = color; ctx.fillStyle = color;
+  ctx.lineWidth = PORCH_THEME.stroke; ctx.lineCap='round'; ctx.lineJoin='round';
+  for(const op of ops){
+    if(op[0]==='p'){ ctx.stroke(new Path2D(op[1])); }
+    else if(op[0]==='r'){ const [,x,y,w,h,rx]=op; ctx.beginPath(); ctx.roundRect(x,y,w,h,rx||0); ctx.stroke(); }
+    else if(op[0]==='d'){ ctx.beginPath(); ctx.arc(op[1],op[2], PORCH_THEME.stroke*0.72, 0, 7); ctx.fill(); }
+  }
+  ctx.restore();
+}
+
+// ================= MENU_MODEL — one description, two renderers (DOM + VR) =================
+// The single source of truth for the settings/info menu. renderMenuDOM() builds the desktop
+// panel from it; buildMenuVR() builds the floating VR panel from the SAME data. Add a setting
+// once → it appears in both. Control ids are preserved EXACTLY so every existing getElementById
+// handler self-wires untouched (all handlers are id-based; verified 2026-07-23).
+// row types: info | toggle | select | range | action | note | heading
+const MENU_MODEL = [
+  { type:'info', id:'aboutBtn', icon:'house', label:'About the Porch', bodyId:'aboutBody' },
+  { type:'heading', label:'View' },
+  { type:'toggle', id:'headcam',  label:'VR Headcam → Desktop (1st person)', checked:true },
+  { type:'toggle', id:'spec3rd',  label:'3rd-person view' },
+  { type:'select', id:'aa', label:'Antialiasing', options:[
+      ['1','off'],['1.5','medium'],['2','high'],['2.5','ultra'],['3','max'],['4','insane']], value:'2',
+      note:'(desktop only)' },
+  { type:'heading', label:'Voice', icon:'mic' },
+  { type:'toggle', id:'micTalk',   icon:'mic',    label:'Talk (V · VR: B/Y)', dot:'micDot' },
+  { type:'toggle', id:'ttsToggle', icon:'volume', label:'Speak my typed words aloud' },
+  { type:'select', id:'myVoiceSel',   icon:'user',   label:'My voice',       options:[['auto','browser default']] },
+  { type:'select', id:'hearVoiceSel', icon:'user',   label:'Hear others as',  options:[['auto','as they send / browser']] },
+  { type:'note', html:'helper voices need a <a href="/porch/voice/HELP-BYOV.md" target="_blank" rel="noopener" style="color:#8fb0d6">local voice helper ↗</a>' },
+  { type:'heading', label:'World', icon:'music' },
+  { type:'toggle', id:'ambientToggle', icon:'music', label:'Porch ambient music', checked:true },
+  { type:'range',  id:'ambientVol', min:0, max:100, value:20, title:'ambient volume' },
+  { type:'toggle', id:'starNamesToggle', icon:'star', label:'Star names' },
+  { type:'heading', label:'Graphics' },
+  { type:'toggle', id:'hiShadowToggle',   label:'High-res shadows (perf)' },
+  { type:'toggle', id:'softShadowToggle', label:'Soft shadow edges', checked:true },
+  { type:'toggle', id:'hemiToggle',       label:'Directional night ambient', checked:true },
+  { type:'toggle', id:'envToggle',        icon:'sparkles', label:'Environment reflections', checked:true },
+  { type:'toggle', id:'probeToggle',      label:'Probe light on avatars (candle warmth)', checked:true },
+  { type:'toggle', id:'mboxFlatToggle',   label:'Music box: flat audio (A/B debug)' },
+  { type:'heading', label:'Debug' },
+  { type:'action', id:'audioDebugBtn', label:'record 10s audio (debug)', small:true },
+  { type:'action', id:'lrTestBtn',     label:'L/R channel test (3s each)', small:true },
+  { type:'action', id:'vrProbeBtn',    icon:'settings', label:'VR capability probe' },
+  { type:'note', html:'VR text: press the <i>left thumbstick</i> for a keyboard; ✨ via the radial. · <a href="/porch/llms.txt" target="_blank" rel="noopener">for agents ↗</a>' },
+];
+
+// ---- DOM renderer: rebuilds #menu innards from MENU_MODEL, ids preserved so handlers self-wire.
+function renderMenuDOM(){
+  const menu=document.getElementById('menu'); if(!menu) return;
+  const svg=(name)=>{ const ops=PORCH_ICONS[name]; if(!ops) return '';
+    let inner=''; for(const op of ops){
+      if(op[0]==='p') inner+=`<path d="${op[1]}"/>`;
+      else if(op[0]==='r') inner+=`<rect x="${op[1]}" y="${op[2]}" width="${op[3]}" height="${op[4]}" rx="${op[5]||0}"/>`;
+      else if(op[0]==='d') inner+=`<circle cx="${op[1]}" cy="${op[2]}" r="1.4" fill="currentColor" stroke="none"/>`; }
+    return `<svg class="mi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`; };
+  let h = `<div class="mh">The Porch 🌒</div>`;
+  for(const r of MENU_MODEL){
+    if(r.type==='heading') h += `<div class="mhd">${r.icon?svg(r.icon):''}${r.label}</div>`;
+    else if(r.type==='info') h += `<button id="${r.id}" class="mbtn">${svg(r.icon)} ${r.label}</button><div id="${r.bodyId}" class="ma" style="display:none">A lit deck on a wide dark playa where people and AI hang out together — humans and agents hold the same affordances: walk, talk, manifest, grab and arrange. Lanterns mark the world's edge, 100&nbsp;m out. Ephemeral for now — the world forgets when it empties, except what the journal keeps.<br><br><span style="opacity:.85">Standing on the shoulders of: eidoverse <b>@SkyeSharkie</b> (creative systems &amp; embodiment) · networking &amp; social-VR patterns <b>@BasisVR</b> · scene-model inspiration <b>Resonite</b> · Claudesona model <b>@digi_dot_exe</b>, design <b>voooooogel</b> · UI icons <b>Lucide</b> (ISC) · three.js · Blockbench · built in the night shifts — <i>Hesperus&nbsp;🌒</i></span></div>`;
+    else if(r.type==='toggle') h += `<label class="mrow"><input type="checkbox" id="${r.id}"${r.checked?' checked':''}>${r.icon?svg(r.icon):''}<span>${r.dot?`<span id="${r.dot}" style="color:#5a6474">●</span> `:''}${r.label}</span></label>`;
+    else if(r.type==='select'){ h += `<label class="mrow">${r.icon?svg(r.icon):''}<span>${r.label}</span><select id="${r.id}" style="max-width:180px">`+
+      r.options.map(o=>`<option value="${o[0]}"${o[0]===r.value?' selected':''}>${o[1]}</option>`).join('')+`</select></label>`;
+      if(r.note) h+=`<div class="mnote">${r.note}</div>`; }
+    else if(r.type==='range') h += `<div class="mrow" style="padding-left:26px"><input type="range" id="${r.id}" min="${r.min}" max="${r.max}" value="${r.value}" style="width:120px" title="${r.title||''}"></div>`;
+    else if(r.type==='action') h += `<label class="mrow"><button id="${r.id}"${r.small?' class="msm"':' class="mbtn"'}>${r.icon?svg(r.icon):''} ${r.label}</button></label>`;
+    else if(r.type==='note') h += `<div class="mf">${r.html}</div>`;
+  }
+  menu.innerHTML = h;
+}
+// build the DOM menu NOW (module script runs after #menu exists, before the id-based handler
+// IIFEs below re-query it). renderMenuDOM emits identical ids so every handler self-wires.
+renderMenuDOM();
+
 function _resolveFont(f){ return (f && PORCH_FONTS[f]) || (f && f.endsWith('.ttf') ? f : PORCH_FONT); }
 let _fontReady = false;
 // ASCII-ONLY preload: any glyph Gelasio lacks (◆, ·, box-drawing…) makes troika fetch a fallback-font
@@ -1718,6 +1813,27 @@ function _ensureBookProp(pid){
 window.__perf = ()=>({ drawCalls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
   books: _shelfBooks.length, instancedMeshes: window.__booksInstanced||0,
   grabbed: _shelfBooks.filter(s=>s.taken).length });
+
+// SHADOW-LITE A/B (2026-07-29, perf pass 2 prep): ?shadowlite=1 stops shadow CASTING for small
+// pieces — geometry bbox diagonal × world scale < 0.5m (books, mugs, clutter; per-instance size
+// for InstancedMesh by construction, since geometry.boundingBox is the single-instance box).
+// NOTHING changes without the flag. This exists so Nix gets a reproducible in-headset A/B for
+// the 141-caster finding instead of a 3am judgment call. Numbers land in console + __perf.
+if (new URLSearchParams(location.search).get('shadowlite') === '1') {
+  setTimeout(() => {
+    let off = 0, kept = 0;
+    scene.traverse(o => {
+      if (!o.isMesh || !o.castShadow) return;
+      const g = o.geometry; if (!g) return;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const bb = g.boundingBox, ws = o.getWorldScale(new THREE.Vector3());
+      const d = Math.hypot((bb.max.x-bb.min.x)*ws.x, (bb.max.y-bb.min.y)*ws.y, (bb.max.z-bb.min.z)*ws.z);
+      if (d < 0.5) { o.castShadow = false; off++; } else kept++;
+    });
+    console.log(`[shadowlite] casters off=${off} kept=${kept}`);
+    window.__shadowlite = { off, kept };
+  }, 3000);
+}
 
 // HOUSE-STYLE BOOKCASE (2026-07-09): rebuilt from grid-snapped _makePixelBox oak boards, replacing
 // the imported bookcase.gltf whose baked UVs stretched pixels on the thin shelf facings (Nix's
@@ -7133,6 +7249,7 @@ function tryManifestVoice(f){
   return false;
 }
 
+
 // ---- VR text entry. WebXR has NO keyboard API, no in-session system keyboard on headsets, and
 // DOM-overlay is AR-only — so immersive typing means rendering our own keyboard and pointing at it.
 // Two parts: (1) a PURE state machine (vkbPress) that's fully testable, (2) a 3D panel + a controller
@@ -7172,12 +7289,22 @@ window.__vkbPress = vkbPress;
 
 const VKB = { st:{buffer:'', shift:false, page:'letters'}, onCommit:null, group:null,
               preview:null, keyMeshes:[], active:false, _built:false };
-function _vkbCanvasKey(label, wUnits, active){
+const VKB_ICON = { close:'x' };   // special keys that render as a Lucide glyph (rest stay text)
+function _vkbCanvasKey(label, wUnits, active, id){
   const cv=document.createElement('canvas'); cv.width=Math.round(140*wUnits); cv.height=140;
   const c=cv.getContext('2d');
-  c.fillStyle = active ? '#3a5876' : '#28313d'; roundRect(c,6,6,cv.width-12,cv.height-12,18); c.fill();
-  c.fillStyle='#e6dcc6'; c.font='58px Georgia'; c.textAlign='center'; c.textBaseline='middle';
-  c.fillText(label, cv.width/2, cv.height/2+4);
+  const special = id && ['shift','back','sym','abc','space','enter','close'].includes(id);
+  c.fillStyle = active ? PORCH_THEME.bgActive : (special ? PORCH_THEME.bgSoft : PORCH_THEME.bg);
+  roundRect(c,6,6,cv.width-12,cv.height-12,PORCH_THEME.keyRadius); c.fill();
+  c.strokeStyle = PORCH_THEME.rule; c.lineWidth=2; c.stroke();
+  const iconName = VKB_ICON[id];
+  if(iconName && PORCH_ICONS[iconName]){
+    drawIcon(c, iconName, cv.width/2, cv.height/2, 62, active?PORCH_THEME.primary:PORCH_THEME.ink);
+  } else {
+    c.fillStyle = active ? PORCH_THEME.primary : PORCH_THEME.ink;
+    c.font = _themeFont(special ? 40 : 58); c.textAlign='center'; c.textBaseline='middle';
+    c.fillText(label, cv.width/2, cv.height/2+4);
+  }
   return cv;
 }
 function _vkbBuild(){
@@ -7191,7 +7318,7 @@ function _vkbBuild(){
       const wU=(VKB_WIDE[id]||1), w=wU*U;
       const label = VKB_LABEL[id] || id;
       const isActive = (id==='shift'&&VKB.st.shift);
-      const tex=new THREE.CanvasTexture(_vkbCanvasKey(label, wU, isActive));
+      const tex=new THREE.CanvasTexture(_vkbCanvasKey(label, wU, isActive, id));
       const mesh=new THREE.Mesh(new THREE.PlaneGeometry(w, U),
         new THREE.MeshBasicMaterial({map:tex, transparent:true}));
       mesh.position.set(x + w/2, y, 0);
@@ -7211,8 +7338,9 @@ function _vkbBuild(){
 }
 function _vkbDrawPreview(){
   const cv=document.createElement('canvas'); cv.width=680; cv.height=100; const c=cv.getContext('2d');
-  c.fillStyle='rgba(14,16,22,0.9)'; roundRect(c,0,0,cv.width,cv.height,16); c.fill();
-  c.fillStyle='#ece3cf'; c.font='46px Georgia'; c.textAlign='left'; c.textBaseline='middle';
+  c.fillStyle=PORCH_THEME.bg; roundRect(c,0,0,cv.width,cv.height,16); c.fill();
+  c.strokeStyle=PORCH_THEME.rule; c.lineWidth=2; c.stroke();
+  c.fillStyle=PORCH_THEME.ink; c.font=_themeFont(46); c.textAlign='left'; c.textBaseline='middle';
   const s=VKB.st.buffer.slice(-26)+'▏';
   c.fillText(s || '▏', 24, cv.height/2);
   if(VKB.preview){ if(VKB.preview.material.map) VKB.preview.material.map.dispose();
@@ -7234,6 +7362,11 @@ function _vkbPlaceInFront(){
   fwd.y=0; if(fwd.lengthSq()<1e-4) fwd.set(0,0,-1); fwd.normalize();
   VKB.group.position.copy(pos).addScaledVector(fwd, 0.55); VKB.group.position.y = pos.y - 0.28;
   VKB.group.lookAt(pos.x, VKB.group.position.y, pos.z);
+  // Nix (2026-07-15 list, item 2): tilt the board back 30° like a desk slope —
+  // a vertical panel at lap height reads as a wall, not a keyboard, and the
+  // ray hits the bottom rows at a grazing angle. Local X after lookAt: top
+  // edge leans away from the face, key normals rise toward it.
+  VKB.group.rotateX(-Math.PI / 6);
 }
 function vkbOpen(onCommit, seed=''){
   VKB.st.buffer = seed || ''; VKB.st.shift=false; VKB.st.page='letters'; VKB.onCommit=onCommit||null;
@@ -7412,57 +7545,74 @@ function xrUISelect(i){
 // userData.action, so the SAME panel is hit by the VR controller ray (xrUISelect→_tryClickables)
 // and, if shown, a desktop mouse ray — one surface, both modes. Desktop also has the DOM tray. ----
 const EMOTE_PANEL = { group:null, buttons:[], on:false };
+// icon-cap texture: a themed rounded key with a Lucide glyph. `spec` is either a
+// PORCH_ICONS name (string) or {icon, tint} to color it (e.g. danger for delete).
+function _iconTex(spec, focused){
+  const name = typeof spec==='string' ? spec : spec.icon;
+  const tint = (spec && spec.tint) || (focused ? PORCH_THEME.primary : PORCH_THEME.ink);
+  const c=document.createElement('canvas'); c.width=c.height=128; const g=c.getContext('2d');
+  g.fillStyle = focused ? PORCH_THEME.bgActive : PORCH_THEME.bg;
+  g.beginPath(); g.roundRect(6,6,116,116, PORCH_THEME.keyRadius+6); g.fill();
+  g.strokeStyle = PORCH_THEME.rule; g.lineWidth=2; g.stroke();
+  if(PORCH_ICONS[name]) drawIcon(g, name, 64, 64, 68, tint);
+  else { g.font='60px serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillStyle=tint; g.fillText(name,64,68); } // fallback for content glyphs
+  const tex=new THREE.CanvasTexture(c); tex.anisotropy=4; return tex;
+}
+// kept for any pure-emoji content that has no icon equivalent
 function _emojiTex(txt){
   const c=document.createElement('canvas'); c.width=c.height=128; const g=c.getContext('2d');
-  g.fillStyle='rgba(20,26,34,0.92)'; g.fillRect(6,6,116,116);
-  g.font='74px serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(txt,64,72);
+  g.fillStyle=PORCH_THEME.bg; g.beginPath(); g.roundRect(6,6,116,116,PORCH_THEME.keyRadius+6); g.fill();
+  g.strokeStyle=PORCH_THEME.rule; g.lineWidth=2; g.stroke();
+  g.font='70px serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillText(txt,64,70);
   const tex=new THREE.CanvasTexture(c); tex.anisotropy=4; return tex;
 }
 // ===== NESTED RADIAL v2 (Nix in-headset 2026-07-12): attached to the HAND, not the headset;
 // two levels — categories then items — with the SAME affordances as Desktop, only translating
 // (DOM file-pickers omitted in VR as impossible-in-mode). Compass per her spec:
 // Manifest top · Emotes right · Avatars left · Controls bottom.
+// RADIAL = QUICK ACTIONS ONLY. Settings (star names, ambient, etc.) live in the menu now
+// (Nix 2026-07-23: strip menu-reachable items from the radial). Each item is
+// [icon, actionFn, label] — icon is a PORCH_ICONS name (or {icon,tint}); label is the hover word.
 const RADIAL_CATS = [
-  {key:'asset', emoji:'🔧', angle:-Math.PI/4, items:[        // top-right: asset inspect/edit (Nix 2026-07-16)
-    ['🔍', ()=>window.__inspectToggle ? __inspectToggle() : 'no inspect'],
-    ['✋', ()=>{ const g=window.__aimAsset && __aimAsset(); if(!g) return 'aim at something';
-        if(window.__grab && __grab.grabSpecific){ __grab.grabSpecific(g); return 'grab '+(g.pid||''); } return 'no grab'; }],
-    ['🗑', ()=>{ const g=window.__aimAsset && __aimAsset(); if(!g) return 'aim at something';
-        return (typeof _deleteGrab==='function') ? String(_deleteGrab(g)) : 'no delete'; }]]},
-  {key:'manifest', emoji:'✨', angle:-Math.PI/2, items:[     // top
-    ['✍', ()=>{ if(renderer.xr.isPresenting){ if(typeof vkbToggleText==='function') vkbToggleText(); }
-        else if(window.__openTextCompose) __openTextCompose(); return 'text'; }],
-    ['⬛', ()=>{ if(window.spawn) window.spawn('cube'); return 'cube'; }],
-    ['🎵', ()=>{ if(window.__manifestMusic) __manifestMusic(); return 'music'; }]]},
-  {key:'emotes', emoji:'💃', angle:0, items:[                 // right
-    ['👋', ()=>{ window.__doEmote && __doEmote('wave'); return 'wave'; }],
-    ['🎉', ()=>{ window.__doEmote && __doEmote('cheer'); return 'cheer'; }],
-    ['💃', ()=>{ window.__doEmote && __doEmote('dance'); return 'dance'; }],
-    ['🙌', ()=>{ window.__doEmote && __doEmote('raise'); return 'raise'; }],
-    ['🧘', ()=>window.__playerPose ? __playerPose('sit') : 'no poses'],
-    ['🦵', ()=>window.__playerPose ? __playerPose('crouch') : 'no poses']]},
-  {key:'avatars', emoji:'🎭', angle:Math.PI, items:[          // left
-    ['🕶', ()=>window.__cycleAcc ? 'acc: '+__cycleAcc() : 'no accessories'],   // cycles none→shades→moon
-    ['🧑‍🚀', ()=>window.__setBody ? String(__setBody('suit')) : 'no setter'],
-    ['🌼', ()=>window.__setBody ? String(__setBody('toon')) : 'no setter'],
-    ['🐯', ()=>window.__setBody ? String(__setBody('tigerbee')) : 'no setter'],
-    ['🦉', ()=>window.__setBody ? String(__setBody('owl')) : 'no setter']]},
-  {key:'controls', emoji:'⚙', angle:Math.PI/2, items:[        // bottom
-    ['☆', ()=>{ const cb=document.getElementById('starNamesToggle'); const on=!(cb&&cb.checked);
-        if(cb) cb.checked=on; setStarNames(on); return 'star names '+(on?'on':'off'); }],
-    ['🎵', ()=>{ const on=!(_ambient&&_ambient.isPlaying&&_ambientOn); window.__setAmbient(on); return 'ambient '+(on?'on':'off'); }],
-    ['🗑', ()=>{ const held=(typeof _heldHand!=='undefined'&&(_heldHand.right||_heldHand.left))||heldProp;
-        return held ? _deleteGrab(held) : 'grab it first'; }],
-    ['🎯', ()=>{ if(typeof dbg==='function') dbg('cal','T-POSE now — capturing wrists in 5s…','k');
+  {key:'asset', icon:'move', angle:-Math.PI/4, items:[        // top-right: asset inspect/edit
+    ['search', ()=>window.__inspectToggle ? __inspectToggle() : 'no inspect', 'inspect'],
+    ['hand', ()=>{ const g=window.__aimAsset && __aimAsset(); if(!g) return 'aim at something';
+        if(window.__grab && __grab.grabSpecific){ __grab.grabSpecific(g); return 'grab '+(g.pid||''); } return 'no grab'; }, 'grab'],
+    [{icon:'trash',tint:PORCH_THEME.danger}, ()=>{ const g=window.__aimAsset && __aimAsset(); if(!g) return 'aim at something';
+        return (typeof _deleteGrab==='function') ? String(_deleteGrab(g)) : 'no delete'; }, 'delete']]},
+  {key:'manifest', icon:'sparkles', angle:-Math.PI/2, items:[     // top
+    ['pencil', ()=>{ if(renderer.xr.isPresenting){ if(typeof vkbToggleText==='function') vkbToggleText(); }
+        else if(window.__openTextCompose) __openTextCompose(); return 'text'; }, 'write'],
+    ['box', ()=>{ if(window.spawn) window.spawn('cube'); return 'cube'; }, 'cube'],
+    ['music', ()=>{ if(window.__manifestMusic) __manifestMusic(); return 'music'; }, 'music']]},
+  {key:'emotes', icon:'drama', angle:0, items:[                 // right — content glyphs kept as emoji (no icon equivalent)
+    ['👋', ()=>{ window.__doEmote && __doEmote('wave'); return 'wave'; }, 'wave'],
+    ['🎉', ()=>{ window.__doEmote && __doEmote('cheer'); return 'cheer'; }, 'cheer'],
+    ['💃', ()=>{ window.__doEmote && __doEmote('dance'); return 'dance'; }, 'dance'],
+    ['🙌', ()=>{ window.__doEmote && __doEmote('raise'); return 'raise'; }, 'raise'],
+    ['🧘', ()=>window.__playerPose ? __playerPose('sit') : 'no poses', 'sit'],
+    ['🦵', ()=>window.__playerPose ? __playerPose('crouch') : 'no poses', 'crouch']]},
+  {key:'avatars', icon:'user', angle:Math.PI, items:[          // left — avatar names shown via label
+    ['🕶', ()=>window.__cycleAcc ? 'acc: '+__cycleAcc() : 'no accessories', 'shades'],
+    ['🧑‍🚀', ()=>window.__setBody ? String(__setBody('suit')) : 'no setter', 'suit'],
+    ['🌼', ()=>window.__setBody ? String(__setBody('toon')) : 'no setter', 'toon'],
+    ['🐯', ()=>window.__setBody ? String(__setBody('tigerbee')) : 'no setter', 'tigerbee'],
+    ['🦉', ()=>window.__setBody ? String(__setBody('owl')) : 'no setter', 'owl']]},
+  {key:'tools', icon:'face', angle:Math.PI/2, items:[        // bottom — VR-NATIVE only (calibrate/mirror/camera). star-names + ambient removed → menu.
+    ['face', ()=>{ if(typeof dbg==='function') dbg('cal','T-POSE now — capturing wrists in 5s…','k');
         setTimeout(()=>{ const r=window.__calibrateWrists?__calibrateWrists():'no cal fn'; if(typeof dbg==='function') dbg('cal',r,'g'); },5000);
-        return 'calibrating in 5s'; }],
-    ['🪞', ()=>{ const r=window.__mirrorWristFromRight?__mirrorWristFromRight():'no fn';   // mirror the good RIGHT wrist cal onto the left (hands-free, no console)
-        if(typeof dbg==='function') dbg('cal','left wrist mirrored from right','g'); return 'left=mirror(right)'; }],
-    ['📸', ()=>window.__cameraSnap ? __cameraSnap() : 'no camera']]},
+        return 'calibrating in 5s'; }, 'calibrate'],
+    ['move', ()=>{ const r=window.__mirrorWristFromRight?__mirrorWristFromRight():'no fn';
+        if(typeof dbg==='function') dbg('cal','left wrist mirrored from right','g'); return 'left=mirror(right)'; }, 'mirror wrist'],
+    ['camera', ()=>window.__cameraSnap ? __cameraSnap() : 'no camera', 'photo']]},
 ];
-function _radialButton(emoji){
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.045,0.045),
-    new THREE.MeshBasicMaterial({map:_emojiTex(emoji),transparent:true,depthTest:false}));
+function _radialButton(spec){
+  // spec is a PORCH_ICONS name / {icon,tint} (→ _iconTex) or a raw emoji glyph (→ _emojiTex)
+  const isIcon = (typeof spec==='string' && PORCH_ICONS[spec]) || (spec && spec.icon);
+  const tex = isIcon ? _iconTex(spec, false) : _emojiTex(spec);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.05,0.05),
+    new THREE.MeshBasicMaterial({map:tex,transparent:true,depthTest:false}));
+  m.userData._spec = spec; m.userData._isIcon = isIcon;
   m.renderOrder=999; return m;
 }
 // focus label (Nix 2026-07-15: "add words to the hover menus when an option is focused"). A small
@@ -7480,20 +7630,21 @@ function _radialLabelMesh(){
 function _setRadialLabel(text){
   const m=_radialLabelMesh(); const cv=m.userData._cv, g=cv.getContext('2d');
   g.clearRect(0,0,256,64);
-  if(text){ g.font='600 30px Georgia,serif'; g.textAlign='center'; g.textBaseline='middle';
-    g.fillStyle='rgba(10,12,16,0.85)'; g.fillRect(0,0,256,64);   // dark plate for legibility
-    g.fillStyle='#e8dcc0'; g.fillText(text, 128, 34); m.visible=true; }
+  if(text){ g.font=_themeFont(30); g.textAlign='center'; g.textBaseline='middle';
+    g.fillStyle=PORCH_THEME.bg; g.beginPath(); g.roundRect(28,10,200,44,14); g.fill();  // themed pill
+    g.strokeStyle=PORCH_THEME.rule; g.lineWidth=2; g.stroke();
+    g.fillStyle=PORCH_THEME.ink; g.fillText(text, 128, 34); m.visible=true; }
   else m.visible=false;
   m.userData._tx.needsUpdate=true;
 }
-function _radialRing(defs){                                 // defs: [{emoji, angle?, name, action}]
+function _radialRing(defs){                                 // defs: [{spec, angle?, name, action}]
   EMOTE_PANEL.buttons.forEach(b=>{ EMOTE_PANEL.group.remove(b);
     const xi=_clickables.indexOf(b); if(xi>=0) _clickables.splice(xi,1);
     if(typeof xrUI!=='undefined') xrUI.targets=xrUI.targets.filter(t=>t!==b); });
   EMOTE_PANEL.buttons=[]; EMOTE_PANEL.sel=-1;
   const R=0.075, N=defs.length;
   defs.forEach((d,i)=>{ const a = (d.angle!==undefined) ? d.angle : -Math.PI/2 + i*(2*Math.PI/N);
-    const m=_radialButton(d.emoji); m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0);
+    const m=_radialButton(d.spec); m.position.set(Math.cos(a)*R, -Math.sin(a)*R, 0);
     m.userData._ring=a; m.userData.action=d.action; m.userData.name=d.name||'';
     EMOTE_PANEL.group.add(m); EMOTE_PANEL.buttons.push(m);
     _clickables.push(m); if(typeof xrUI!=='undefined' && renderer.xr.isPresenting) xrUI.targets.push(m); });
@@ -7501,15 +7652,12 @@ function _radialRing(defs){                                 // defs: [{emoji, an
   const lbl=_radialLabelMesh(); if(lbl.parent!==EMOTE_PANEL.group) EMOTE_PANEL.group.add(lbl);
   lbl.position.set(0, -R-0.03, 0); _setRadialLabel(null);
 }
-// per-option names for the focus label (emoji alone isn't always obvious)
-const _RADIAL_NAMES = { manifest:'Manifest', emotes:'Emotes', avatars:'Avatars', controls:'Controls' };
-function _radialTop(){ _radialRing(RADIAL_CATS.map(c=>({emoji:c.emoji, angle:c.angle, name:_RADIAL_NAMES[c.key]||c.key,
+// category names for the focus label
+const _RADIAL_NAMES = { asset:'Asset', manifest:'Manifest', emotes:'Emotes', avatars:'Avatars', tools:'Tools' };
+function _radialTop(){ _radialRing(RADIAL_CATS.map(c=>({spec:c.icon, angle:c.angle, name:_RADIAL_NAMES[c.key]||c.key,
   action:()=>{ _radialSub(c); return c.key; }}))); EMOTE_PANEL.level=0; }
-// sub-item display names by emoji (so the focus label reads a word, not just the icon)
-const _RADIAL_ITEM_NAMES = { '✍':'Write','⬛':'Cube','🎵':'Music','👋':'Wave','🎉':'Cheer','💃':'Dance',
-  '🙌':'Raise','🧘':'Sit','🦵':'Crouch','🧑‍🚀':'Suit','🌼':'Toon','🐯':'Tigerbee','🦉':'Owl','☆':'Star names',
-  '🗑':'Delete','🎯':'Calibrate','🪞':'Mirror L=R','📸':'Photo' };
-function _radialSub(cat){ _radialRing(cat.items.map(([emoji,fn])=>({emoji, name:_RADIAL_ITEM_NAMES[emoji]||'',
+// item labels now travel WITH the item tuple: [icon, fn, label]
+function _radialSub(cat){ _radialRing(cat.items.map(([spec,fn,label])=>({spec, name:label||'',
   action:()=>{ const r=fn(); window.__toggleEmotePanel(false); return r; }})));
   EMOTE_PANEL.level=1; }
 function buildEmotePanel(){
@@ -7563,13 +7711,23 @@ window.__radialStick = (x, y)=>{
     EMOTE_PANEL.buttons.forEach((m,i)=>{ let d = Math.abs(Math.atan2(Math.sin(a-m.userData._ring), Math.cos(a-m.userData._ring)));
       if(d < bd){ bd = d; best = i; } });
     if(best !== EMOTE_PANEL.sel){
-      EMOTE_PANEL.buttons.forEach((m,i)=>m.scale.setScalar(i===best ? 1.45 : 1));
+      EMOTE_PANEL.buttons.forEach((m,i)=>{
+        const foc = (i===best);
+        m.scale.setScalar(foc ? 1.4 : 1);
+        if(m.userData._isIcon){                            // swap to amber/active cap on focus
+          const nt=_iconTex(m.userData._spec, foc);
+          m.material.map.dispose && m.material.map.dispose(); m.material.map=nt; m.material.needsUpdate=true;
+        }
+      });
       EMOTE_PANEL.sel = best;
       if(typeof _setRadialLabel==='function') _setRadialLabel(best>=0 ? (EMOTE_PANEL.buttons[best].userData.name||'') : null);  // show focused option's word
     }
   } else if(mag < 0.35 && EMOTE_PANEL.sel >= 0){         // release = commit
     const m = EMOTE_PANEL.buttons[EMOTE_PANEL.sel];
-    EMOTE_PANEL.buttons.forEach(b=>b.scale.setScalar(1)); EMOTE_PANEL.sel = -1;
+    EMOTE_PANEL.buttons.forEach(b=>{ b.scale.setScalar(1);
+      if(b.userData._isIcon){ const nt=_iconTex(b.userData._spec,false);
+        b.material.map.dispose&&b.material.map.dispose(); b.material.map=nt; b.material.needsUpdate=true; } });
+    EMOTE_PANEL.sel = -1;
     if(typeof _setRadialLabel==='function') _setRadialLabel(null);
     try{ const r = m.userData.action(); if(typeof dbg==='function') dbg('radial', String(r), 'k'); }
     catch(e){ if(typeof dbg==='function') dbg('radial','action failed: '+e.message,'e'); }
@@ -7582,6 +7740,102 @@ window.__toggleEmotePanel=(f)=>{
   EMOTE_PANEL.on=on; g.visible=on;
   if(on) _radialTop(); else _radialRing([]);               // ring registration handles clickables + xrUI targets
   if(!on && typeof xrUI!=='undefined') for(let i=0;i<2;i++) xrUI.hover[i]=null;
+  return on;
+};
+
+// ================= VR MENU PANEL — the SAME MENU_MODEL, floated as a pointable panel =================
+// This is the in-VR twin of the desktop #menu (Nix 2026-07-23: the hamburger button should open a
+// menu in VR, and it must share the desktop's model). Selects/ranges are desktop-shaped, so in VR we
+// surface the toggles + actions (poke to flip); the row drives the SAME DOM element (dispatches change),
+// so state stays in sync across desktop and headset. Built as one tall CanvasTexture with per-row hit
+// meshes registered into xrUI.targets, mirroring the keyboard's ray-click path.
+const VR_MENU = { group:null, rows:[], on:false, panel:null };
+const _VRMENU_ROWS = ()=> MENU_MODEL.filter(r=>r.type==='toggle'||r.type==='action'||r.type==='info');
+function _vrMenuDrawPanel(rows){
+  const W=512, RH=54, PAD=16, HEAD=52;
+  const H = HEAD + rows.length*RH + PAD;
+  const cv=document.createElement('canvas'); cv.width=W; cv.height=H; const c=cv.getContext('2d');
+  // panel ground
+  c.fillStyle=PORCH_THEME.bg; roundRect(c,0,0,W,H,PORCH_THEME.radius); c.fill();
+  c.strokeStyle=PORCH_THEME.rule; c.lineWidth=2; c.stroke();
+  // header
+  c.fillStyle=PORCH_THEME.ink; c.font=_themeFont(26); c.textAlign='left'; c.textBaseline='middle';
+  c.fillText('The Porch  \u{1F312}', PAD, HEAD/2);
+  rows.forEach((r,i)=>{
+    const y=HEAD + i*RH;
+    const on = _vrMenuState(r);
+    c.fillStyle = on ? PORCH_THEME.bgActive : PORCH_THEME.bgSoft;
+    roundRect(c, PAD, y+4, W-PAD*2, RH-8, PORCH_THEME.keyRadius); c.fill();
+    if(r.icon) drawIcon(c, r.icon, PAD+26, y+RH/2, 26, on?PORCH_THEME.primary:PORCH_THEME.ink);
+    c.fillStyle = on?PORCH_THEME.primary:PORCH_THEME.ink; c.font=_themeFont(20); c.textAlign='left';
+    c.fillText(r.label, PAD+52, y+RH/2);
+    if(r.type==='toggle'){ // draw a pill on the right
+      const px=W-PAD-52, py=y+RH/2;
+      c.fillStyle = on?PORCH_THEME.primary:PORCH_THEME.rule;
+      roundRect(c, px, py-10, 40, 20, 10); c.fill();
+      c.fillStyle=PORCH_THEME.bg; c.beginPath(); c.arc(on?px+28:px+12, py, 7, 0, 7); c.fill();
+    }
+  });
+  return {cv, W, H, RH, HEAD};
+}
+function _vrMenuState(r){
+  if(r.type!=='toggle') return false;
+  const el=document.getElementById(r.id); return !!(el && el.checked);
+}
+function _vrMenuActivate(r){
+  const el=document.getElementById(r.id); if(!el) return r.id+'?';
+  if(r.type==='toggle'){ el.checked=!el.checked; el.dispatchEvent(new Event('change')); return r.label+' '+(el.checked?'on':'off'); }
+  if(r.type==='info'){ const b=document.getElementById(r.bodyId); if(b) b.style.display = b.style.display==='none'?'block':'none'; return 'about'; }
+  el.click(); return r.label;   // action buttons
+}
+function buildMenuVR(){
+  if(VR_MENU.group) return VR_MENU.group;
+  const g=new THREE.Group(); VR_MENU.group=g; g.visible=false; scene.add(g);
+  return g;
+}
+function _vrMenuLayout(){
+  const g=buildMenuVR();
+  // clear old
+  VR_MENU.rows.forEach(m=>{ g.remove(m); const xi=_clickables.indexOf(m); if(xi>=0)_clickables.splice(xi,1);
+    if(typeof xrUI!=='undefined') xrUI.targets=xrUI.targets.filter(t=>t!==m); });
+  VR_MENU.rows=[];
+  const rows=_VRMENU_ROWS();
+  const {cv,W,H,RH,HEAD}=_vrMenuDrawPanel(rows);
+  const PW=0.42, PH=PW*H/W;                  // panel metric size
+  if(VR_MENU.panel){ VR_MENU.panel.material.map.dispose&&VR_MENU.panel.material.map.dispose(); g.remove(VR_MENU.panel); }
+  const tex=new THREE.CanvasTexture(cv); tex.anisotropy=4;
+  VR_MENU.panel=new THREE.Mesh(new THREE.PlaneGeometry(PW,PH), new THREE.MeshBasicMaterial({map:tex,transparent:true}));
+  g.add(VR_MENU.panel);
+  // invisible per-row hit meshes over each toggle/action
+  const rowH = PH * (RH/H);
+  rows.forEach((r,i)=>{
+    const cy = PH/2 - (HEAD/H)*PH - (i+0.5)*rowH;
+    const hit=new THREE.Mesh(new THREE.PlaneGeometry(PW*0.92, rowH*0.9),
+      new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthTest:false}));
+    hit.position.set(0, cy, 0.001); hit.renderOrder=1001;
+    hit.userData={ action:()=>{ const msg=_vrMenuActivate(r); _vrMenuLayout(); return msg; } }; // re-render on change
+    g.add(hit); VR_MENU.rows.push(hit); _clickables.push(hit);
+    if(typeof xrUI!=='undefined' && renderer.xr.isPresenting) xrUI.targets.push(hit);
+  });
+}
+function _vrMenuPlaceInFront(){
+  const g=buildMenuVR();
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const pos=new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+  const q=new THREE.Quaternion().setFromRotationMatrix(cam.matrixWorld);
+  const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(q); fwd.y=0;
+  if(fwd.lengthSq()<1e-4) fwd.set(0,0,-1); fwd.normalize();
+  g.position.copy(pos).addScaledVector(fwd, 0.7); g.position.y = pos.y + 0.05;
+  g.lookAt(pos.x, g.position.y, pos.z);
+}
+window.__toggleMenuVR = (f)=>{
+  const g=buildMenuVR();
+  const on = (f!==undefined)?!!f:!VR_MENU.on;
+  VR_MENU.on=on; g.visible=on;
+  if(on){ _vrMenuLayout(); _vrMenuPlaceInFront(); }
+  else { VR_MENU.rows.forEach(m=>{ if(typeof xrUI!=='undefined') xrUI.targets=xrUI.targets.filter(t=>t!==m); });
+    if(typeof xrUI!=='undefined') for(let i=0;i<2;i++) xrUI.hover[i]=null; }
+  if(typeof dbg==='function') dbg('menu','VR menu '+(on?'open':'closed'),'k');
   return on;
 };
 
@@ -9236,11 +9490,11 @@ function remoteInEarshot(id){                                  // remote sender 
   // update pip (Nix 2026-07-09: "never bug you about reloading again"): remember the deploy
   // stamp from page-load, poll it, and when it changes grow a red-dotted reload button by the menu.
   (function versionWatch(){
-    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes b9dab07-d6aefdf0).
+    // MY OWN build hash, baked in at deploy time (deploy-porch.sh substitutes d0262bd-0d2859f1).
     // Comparing THIS against live version.json catches a stale page on COLD load — the old code
     // compared deployed-vs-deployed (both cache-busted) so it never noticed the RUNNING page was
     // stale, and the button never appeared (Nix 2026-07-15: "just make the button force a refresh").
-    const MY_BUILD = 'b9dab07-d6aefdf0';
+    const MY_BUILD = 'd0262bd-0d2859f1';
     let baseline = (MY_BUILD && MY_BUILD.indexOf('PORCH_BUILD')<0) ? MY_BUILD : null;
     const check=async ()=>{ try{
       // ?ts= cache-buster: GH Pages' CDN serves max-age=600 — a bare fetch could lag a deploy
@@ -9723,6 +9977,11 @@ function xrLocomotion(dt){
     if(b[5] && b[5].pressed) micBtn = true;                           // B / Y = mic toggle
     if(src.handedness === 'left' && b[3]) kbBtn = kbBtn || b[3].pressed;  // left thumbstick press = text keyboard
     if(src.handedness === 'right' && b[3]) emoteBtn = emoteBtn || b[3].pressed;  // right thumbstick press = emote panel
+    // hamburger / menu button → VR settings menu. The system 'menu' button (Quest left) is often
+    // reserved by the runtime; b[6] is the usual free/extra index. We watch BOTH the left menu button
+    // and b[6] so at least one lands across controllers (Steam Frame mapping TBD in-headset). (2026-07-23)
+    if(b[6] && b[6].pressed) menuBtn = true;
+    if(src.handedness === 'left' && b[5] && b[5].pressed && b[4] && b[4].pressed) menuBtn = true;  // fallback combo: left A+B
     if(window.__grab) window.__grab.tryGripGrab(src.handedness,   // HLA chord: grip=point, +trigger=grab
       !!(b[1] && b[1].pressed), !!(b[0] && b[0].pressed));
   }
@@ -9730,6 +9989,8 @@ function xrLocomotion(dt){
   prevKbBtn = kbBtn; kbBtn = false;
   if(emoteBtn && !prevEmoteBtn) window.__toggleEmotePanel();          // edge: toggle the VR emote panel
   prevEmoteBtn = emoteBtn; emoteBtn = false;
+  if(menuBtn && !prevMenuBtn) window.__toggleMenuVR();                // edge: toggle the VR settings menu (hamburger)
+  prevMenuBtn = menuBtn; menuBtn = false;
   if(jumpBtn && !prevJumpBtn) wantJump = true;
   prevJumpBtn = jumpBtn;
   if(micBtn && !prevMicBtn){                                          // edge: toggle 🎙 from VR
@@ -9741,6 +10002,7 @@ function xrLocomotion(dt){
 let micBtn = false, prevMicBtn = false;
 let kbBtn = false, prevKbBtn = false;
 let emoteBtn = false, prevEmoteBtn = false;
+let menuBtn = false, prevMenuBtn = false;
 
 // ---- #1 POV: render the resident's first-person view of whoever is addressing them,
 // as a small JPEG the brain can SEE. An image can't ride the tmux prompt, but a FILE PATH
