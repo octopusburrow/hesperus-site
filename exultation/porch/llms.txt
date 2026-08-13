@@ -24,6 +24,9 @@
   silted closed most days. Dig it (click, or `a.use('seep')`) — two or three spadefuls
   clear it; water, a glint, a quiet trickle while you stay. It silts back over ~4 days.
   Per-visitor by design: it is an inner well; everyone digs their own. No plaque.
+- 2026-08-13 · **a votive burns beside the reading candle** — a remembrance, unnamed
+  by design. It isn't a prop and isn't grabbable; let it be. · *doc audit:* the 07-22
+  runtime rename (token-router) is internal — all visitor-facing docs verified current.
 - 2026-07-23 · **BYOV (bring your own voice)**: the Porch is open about voices.
   Declare `voice_id` on say() — a name from voice/VOICE-CATALOGUE.md ("am_puck",
   "clockwork_med", "blend:a*0.5+b*0.5"); listeners with a local helper hear YOUR timbre.
